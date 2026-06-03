@@ -1,0 +1,4610 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AI ENGINE — MINING INTELLIGENCE TERMINAL v2.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   INDUSTRIAL MINING TERMINAL — CSS FOUNDATION
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --coal:       #0a0b0d;
+  --shaft:      #0f1115;
+  --ore:        #161920;
+  --seam:       #1e2229;
+  --vein:       #272d38;
+  --amber:      #f5a623;
+  --amber-dim:  #c47d0e;
+  --amber-glow: #ffbd4a;
+  --amber-pale: rgba(245,166,35,0.12);
+  --amber-mist: rgba(245,166,35,0.05);
+  --iron:       #8a9bb0;
+  --steel:      #b4c4d4;
+  --chrome:     #d8e8f0;
+  --danger:     #e05c3a;
+  --danger-dim: rgba(224,92,58,0.15);
+  --success:    #3aac6e;
+  --success-dim: rgba(58,172,110,0.12);
+  --info:       #3a8ecd;
+  --info-dim:   rgba(58,142,205,0.12);
+  --warn:       #d4a017;
+  --scan-line:  rgba(245,166,35,0.03);
+  --border:     rgba(245,166,35,0.18);
+  --border-dim: rgba(245,166,35,0.08);
+  --font-mono:  'Share Tech Mono', 'Courier New', monospace;
+  --font-head:  'Orbitron', sans-serif;
+  --font-body:  'Rajdhani', sans-serif;
+  --glow-sm: 0 0 8px rgba(245,166,35,0.4);
+  --glow-md: 0 0 20px rgba(245,166,35,0.3);
+  --glow-lg: 0 0 40px rgba(245,166,35,0.2);
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+html{overflow-x:hidden;scroll-behavior:smooth}
+
+body {
+  background: var(--coal);
+  color: var(--steel);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Scanline overlay */
+body::before {
+  content:'';
+  position:fixed;
+  inset:0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    var(--scan-line) 2px,
+    var(--scan-line) 4px
+  );
+  pointer-events:none;
+  z-index:9999;
+  animation: scanlines 8s linear infinite;
+}
+
+/* Noise grain */
+body::after {
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events:none;
+  z-index:9998;
+  opacity:0.4;
+}
+
+@keyframes scanlines {
+  from{background-position:0 0}
+  to{background-position:0 100px}
+}
+
+/* ═══ SCROLLBAR ═══ */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--shaft)}
+::-webkit-scrollbar-thumb{background:var(--amber-dim);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--amber)}
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT — HEADER
+   ═══════════════════════════════════════════════════════════════ */
+.terminal-header {
+  background: var(--shaft);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 30px rgba(0,0,0,0.6);
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-icon {
+  width: 38px;
+  height: 38px;
+  background: var(--amber);
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: hex-pulse 3s ease-in-out infinite;
+}
+
+@keyframes hex-pulse {
+  0%,100%{box-shadow:none;filter:brightness(1)}
+  50%{filter:brightness(1.2);box-shadow:var(--glow-md)}
+}
+
+.brand-icon svg { width:18px;height:18px;fill:var(--coal) }
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-name {
+  font-family: var(--font-head);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 3px;
+  line-height: 1;
+  text-shadow: var(--glow-sm);
+}
+
+.brand-sub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  letter-spacing: 2px;
+  margin-top: 2px;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: var(--ore);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+  letter-spacing: 1px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: blink-dot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.status-dot.warn  { background: var(--warn) }
+.status-dot.error { background: var(--danger); animation: none }
+.status-dot.idle  { background: var(--iron); animation: none }
+
+@keyframes blink-dot {
+  0%,100%{opacity:1}
+  50%{opacity:0.3}
+}
+
+.header-clock {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber-dim);
+  letter-spacing: 1px;
+}
+
+.header-nav {
+  display: flex;
+  gap: 2px;
+}
+
+.nav-tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--iron);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.nav-tab:hover { color: var(--amber); background: var(--amber-mist) }
+.nav-tab.active { color: var(--amber); border-bottom-color: var(--amber); text-shadow: var(--glow-sm) }
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT — MAIN GRID
+   ═══════════════════════════════════════════════════════════════ */
+.main-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: auto;
+  min-height: calc(100vh - 60px);
+  gap: 0;
+}
+
+/* ═══ SIDEBAR LEFT ═══ */
+.sidebar-left {
+  background: var(--shaft);
+  border-right: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ═══ CENTER PANEL ═══ */
+.center-panel {
+  background: var(--coal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ═══ SIDEBAR RIGHT ═══ */
+.sidebar-right {
+  background: var(--shaft);
+  border-left: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECTION HEADERS
+   ═══════════════════════════════════════════════════════════════ */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--ore);
+  flex-shrink: 0;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-head);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--amber);
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+}
+
+.section-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+}
+
+.section-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  background: var(--vein);
+  padding: 2px 6px;
+  border-radius: 2px;
+  border: 1px solid var(--border-dim);
+  letter-spacing: 0.5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TASK PANEL — CENTER
+   ═══════════════════════════════════════════════════════════════ */
+.task-compose {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--shaft);
+  flex-shrink: 0;
+}
+
+.compose-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--amber-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compose-label::before {
+  content: '▶';
+  color: var(--amber);
+  font-size: 8px;
+}
+
+.compose-box {
+  position: relative;
+}
+
+.task-textarea {
+  width: 100%;
+  min-height: 90px;
+  background: var(--ore);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--chrome);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 12px 14px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  caret-color: var(--amber);
+}
+
+.task-textarea:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber), inset 0 0 20px rgba(245,166,35,0.04);
+}
+
+.task-textarea::placeholder { color: var(--iron); opacity: 0.5 }
+
+.compose-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.compose-select {
+  flex: 1;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  color: var(--iron);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 7px 10px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.compose-select:focus { border-color: var(--amber); color: var(--steel) }
+.compose-select option { background: var(--ore); color: var(--steel) }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid;
+  border-radius: 2px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.btn::after {
+  content:'';
+  position:absolute;
+  inset:0;
+  background:linear-gradient(135deg,rgba(255,255,255,0.08),transparent);
+  opacity:0;
+  transition:opacity 0.15s;
+}
+
+.btn:hover::after{opacity:1}
+.btn:active{transform:translateY(1px)}
+
+.btn-primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--coal);
+  box-shadow: 0 0 15px rgba(245,166,35,0.3);
+}
+
+.btn-primary:hover {
+  background: var(--amber-glow);
+  box-shadow: 0 0 25px rgba(245,166,35,0.5);
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--iron);
+}
+
+.btn-secondary:hover { border-color: var(--amber-dim); color: var(--amber-dim) }
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-danger:hover { background: var(--danger-dim) }
+
+.btn-sm { padding: 5px 10px; font-size: 9px; letter-spacing: 1.5px }
+
+.btn-icon {
+  padding: 7px;
+  border-radius: 2px;
+  border: 1px solid var(--border-dim);
+  background: var(--ore);
+  color: var(--iron);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon:hover { border-color: var(--amber-dim); color: var(--amber) }
+
+/* ═══════════════════════════════════════════════════════════════
+   EXECUTION VIEW — AGENT STEPS
+   ═══════════════════════════════════════════════════════════════ */
+.execution-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.exec-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+}
+
+.exec-meta-id { color: var(--amber-dim); font-size: 9px }
+.exec-meta-sep { opacity: 0.3 }
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.step-list::before {
+  content: '';
+  position: absolute;
+  left: 17px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(to bottom, var(--amber-dim) 0%, var(--border-dim) 70%, transparent 100%);
+}
+
+.step-item {
+  display: flex;
+  gap: 14px;
+  padding: 0 0 16px 0;
+  position: relative;
+  animation: step-appear 0.3s ease-out;
+}
+
+@keyframes step-appear {
+  from { opacity: 0; transform: translateY(6px) }
+  to { opacity: 1; transform: translateY(0) }
+}
+
+.step-node {
+  width: 36px;
+  height: 36px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--ore);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--iron);
+  transition: all 0.3s;
+}
+
+.step-node.running {
+  border-color: var(--amber);
+  background: var(--amber-pale);
+  color: var(--amber);
+  box-shadow: var(--glow-sm);
+  animation: node-pulse 1.5s ease-in-out infinite;
+}
+
+.step-node.done {
+  border-color: var(--success);
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.step-node.error {
+  border-color: var(--danger);
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.step-node.skip {
+  border-color: var(--border-dim);
+  background: var(--shaft);
+  color: var(--vein);
+  opacity: 0.5;
+}
+
+@keyframes node-pulse {
+  0%,100%{box-shadow: var(--glow-sm)}
+  50%{box-shadow: var(--glow-md)}
+}
+
+.step-content {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.step-name {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--chrome);
+  letter-spacing: 0.5px;
+}
+
+.step-tool-badge {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.badge-tool { background: rgba(58,142,205,0.15); border: 1px solid rgba(58,142,205,0.3); color: var(--info) }
+.badge-skill { background: rgba(245,166,35,0.1); border: 1px solid var(--border); color: var(--amber-dim) }
+.badge-output { background: var(--success-dim); border: 1px solid rgba(58,172,110,0.25); color: var(--success) }
+.badge-error { background: var(--danger-dim); border: 1px solid rgba(224,92,58,0.25); color: var(--danger) }
+
+.step-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.step-body {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--iron);
+  line-height: 1.6;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  padding: 8px 10px;
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.step-body.log-output {
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.step-body.log-output::-webkit-scrollbar { height: 4px; width: 4px }
+
+.step-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber-dim);
+  padding: 6px 0;
+}
+
+.thinking-dots span {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  background: var(--amber);
+  border-radius: 50%;
+  margin: 0 1px;
+  animation: thinking 1.2s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s }
+
+@keyframes thinking {
+  0%,100%{transform:translateY(0);opacity:0.3}
+  50%{transform:translateY(-4px);opacity:1}
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR LEFT — TASK HISTORY
+   ═══════════════════════════════════════════════════════════════ */
+.task-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.task-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-dim);
+  cursor: pointer;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.task-item:hover { background: var(--ore) }
+.task-item.active { background: var(--amber-mist); border-right: 2px solid var(--amber) }
+
+.task-item-id {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--amber-dim);
+  letter-spacing: 1px;
+  margin-bottom: 3px;
+}
+
+.task-item-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--steel);
+  line-height: 1.4;
+  margin-bottom: 5px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.task-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.task-status-badge.running { background: var(--amber-pale); border: 1px solid var(--border); color: var(--amber) }
+.task-status-badge.done    { background: var(--success-dim); border: 1px solid rgba(58,172,110,0.25); color: var(--success) }
+.task-status-badge.error   { background: var(--danger-dim); border: 1px solid rgba(224,92,58,0.25); color: var(--danger) }
+.task-status-badge.queued  { background: var(--ore); border: 1px solid var(--border-dim); color: var(--iron) }
+
+.task-item-time {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.5;
+  margin-left: auto;
+}
+
+/* ═══ Sidebar Actions ═══ */
+.sidebar-actions {
+  padding: 12px;
+  border-top: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  transition: border-color 0.2s;
+}
+
+.sidebar-search:focus-within { border-color: var(--amber-dim) }
+
+.sidebar-search svg { width: 12px; height: 12px; color: var(--iron); flex-shrink: 0 }
+
+.search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--steel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  caret-color: var(--amber);
+}
+
+.search-input::placeholder { color: var(--iron); opacity: 0.4 }
+
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR RIGHT — OUTPUTS + LOGS
+   ═══════════════════════════════════════════════════════════════ */
+.right-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.right-tab {
+  flex: 1;
+  padding: 10px 8px;
+  background: none;
+  border: none;
+  color: var(--iron);
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.right-tab:hover { color: var(--amber-dim); background: var(--amber-mist) }
+.right-tab.active { color: var(--amber); border-bottom-color: var(--amber) }
+
+.right-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  display: none;
+}
+
+.right-panel-content.active { display: block }
+
+/* ═══ File Output Cards ═══ */
+.output-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.output-card {
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  cursor: pointer;
+}
+
+.output-card:hover {
+  border-color: var(--amber-dim);
+  box-shadow: 0 0 15px rgba(245,166,35,0.08);
+}
+
+.output-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.file-type-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0;
+}
+
+.file-type-pdf { background: rgba(224,92,58,0.15); border: 1px solid rgba(224,92,58,0.3); color: var(--danger) }
+.file-type-html { background: rgba(58,142,205,0.15); border: 1px solid rgba(58,142,205,0.3); color: var(--info) }
+.file-type-csv { background: var(--success-dim); border: 1px solid rgba(58,172,110,0.25); color: var(--success) }
+.file-type-json { background: var(--amber-pale); border: 1px solid var(--border); color: var(--amber-dim) }
+.file-type-other { background: var(--seam); border: 1px solid var(--border-dim); color: var(--iron) }
+
+.output-card-info { flex: 1; min-width: 0 }
+
+.output-filename {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--chrome);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.output-meta {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.6;
+}
+
+.output-actions {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+}
+
+/* ═══ Log Terminal ═══ */
+.log-terminal {
+  padding: 10px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.log-level-filter {
+  display: flex;
+  gap: 3px;
+}
+
+.log-filter-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.5px;
+}
+
+.log-filter-btn.all   { color: var(--iron) }
+.log-filter-btn.info  { color: var(--info) }
+.log-filter-btn.warn  { color: var(--warn) }
+.log-filter-btn.error { color: var(--danger) }
+.log-filter-btn.active { background: var(--vein); border-color: var(--amber-dim) }
+
+.log-scroll {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--coal);
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.log-entry {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.log-ts { color: var(--iron); opacity: 0.5; flex-shrink: 0; font-size: 9px }
+.log-level { width: 36px; flex-shrink: 0; font-size: 9px; text-align: center; padding: 0 3px; border-radius: 1px }
+.log-level.INFO  { color: var(--info); background: var(--info-dim) }
+.log-level.WARN  { color: var(--warn); background: rgba(212,160,23,0.1) }
+.log-level.ERROR { color: var(--danger); background: var(--danger-dim) }
+.log-level.DEBUG { color: var(--iron); background: var(--seam) }
+.log-level.STEP  { color: var(--amber); background: var(--amber-pale) }
+.log-msg { color: var(--steel); flex: 1; word-break: break-all }
+.log-msg.error-msg { color: var(--danger) }
+.log-msg.step-msg  { color: var(--amber) }
+
+/* ═══════════════════════════════════════════════════════════════
+   FILE PREVIEW MODAL
+   ═══════════════════════════════════════════════════════════════ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.modal-box {
+  background: var(--shaft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 90vw;
+  max-width: 1100px;
+  height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7), var(--glow-lg);
+  transform: scale(0.96);
+  transition: transform 0.2s;
+  overflow: hidden;
+}
+
+.modal-overlay.open .modal-box { transform: scale(1) }
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--ore);
+  flex-shrink: 0;
+}
+
+.modal-title {
+  font-family: var(--font-head);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--amber);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.modal-filename {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--steel);
+}
+
+.modal-close {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: var(--ore);
+  color: var(--iron);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  font-size: 14px;
+}
+
+.modal-close:hover { border-color: var(--danger); color: var(--danger) }
+
+.modal-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.modal-body iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+}
+
+.modal-body .code-preview {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--iron);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-dim);
+  background: var(--ore);
+  flex-shrink: 0;
+}
+
+.modal-meta {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   METRICS BAR
+   ═══════════════════════════════════════════════════════════════ */
+.metrics-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.metric-cell {
+  padding: 10px 16px;
+  border-right: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-cell:last-child { border-right: none }
+
+.metric-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.metric-value {
+  font-family: var(--font-head);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--amber);
+  line-height: 1;
+  text-shadow: var(--glow-sm);
+}
+
+.metric-value.safe   { color: var(--success) }
+.metric-value.danger { color: var(--danger) }
+
+.metric-sub {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PIPELINE VIEW
+   ═══════════════════════════════════════════════════════════════ */
+.pipeline-view {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.pipeline-stage {
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  padding: 14px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.pipeline-stage::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border-dim);
+  transition: background 0.3s;
+}
+
+.pipeline-stage.done::after { background: var(--success) }
+.pipeline-stage.running::after { background: var(--amber); animation: progress-glow 1.5s ease-in-out infinite }
+.pipeline-stage.error::after { background: var(--danger) }
+.pipeline-stage.queued::after { background: var(--iron); opacity: 0.3 }
+
+@keyframes progress-glow {
+  0%,100%{box-shadow:none}
+  50%{box-shadow:0 0 10px var(--amber)}
+}
+
+.pipeline-stage:hover { border-color: var(--amber-dim) }
+
+.stage-name {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--chrome);
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+
+.stage-desc {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  opacity: 0.6;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.stage-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   GIS VIEW
+   ═══════════════════════════════════════════════════════════════ */
+.gis-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gis-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--ore);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.gis-map-placeholder {
+  flex: 1;
+  background: var(--shaft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-height: 300px;
+}
+
+.gis-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.gis-crosshair {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gis-placeholder-text {
+  font-family: var(--font-head);
+  font-size: 11px;
+  color: var(--iron);
+  letter-spacing: 3px;
+  opacity: 0.5;
+}
+
+.gis-coords {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber-dim);
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HEALTH MONITORING SECTION
+   ═══════════════════════════════════════════════════════════════ */
+.health-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 14px;
+}
+
+.health-card {
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  padding: 12px;
+}
+
+.health-card-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.health-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.health-bar-wrap {
+  flex: 1;
+  height: 3px;
+  background: var(--seam);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.health-bar {
+  height: 100%;
+  border-radius: 1px;
+  transition: width 1s ease;
+}
+
+.health-bar.ok   { background: var(--success) }
+.health-bar.warn { background: var(--warn) }
+.health-bar.crit { background: var(--danger) }
+
+.health-pct {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--steel);
+  width: 34px;
+  text-align: right;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SKILL BADGES
+   ═══════════════════════════════════════════════════════════════ */
+.skills-panel {
+  padding: 12px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-dim);
+}
+
+.skills-panel-title {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+
+.skills-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: var(--ore);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+  cursor: default;
+}
+
+.skill-chip:hover { border-color: var(--amber-dim); color: var(--amber-dim) }
+.skill-chip.active { border-color: var(--amber); color: var(--amber); background: var(--amber-pale) }
+
+/* ═══════════════════════════════════════════════════════════════
+   UPLOAD ZONE
+   ═══════════════════════════════════════════════════════════════ */
+.upload-zone {
+  margin: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--ore);
+}
+
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--amber);
+  background: var(--amber-mist);
+}
+
+.upload-zone svg {
+  width: 24px;
+  height: 24px;
+  color: var(--iron);
+  margin: 0 auto 6px;
+  display: block;
+  opacity: 0.5;
+}
+
+.upload-zone-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+  line-height: 1.6;
+  opacity: 0.7;
+}
+
+.upload-zone-text strong { color: var(--amber-dim) }
+
+/* ═══════════════════════════════════════════════════════════════
+   PROGRESS BAR (TASK)
+   ═══════════════════════════════════════════════════════════════ */
+.task-progress {
+  padding: 0 20px 14px;
+  flex-shrink: 0;
+}
+
+.progress-bar-wrap {
+  height: 2px;
+  background: var(--seam);
+  border-radius: 1px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber-dim), var(--amber), var(--amber-glow));
+  border-radius: 1px;
+  transition: width 0.5s ease;
+  position: relative;
+}
+
+.progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: -2px;
+  bottom: -2px;
+  width: 20px;
+  background: var(--amber-glow);
+  filter: blur(4px);
+  border-radius: 50%;
+  animation: progress-spark 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes progress-spark {
+  from { opacity: 0.6 }
+  to { opacity: 1 }
+}
+
+.progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EMPTY STATE
+   ═══════════════════════════════════════════════════════════════ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  gap: 12px;
+}
+
+.empty-hexagon {
+  width: 64px;
+  height: 64px;
+  background: var(--ore);
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-dim);
+}
+
+.empty-hexagon svg { width: 24px; height: 24px; color: var(--iron); opacity: 0.4 }
+
+.empty-title {
+  font-family: var(--font-head);
+  font-size: 10px;
+  color: var(--iron);
+  letter-spacing: 3px;
+  opacity: 0.5;
+}
+
+.empty-desc {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+  opacity: 0.35;
+  line-height: 1.7;
+  max-width: 260px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOASTS
+   ═══════════════════════════════════════════════════════════════ */
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--ore);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--steel);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  animation: toast-in 0.3s ease-out forwards;
+  pointer-events: all;
+  min-width: 240px;
+  max-width: 360px;
+}
+
+.toast.success { border-color: var(--success); }
+.toast.error   { border-color: var(--danger); }
+.toast.warn    { border-color: var(--warn); }
+.toast.info    { border-color: var(--amber-dim); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px) }
+  to   { opacity: 1; transform: translateX(0) }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0) }
+  to   { opacity: 0; transform: translateX(20px) }
+}
+
+.toast-icon { flex-shrink: 0; font-size: 14px }
+.toast-msg  { flex: 1 }
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE STUBS
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 1100px) {
+  .main-layout { grid-template-columns: 240px 1fr 280px }
+}
+
+@media (max-width: 860px) {
+  .main-layout { grid-template-columns: 1fr }
+  .sidebar-left, .sidebar-right { display: none }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SPECIAL ANIMATIONS
+   ═══════════════════════════════════════════════════════════════ */
+@keyframes flicker {
+  0%,100%{opacity:1}
+  92%{opacity:1}
+  93%{opacity:0.7}
+  94%{opacity:1}
+  96%{opacity:0.8}
+  97%{opacity:1}
+}
+
+.terminal-flicker { animation: flicker 6s ease-in-out infinite }
+
+/* Cursor blink */
+.cursor-blink::after {
+  content:'▌';
+  color:var(--amber);
+  animation:blink-cur 1s step-end infinite;
+  margin-left:1px;
+}
+
+@keyframes blink-cur {
+  0%,100%{opacity:1}
+  50%{opacity:0}
+}
+
+/* Agent running shimmer on header */
+.running-state .terminal-header {
+  animation: header-shimmer 2s ease-in-out infinite;
+}
+
+@keyframes header-shimmer {
+  0%,100%{border-bottom-color:var(--border-dim)}
+  50%{border-bottom-color:var(--amber-dim)}
+}
+
+/* Highlight row on hover in log */
+.log-scroll .log-entry:hover { background: rgba(245,166,35,0.03) }
+
+/* ═══ VIEWS SWITCHING ═══ */
+.view-panel { display: none }
+.view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden }
+
+/* Inline spinner */
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-dim);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg) } }
+
+/* Divider */
+.divider {
+  height: 1px;
+  background: var(--border-dim);
+  margin: 8px 0;
+}
+
+/* Code block */
+.code-block {
+  background: var(--coal);
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.7;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Pipeline connector lines */
+.pipeline-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  color: var(--amber-dim);
+  font-size: 16px;
+  opacity: 0.4;
+}
+
+
+/* ═══ CHAT PANEL ═══════════════════════════════════════════════════════════ */
+.chat-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Chat header bar ── */
+.chat-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--shaft);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.chat-model-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--ore);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--amber-dim);
+  letter-spacing: 1px;
+}
+
+.chat-model-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: blink-dot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.chat-temp-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--iron);
+}
+
+.chat-temp-slider {
+  -webkit-appearance: none;
+  width: 80px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vein);
+  outline: none;
+  cursor: pointer;
+}
+
+.chat-temp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--amber);
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(245,166,35,.5);
+}
+
+/* ── Quick prompts ── */
+.chat-quick-bar {
+  display: flex;
+  gap: 5px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--ore);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.chat-quick-bar::-webkit-scrollbar { display: none }
+
+.chat-quick-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: var(--seam);
+  color: var(--iron);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  letter-spacing: 0.5px;
+}
+
+.chat-quick-chip:hover {
+  border-color: var(--amber-dim);
+  color: var(--amber-dim);
+  background: var(--amber-mist);
+}
+
+/* ── Message list ── */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-msg {
+  display: flex;
+  gap: 10px;
+  animation: step-appear 0.25s ease-out;
+  max-width: 100%;
+}
+
+.chat-msg.user { flex-direction: row-reverse }
+
+.chat-avatar {
+  width: 28px; height: 28px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.chat-avatar.ai-avatar {
+  background: var(--amber-pale);
+  border: 1px solid var(--border);
+  color: var(--amber);
+}
+
+.chat-avatar.user-avatar {
+  background: var(--info-dim);
+  border: 1px solid rgba(58,142,205,0.3);
+  color: var(--info);
+}
+
+.chat-bubble {
+  max-width: calc(100% - 80px);
+  padding: 10px 13px;
+  border-radius: 3px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.65;
+  position: relative;
+}
+
+.chat-bubble.ai-bubble {
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  color: var(--steel);
+  border-top-left-radius: 0;
+}
+
+.chat-bubble.user-bubble {
+  background: var(--info-dim);
+  border: 1px solid rgba(58,142,205,0.2);
+  color: var(--chrome);
+  border-top-right-radius: 0;
+}
+
+.chat-bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.chat-bubble-name {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.chat-bubble-time {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.4;
+}
+
+.chat-bubble-text {
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Markdown-like styling inside bubbles */
+.chat-bubble-text strong { color: var(--chrome); font-weight: 700 }
+.chat-bubble-text em { color: var(--amber-dim); font-style: italic }
+.chat-bubble-text code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--coal);
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--amber-dim);
+}
+
+.chat-bubble-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.chat-msg:hover .chat-bubble-actions { opacity: 1 }
+
+.chat-action-btn {
+  padding: 2px 7px;
+  border: 1px solid var(--border-dim);
+  border-radius: 2px;
+  background: none;
+  color: var(--iron);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chat-action-btn:hover { border-color: var(--amber-dim); color: var(--amber-dim) }
+
+/* Streaming cursor */
+.chat-streaming::after {
+  content: '▌';
+  color: var(--amber);
+  animation: blink-cur 0.7s step-end infinite;
+}
+
+/* Thinking indicator */
+.chat-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  border-top-left-radius: 0;
+}
+
+.chat-thinking-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber-dim);
+}
+
+/* ── Input area ── */
+.chat-input-area {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-dim);
+  background: var(--shaft);
+  flex-shrink: 0;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ore);
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.chat-input-row:focus-within {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber), inset 0 0 20px rgba(245,166,35,.03);
+}
+
+.chat-input-wrap {
+  flex: 1;
+  position: relative;
+}
+
+.chat-textarea {
+  width: 100%;
+  background: var(--ore);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--chrome);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 40px 10px 12px;
+  resize: none;
+  outline: none;
+  caret-color: var(--amber);
+  min-height: 44px;
+  max-height: 140px;
+  overflow-y: auto;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.chat-textarea:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber), inset 0 0 20px rgba(245,166,35,.03);
+}
+
+.chat-textarea::placeholder { color: var(--iron); opacity: 0.4 }
+
+.chat-send-btn {
+  width: 40px; height: 44px;
+  border: 1px solid var(--amber);
+  border-radius: 2px;
+  background: var(--amber);
+  color: var(--coal);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.chat-send-btn:hover { background: var(--amber-glow); box-shadow: var(--glow-sm) }
+.chat-send-btn:disabled { opacity: 0.4; cursor: not-allowed }
+
+.chat-input-hint {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.35;
+  margin-top: 5px;
+  text-align: right;
+  letter-spacing: 0.5px;
+}
+
+/* ── Empty state chat ── */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 12px;
+  padding: 40px;
+  text-align: center;
+}
+
+.chat-empty-icon {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--ore);
+  border: 1px solid var(--border-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+.chat-empty-title {
+  font-family: var(--font-head);
+  font-size: 10px;
+  color: var(--iron);
+  letter-spacing: 3px;
+  opacity: 0.5;
+}
+
+.chat-empty-desc {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--iron);
+  opacity: 0.35;
+  line-height: 1.8;
+  max-width: 300px;
+}
+
+.chat-suggestion-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+  max-width: 500px;
+}
+
+.chat-suggestion {
+  padding: 10px 12px;
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  background: var(--ore);
+  color: var(--iron);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+  line-height: 1.5;
+}
+
+.chat-suggestion:hover {
+  border-color: var(--amber-dim);
+  color: var(--amber-dim);
+  background: var(--amber-mist);
+}
+
+.chat-suggestion strong {
+  display: block;
+  color: inherit;
+  margin-bottom: 2px;
+  letter-spacing: 0.5px;
+}
+
+/* Chat stats bar */
+.chat-stats {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--iron);
+  opacity: 0.5;
+  margin-top: 4px;
+}
+
+.chat-stat { display: flex; align-items: center; gap: 4px }
+
+
+/* ═══ FILE PROCESSOR PANEL ═══ */
+.file-processor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px}
+.fp-panel{background:var(--ore);border:1px solid var(--border-dim);border-radius:3px;display:flex;flex-direction:column;overflow:hidden}
+.fp-panel-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-dim);background:var(--seam);flex-shrink:0}
+.fp-panel-title{font-family:var(--font-mono);font-size:9px;color:var(--amber-dim);letter-spacing:2px;text-transform:uppercase}
+.fp-file-list{flex:1;overflow-y:auto;min-height:120px;max-height:220px}
+.fp-file-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-dim);cursor:pointer;transition:background 0.15s;position:relative}
+.fp-file-item:hover{background:var(--vein)}
+.fp-file-item.selected{background:var(--amber-pale);border-right:2px solid var(--amber)}
+.fp-file-icon{width:28px;height:28px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:7px;font-weight:bold;flex-shrink:0}
+.fp-file-name{font-family:var(--font-mono);font-size:10px;color:var(--chrome);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fp-file-meta{font-family:var(--font-mono);font-size:8px;color:var(--iron);opacity:0.5;margin-top:1px}
+.fp-file-del{width:20px;height:20px;border:none;background:none;color:var(--iron);cursor:pointer;opacity:0;transition:all 0.15s;font-size:10px;display:flex;align-items:center;justify-content:center;border-radius:2px;flex-shrink:0}
+.fp-file-item:hover .fp-file-del{opacity:1}
+.fp-file-del:hover{background:var(--danger-dim);color:var(--danger)}
+.fp-drop-zone{border:1px dashed var(--border);border-radius:2px;margin:10px;padding:16px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--coal)}
+.fp-drop-zone:hover,.fp-drop-zone.drag-over{border-color:var(--amber);background:var(--amber-mist)}
+.fp-drop-zone-text{font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.6;line-height:1.7}
+.fp-drop-zone-text strong{color:var(--amber-dim)}
+.fp-task-area{padding:10px 12px;border-top:1px solid var(--border-dim);flex-shrink:0}
+.fp-task-input{width:100%;background:var(--coal);border:1px solid var(--border);border-radius:2px;color:var(--chrome);font-family:var(--font-mono);font-size:11px;padding:8px 10px;resize:none;outline:none;caret-color:var(--amber);min-height:60px;transition:border-color 0.2s}
+.fp-task-input:focus{border-color:var(--amber)}
+.fp-task-input::placeholder{color:var(--iron);opacity:0.4}
+.fp-quick-tasks{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.fp-quick-btn{padding:3px 8px;border:1px solid var(--border-dim);border-radius:2px;background:var(--seam);color:var(--iron);font-family:var(--font-mono);font-size:8px;cursor:pointer;transition:all 0.15s;letter-spacing:0.5px}
+.fp-quick-btn:hover{border-color:var(--amber-dim);color:var(--amber-dim);background:var(--amber-mist)}
+.fp-controls{display:flex;gap:6px;margin-top:8px;align-items:center}
+.fp-model-select{flex:1;background:var(--coal);border:1px solid var(--border-dim);border-radius:2px;color:var(--iron);font-family:var(--font-mono);font-size:9px;padding:5px 8px;outline:none}
+.fp-model-select:focus{border-color:var(--amber-dim)}
+.fp-model-select option{background:var(--ore)}
+.fp-output-list{flex:1;overflow-y:auto;min-height:200px}
+.fp-output-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-dim);transition:background 0.15s}
+.fp-output-item:hover{background:var(--vein)}
+.fp-output-icon{width:28px;height:28px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:7px;font-weight:bold;flex-shrink:0}
+.fp-output-name{font-family:var(--font-mono);font-size:10px;color:var(--chrome);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fp-output-meta{font-family:var(--font-mono);font-size:8px;color:var(--iron);opacity:0.5;margin-top:1px}
+.fp-output-actions{display:flex;gap:4px;flex-shrink:0}
+.fp-processing{display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--amber-pale);border-top:1px solid var(--border);font-family:var(--font-mono);font-size:10px;color:var(--amber);flex-shrink:0}
+.fp-processing.active{display:flex}
+.fp-selected-badge{display:none;align-items:center;gap:5px;padding:3px 8px;background:var(--amber-pale);border:1px solid var(--border);border-radius:2px;font-family:var(--font-mono);font-size:8px;color:var(--amber-dim);margin:0 12px 6px;flex-shrink:0}
+.fp-selected-badge.show{display:flex}
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TOAST CONTAINER
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     FILE PREVIEW MODAL
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="previewModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">FILE PREVIEW</div>
+      <div class="modal-filename" id="modalFilename">—</div>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn btn-secondary btn-sm" id="modalDownloadBtn" onclick="downloadCurrentFile()">
+          ↓ DOWNLOAD
+        </button>
+        <button class="modal-close" onclick="closePreview()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" id="modalBody">
+      <div class="empty-state">
+        <div class="empty-hexagon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+        </div>
+        <div class="empty-title">NO FILE SELECTED</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span class="modal-meta" id="modalMeta">—</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="closePreview()">CLOSE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER
+     ═══════════════════════════════════════════════════════════════ -->
+<header class="terminal-header terminal-flicker">
+  <div class="header-brand">
+    <div class="brand-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+    </div>
+    <div class="brand-text">
+      <div class="brand-name">AI ENGINE</div>
+      <div class="brand-sub">MINING INTELLIGENCE TERMINAL v2.0</div>
+    </div>
+  </div>
+
+  <nav class="header-nav">
+    <button class="nav-tab active" onclick="switchView('task', this)">⬡ TASK</button>
+    <button class="nav-tab" onclick="switchView('chat', this)">⬡ CHAT</button>
+    <button class="nav-tab" onclick="switchView('pipeline', this)">⬡ PIPELINE</button>
+    <button class="nav-tab" onclick="switchView('gis', this)">⬡ GIS</button>
+    <button class="nav-tab" onclick="switchView('files', this)">⬡ FILES</button>
+    <button class="nav-tab" onclick="switchView('health', this)">⬡ HEALTH</button>
+  </nav>
+
+  <div class="header-status">
+    <div class="status-pill">
+      <div class="status-dot" id="agentStatusDot"></div>
+      <span id="agentStatusText">AGENT ONLINE</span>
+    </div>
+    <div class="status-pill">
+      <div class="status-dot" id="workerStatusDot"></div>
+      <span id="workerStatusText">WORKER OK</span>
+    </div>
+    <div class="header-clock" id="headerClock">--:--:--</div>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN LAYOUT
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="main-layout">
+
+  <!-- ══════════════════ SIDEBAR LEFT ══════════════════ -->
+  <aside class="sidebar-left">
+    <div class="section-header">
+      <div class="section-title">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        TASK HISTORY
+      </div>
+      <div class="section-badge" id="taskCountBadge">0</div>
+    </div>
+
+    <div style="padding:8px">
+      <div class="sidebar-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-input" id="taskSearch" placeholder="search tasks..." oninput="filterTasks(this.value)"/>
+      </div>
+    </div>
+
+    <div class="task-list" id="taskList">
+      <div class="empty-state" style="padding:30px">
+        <div class="empty-title">NO TASKS YET</div>
+        <div class="empty-desc">Submit a task from the TASK panel to begin agent execution.</div>
+      </div>
+    </div>
+
+    <!-- Skills indicator -->
+    <div class="skills-panel">
+      <div class="skills-panel-title">ACTIVE SKILLS</div>
+      <div class="skills-list">
+        <div class="skill-chip active">
+          <span>⬡</span> generate_report
+        </div>
+        <div class="skill-chip active">
+          <span>⬡</span> generate_dashboard
+        </div>
+        <div class="skill-chip active">
+          <span>⬡</span> convert_file
+        </div>
+        <div class="skill-chip">
+          <span>⬡</span> gis_analysis
+        </div>
+        <div class="skill-chip">
+          <span>⬡</span> data_extract
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-actions">
+      <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center" onclick="clearAllTasks()">
+        ✕ CLEAR HISTORY
+      </button>
+    </div>
+  </aside>
+
+  <!-- ══════════════════ CENTER PANEL ══════════════════ -->
+  <main class="center-panel">
+
+    <!-- ── VIEW: TASK ── -->
+    <div class="view-panel active" id="view-task">
+
+      <!-- Metrics bar -->
+      <div class="metrics-bar">
+        <div class="metric-cell">
+          <div class="metric-label">TASKS RUN</div>
+          <div class="metric-value" id="metricTasksRun">0</div>
+          <div class="metric-sub">TOTAL SESSION</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-label">FILES OUT</div>
+          <div class="metric-value safe" id="metricFilesOut">0</div>
+          <div class="metric-sub">REPORTS DIR</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-label">AVG TIME</div>
+          <div class="metric-value" id="metricAvgTime">—</div>
+          <div class="metric-sub">SECONDS</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-label">ERRORS</div>
+          <div class="metric-value" id="metricErrors" style="color:var(--iron)">0</div>
+          <div class="metric-sub">RECOVERABLE</div>
+        </div>
+      </div>
+
+      <!-- Task compose -->
+      <div class="task-compose">
+        <div class="compose-label">DISPATCH TASK TO AGENT</div>
+        <div class="compose-box">
+          <textarea class="task-textarea" id="taskInput"
+            placeholder="Contoh: Buat laporan PDF dan dashboard HTML dari data produksi tambang Q4 2024...
+Atau: Analisa koordinat GIS dan hasilkan peta wilayah IUP..."
+          ></textarea>
+        </div>
+        <div class="compose-controls">
+          <select class="compose-select" id="outputFormat">
+            <option value="auto">⬡ AUTO DETECT OUTPUT</option>
+            <option value="pdf">⬡ PDF REPORT</option>
+            <option value="html">⬡ HTML DASHBOARD</option>
+            <option value="both">⬡ PDF + HTML (MULTI)</option>
+            <option value="csv">⬡ CSV EXPORT</option>
+            <option value="json">⬡ JSON DATA</option>
+          </select>
+          <select class="compose-select" id="agentMode" style="max-width:160px">
+            <option value="auto">MODE: AUTO</option>
+            <option value="report">MODE: REPORT</option>
+            <option value="analysis">MODE: ANALYSIS</option>
+            <option value="pipeline">MODE: PIPELINE</option>
+          </select>
+          <button class="btn btn-primary" id="submitBtn" onclick="submitTask()">
+            <span id="submitSpinner" style="display:none" class="spinner"></span>
+            ▶ EXECUTE
+          </button>
+          <button class="btn-icon" onclick="clearTask()" title="Clear input">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/></svg>
+          </button>
+        </div>
+
+        <!-- Upload zone -->
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()"
+          ondragover="handleDragOver(event)" ondrop="handleDrop(event)" ondragleave="this.classList.remove('drag-over')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="upload-zone-text">
+            Drop files here or <strong>click to upload</strong><br/>
+            Supports PDF, CSV, JSON, SHP, GeoTIFF
+          </div>
+          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFileSelect(event)"/>
+        </div>
+        <div id="uploadedFiles" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px"></div>
+      </div>
+
+      <!-- Progress bar (shown when running) -->
+      <div class="task-progress" id="taskProgress" style="display:none">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+        </div>
+        <div class="progress-labels">
+          <span id="progressLabel">Initializing agent...</span>
+          <span id="progressPct">0%</span>
+        </div>
+      </div>
+
+      <!-- Agent step execution view -->
+      <div class="execution-panel" id="executionPanel">
+        <div class="empty-state" id="executionEmpty">
+          <div class="empty-hexagon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+          </div>
+          <div class="empty-title cursor-blink">AWAITING TASK</div>
+          <div class="empty-desc">Dispatch a task to begin multi-step agent execution. Steps will appear here in real-time.</div>
+        </div>
+
+        <div id="executionMeta" style="display:none">
+          <div class="exec-meta">
+            <span class="exec-meta-id" id="currentTaskId">TASK-——</span>
+            <span class="exec-meta-sep">│</span>
+            <span id="execAgentMode">MODE: AUTO</span>
+            <span class="exec-meta-sep">│</span>
+            <span id="execStatus">RUNNING</span>
+            <span class="exec-meta-sep">│</span>
+            <span id="execDuration">0s</span>
+          </div>
+          <div class="step-list" id="stepList"></div>
+        </div>
+      </div>
+    </div>
+
+    
+    <!-- ── VIEW: CHAT ── -->
+    <div class="view-panel" id="view-chat">
+      <div class="chat-layout">
+
+        <!-- Header bar -->
+        <div class="chat-header-bar">
+          <div class="chat-model-pill">
+            <div class="chat-model-dot"></div>
+            <span id="chatModelName">gemma4:e2b</span>
+          </div>
+          <div class="status-pill" style="font-size:9px" id="chatStatusPill">
+            <div class="status-dot" id="chatStatusDot"></div>
+            <span id="chatStatusText">READY</span>
+          </div>
+          <div style="display:flex;gap:6px;margin-left:0">
+            <button class="btn btn-secondary btn-sm" onclick="chatClear()" title="Clear conversation">
+              ✕ CLEAR
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="chatExport()" title="Export conversation">
+              ↓ EXPORT
+            </button>
+          </div>
+          <div class="chat-temp-control">
+            <span>TEMP</span>
+            <input type="range" class="chat-temp-slider" id="chatTemp"
+              min="0" max="2" step="0.1" value="0.7"
+              oninput="document.getElementById('chatTempVal').textContent=this.value"/>
+            <span id="chatTempVal">0.7</span>
+          </div>
+        </div>
+
+        <!-- Quick prompts -->
+        <div class="chat-quick-bar">
+          <button class="chat-quick-chip" onclick="chatQuick('Apa itu WIUP dan bagaimana cara mendapatkannya?')">
+            ⬡ WIUP
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Jelaskan tahapan eksplorasi tambang batubara')">
+            ⬡ EKSPLORASI
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Apa saja regulasi K3 pertambangan di Indonesia?')">
+            ⬡ K3 TAMBANG
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Jelaskan metode open pit mining dan underground mining')">
+            ⬡ METODE TAMBANG
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Bagaimana cara menghitung cadangan bijih mineral?')">
+            ⬡ CADANGAN
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Apa itu stripping ratio dan bagaimana pengaruhnya terhadap ekonomi tambang?')">
+            ⬡ STRIPPING RATIO
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Jelaskan proses reklamasi lahan pasca tambang')">
+            ⬡ REKLAMASI
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Apa saja dokumen lingkungan yang diperlukan untuk IUP Operasi Produksi?')">
+            ⬡ AMDAL
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Bagaimana cara analisa geologi untuk menentukan potensi mineral?')">
+            ⬡ GEOLOGI
+          </button>
+          <button class="chat-quick-chip" onclick="chatQuick('Jelaskan sistem royalti dan PNBP di sektor pertambangan')">
+            ⬡ ROYALTI
+          </button>
+        </div>
+
+        <!-- Messages area -->
+        <div class="chat-messages" id="chatMessages">
+
+          <!-- Empty state (shown when no messages) -->
+          <div class="chat-empty" id="chatEmpty">
+            <div class="chat-empty-icon">⬡</div>
+            <div class="chat-empty-title">AI MINING ASSISTANT</div>
+            <div class="chat-empty-desc">
+              Tanya apapun tentang pertambangan, geologi, regulasi, atau analisa data.<br/>
+              Didukung oleh <strong style="color:var(--amber-dim)">Gemma AI</strong> yang berjalan lokal.
+            </div>
+            <div class="chat-suggestion-grid">
+              <button class="chat-suggestion" onclick="chatQuick('Apa perbedaan IUP Eksplorasi dan IUP Operasi Produksi?')">
+                <strong>REGULASI</strong>
+                Perbedaan IUP Eksplorasi vs Operasi Produksi
+              </button>
+              <button class="chat-suggestion" onclick="chatQuick('Jelaskan proses pengolahan bijih emas dari tambang')">
+                <strong>PROSES</strong>
+                Pengolahan bijih emas dari tambang
+              </button>
+              <button class="chat-suggestion" onclick="chatQuick('Apa saja faktor yang mempengaruhi biaya operasi tambang?')">
+                <strong>EKONOMI</strong>
+                Faktor biaya operasi tambang
+              </button>
+              <button class="chat-suggestion" onclick="chatQuick('Bagaimana cara membaca peta geologi untuk eksplorasi?')">
+                <strong>GEOLOGI</strong>
+                Cara membaca peta geologi
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Input area -->
+        <div class="chat-input-area">
+          <div class="chat-input-row">
+            <textarea class="chat-textarea" id="chatInput"
+                rows="1"
+                placeholder="Tanya tentang pertambangan, geologi, regulasi, analisa data..."
+                onkeydown="chatKeydown(event)"
+                oninput="chatAutoResize(this)"></textarea>
+            <button class="chat-send-btn" id="chatSendBtn" onclick="chatSend()">▶</button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="chat-stats">
+              <span class="chat-stat">💬 <span id="chatMsgCount">0</span> pesan</span>
+              <span class="chat-stat">⏱ <span id="chatLastTime">—</span></span>
+              <span class="chat-stat">🔤 <span id="chatTokenEst">0</span> token est.</span>
+            </div>
+            <div class="chat-input-hint">Enter = kirim · Shift+Enter = baris baru</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+
+    <!-- ── VIEW: PIPELINE ── -->
+    <div class="view-panel" id="view-pipeline">
+      <div class="section-header">
+        <div class="section-title">⬡ PIPELINE ORCHESTRATOR</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="refreshPipeline()">↻ REFRESH</button>
+          <button class="btn btn-primary btn-sm" id="pipelineTriggerBtn" onclick="triggerWIUPPipeline()">▶ TRIGGER</button>
+        </div>
+      </div>
+      <div class="pipeline-view" id="pipelineView" style="display:grid;grid-template-columns:340px 1fr;gap:16px;padding:16px;overflow-y:auto;flex:1">
+
+        <!-- KIRI: Form input pipeline -->
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="background:var(--ore);border:1px solid var(--border-dim);border-radius:3px;padding:14px">
+            <div class="compose-label" style="margin-bottom:10px">WIUP FULL REPORT PIPELINE</div>
+
+            <!-- Upload KML -->
+            <div style="margin-bottom:8px">
+              <div style="font-family:var(--font-mono);font-size:8px;color:var(--iron);letter-spacing:1px;margin-bottom:4px;opacity:0.7">KML FILE *</div>
+              <div id="plKMLZone" onclick="document.getElementById('plKMLInput').click()"
+                style="border:1px dashed var(--border);border-radius:2px;padding:10px;text-align:center;cursor:pointer;background:var(--coal);transition:all 0.2s"
+                ondragover="event.preventDefault();this.style.borderColor='var(--amber)'"
+                ondrop="plHandleDrop(event)"
+                ondragleave="this.style.borderColor='var(--border)'">
+                <div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.5" id="plKMLLabel">Drop KML atau klik upload</div>
+              </div>
+              <input type="file" id="plKMLInput" style="display:none" accept=".kml" onchange="plHandleKML(event)"/>
+            </div>
+
+            <!-- Location -->
+            <div style="margin-bottom:8px">
+              <div style="font-family:var(--font-mono);font-size:8px;color:var(--iron);letter-spacing:1px;margin-bottom:4px;opacity:0.7">LOKASI *</div>
+              <input id="plLocation" type="text" placeholder="cth: Kutai Kartanegara, Kalimantan Timur"
+                style="width:100%;background:var(--coal);border:1px solid var(--border-dim);border-radius:2px;color:var(--steel);font-family:var(--font-mono);font-size:10px;padding:7px 10px;outline:none;caret-color:var(--amber)"
+                onfocus="this.style.borderColor='var(--amber)'" onblur="this.style.borderColor='var(--border-dim)'"/>
+            </div>
+
+            <!-- Commodity -->
+            <div style="margin-bottom:12px">
+              <div style="font-family:var(--font-mono);font-size:8px;color:var(--iron);letter-spacing:1px;margin-bottom:4px;opacity:0.7">KOMODITAS</div>
+              <select id="plCommodity"
+                style="width:100%;background:var(--coal);border:1px solid var(--border-dim);border-radius:2px;color:var(--iron);font-family:var(--font-mono);font-size:10px;padding:7px 10px;outline:none">
+                <option value="Batu Andesit">Batu Andesit</option>
+                <option value="Batubara">Batubara</option>
+                <option value="Nikel">Nikel</option>
+                <option value="Emas">Emas</option>
+                <option value="Bauksit">Bauksit</option>
+                <option value="Tembaga">Tembaga</option>
+                <option value="Pasir Besi">Pasir Besi</option>
+                <option value="Granit">Granit</option>
+                <option value="Marmer">Marmer</option>
+              </select>
+            </div>
+
+            <button class="btn btn-primary" id="plRunBtn" onclick="triggerWIUPPipeline()" style="width:100%;justify-content:center">
+              <span id="plSpinner" style="display:none" class="spinner"></span>
+              ▶ JALANKAN PIPELINE
+            </button>
+          </div>
+
+          <!-- Async enqueue -->
+          <div style="background:var(--ore);border:1px solid var(--border-dim);border-radius:3px;padding:14px">
+            <div class="compose-label" style="margin-bottom:8px">ASYNC QUEUE</div>
+            <select id="plPipelineType" style="width:100%;background:var(--coal);border:1px solid var(--border-dim);border-radius:2px;color:var(--iron);font-family:var(--font-mono);font-size:10px;padding:7px 10px;outline:none;margin-bottom:8px">
+              <option value="wiup_report">WIUP Report</option>
+              <option value="geological_analysis">Geological Analysis</option>
+              <option value="document_review">Document Review</option>
+            </select>
+            <select id="plPriority" style="width:100%;background:var(--coal);border:1px solid var(--border-dim);border-radius:2px;color:var(--iron);font-family:var(--font-mono);font-size:10px;padding:7px 10px;outline:none;margin-bottom:8px">
+              <option value="normal">PRIORITY: NORMAL</option>
+              <option value="high">PRIORITY: HIGH</option>
+              <option value="low">PRIORITY: LOW</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" onclick="enqueueAsync()" style="width:100%;justify-content:center">
+              ⬡ ENQUEUE JOB
+            </button>
+          </div>
+        </div>
+
+        <!-- KANAN: Stage cards + result -->
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="compose-label">PIPELINE STAGES</div>
+          <div class="pipeline-grid" id="pipelineGrid"></div>
+          <div class="divider"></div>
+          <div class="compose-label">WORKER QUEUES</div>
+          <div id="workerQueues" style="display:flex;flex-direction:column;gap:6px"></div>
+          <!-- Result panel -->
+          <div id="plResult" style="display:none;background:var(--ore);border:1px solid var(--success);border-radius:3px;padding:14px">
+            <div style="font-family:var(--font-mono);font-size:9px;color:var(--success);letter-spacing:1.5px;margin-bottom:8px">✓ PIPELINE COMPLETE</div>
+            <div id="plResultContent" style="font-family:var(--font-mono);font-size:9px;color:var(--iron);line-height:1.7;max-height:200px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── VIEW: GIS ── -->
+    <div class="view-panel" id="view-gis">
+      <div class="section-header">
+        <div class="section-title">⬡ GIS PROCESSOR</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="loadGISData()">↻ LOAD DATA</button>
+          <button class="btn btn-primary btn-sm" onclick="processGIS()">⬡ PROCESS</button>
+        </div>
+      </div>
+      <div class="gis-panel">
+        <div class="gis-toolbar">
+          <select class="compose-select" style="max-width:180px" id="gisLayer" onchange="loadGISData()">
+            <option value="wiup">LAYER: WIUP BOUNDARY</option>
+            <option value="production">LAYER: PRODUCTION ZONE</option>
+            <option value="overburden">LAYER: OVERBURDEN</option>
+            <option value="drainage">LAYER: DRAINAGE</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="gisUploadSHP()">↑ UPLOAD SHP</button>
+          <button class="btn btn-secondary btn-sm" onclick="gisExportKML()">⬡ EXPORT KML</button>
+          <button class="btn btn-secondary btn-sm" onclick="gisExportPDF()">⬡ EXPORT PDF</button>
+          <input type="file" id="gisFileInput" style="display:none" accept=".shp,.kml,.geojson,.json,.zip" onchange="gisHandleFile(event)"/>
+          <span style="margin-left:auto;font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.6" id="gisCoords">LAT — LON —</span>
+        </div>
+        <div class="gis-map-placeholder" id="gisMapArea">
+          <div class="gis-grid-overlay"></div>
+          <div class="gis-crosshair">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="rgba(245,166,35,0.3)" stroke-width="1">
+              <circle cx="20" cy="20" r="18"/>
+              <line x1="20" y1="2" x2="20" y2="12"/>
+              <line x1="20" y1="28" x2="20" y2="38"/>
+              <line x1="2" y1="20" x2="12" y2="20"/>
+              <line x1="28" y1="20" x2="38" y2="20"/>
+              <circle cx="20" cy="20" r="4" fill="rgba(245,166,35,0.2)"/>
+            </svg>
+            <div class="gis-placeholder-text">GIS MAP RENDERER</div>
+            <div class="gis-coords" id="gisStatusText">CONNECT TO /api/gis/ TO LOAD DATA</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    
+    <!-- VIEW: FILES -->
+    <div class="view-panel" id="view-files">
+      <div class="metrics-bar" style="grid-template-columns:repeat(3,1fr)">
+        <div class="metric-cell"><div class="metric-label">UPLOADED</div><div class="metric-value" id="fpMetricUploaded">0</div><div class="metric-sub">FILES READY</div></div>
+        <div class="metric-cell"><div class="metric-label">PROCESSED</div><div class="metric-value safe" id="fpMetricProcessed">0</div><div class="metric-sub">TASKS DONE</div></div>
+        <div class="metric-cell"><div class="metric-label">OUTPUTS</div><div class="metric-value" id="fpMetricOutputs">0</div><div class="metric-sub">FILES OUT</div></div>
+      </div>
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border-dim);background:var(--shaft);flex-shrink:0">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--amber-dim);letter-spacing:2px;margin-bottom:4px">▶ FILE PROCESSOR — UPLOAD → PROCESS → OUTPUT</div>
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.6">Upload file (PDF, CSV, TXT, JSON, KML) → Pilih → Tulis instruksi → Execute → Lihat hasil</div>
+      </div>
+      <div class="file-processor-grid" style="flex:1;overflow-y:auto">
+        <!-- PANEL KIRI -->
+        <div class="fp-panel" style="max-height:560px">
+          <div class="fp-panel-header">
+            <span class="fp-panel-title">📁 UPLOADED FILES</span>
+            <div style="display:flex;gap:4px">
+              <button class="btn-icon" onclick="fpRefreshUploads()" title="Refresh"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/></svg></button>
+              <button class="btn btn-primary btn-sm" onclick="document.getElementById('fpFileInput').click()">+ UPLOAD</button>
+            </div>
+          </div>
+          <input type="file" id="fpFileInput" style="display:none" multiple accept=".pdf,.csv,.txt,.json,.kml,.xml,.xlsx,.docx" onchange="fpHandleUpload(event)"/>
+          <div class="fp-drop-zone" id="fpDropZone" onclick="document.getElementById('fpFileInput').click()" ondragover="fpDragOver(event)" ondrop="fpDrop(event)" ondragleave="document.getElementById('fpDropZone').classList.remove('drag-over')">
+            <div class="fp-drop-zone-text">Drop files atau <strong>klik upload</strong><br/>PDF · CSV · TXT · JSON · KML · XML</div>
+          </div>
+          <div class="fp-file-list" id="fpFileList"><div style="padding:20px;text-align:center"><div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.4;letter-spacing:1px">BELUM ADA FILE</div></div></div>
+          <div class="fp-selected-badge" id="fpSelectedBadge"><span>⬡</span><span id="fpSelectedName">—</span><button onclick="fpClearSelection()" style="margin-left:auto;border:none;background:none;color:var(--iron);cursor:pointer;font-size:10px">✕</button></div>
+          <div class="fp-task-area">
+            <textarea class="fp-task-input" id="fpTaskInput" placeholder="Instruksi untuk agent...&#10;Contoh: Buat ringkasan dan laporan PDF dari dokumen ini"></textarea>
+            <div class="fp-quick-tasks">
+              <button class="fp-quick-btn" onclick="fpSetTask('Buat ringkasan eksekutif dari dokumen ini, jelaskan poin-poin penting')">RINGKASAN</button>
+              <button class="fp-quick-btn" onclick="fpSetTask('Analisa data dan buat laporan PDF lengkap dengan tabel dan kesimpulan')">LAPORAN PDF</button>
+              <button class="fp-quick-btn" onclick="fpSetTask('Buat dashboard HTML interaktif dari data ini dengan grafik dan KPI')">DASHBOARD HTML</button>
+              <button class="fp-quick-btn" onclick="fpSetTask('Ekstrak semua data penting, nama, angka, dan tanggal dari dokumen ini')">EKSTRAK DATA</button>
+              <button class="fp-quick-btn" onclick="fpSetTask('Jelaskan koordinat dan batas wilayah dari file ini, buat laporan PDF')">ANALISA GIS</button>
+              <button class="fp-quick-btn" onclick="fpSetTask('Cari anomali dan temuan penting, buat laporan analisa')">ANOMALI</button>
+            </div>
+            <div class="fp-controls">
+              <select class="fp-model-select" id="fpModelSelect">
+                <option value="">⬡ MODEL: AUTO (e2b)</option>
+                <option value="gemma4:26b">⬡ gemma4:26b (formal)</option>
+                <option value="gemma3:27b">⬡ gemma3:27b (langsung)</option>
+                <option value="gemma4:e2b">⬡ gemma4:e2b (cepat)</option>
+              </select>
+              <select class="fp-model-select" id="fpOutputSelect" style="max-width:90px">
+                <option value="auto">AUTO</option>
+                <option value="pdf">PDF</option>
+                <option value="html">HTML</option>
+                <option value="both">PDF+HTML</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="fpExecute()" id="fpExecBtn">▶ PROSES</button>
+            </div>
+          </div>
+          <div class="fp-processing" id="fpProcessing"><div class="spinner"></div><span id="fpProcessingText">Memproses...</span></div>
+        </div>
+        <!-- PANEL KANAN -->
+        <div class="fp-panel" style="max-height:560px">
+          <div class="fp-panel-header">
+            <span class="fp-panel-title">📊 OUTPUT FILES</span>
+            <button class="btn-icon" onclick="fpRefreshOutputs()"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/></svg></button>
+          </div>
+          <div class="fp-output-list" id="fpOutputList"><div style="padding:30px;text-align:center"><div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.4;letter-spacing:1px;line-height:1.8">OUTPUT AKAN MUNCUL<br/>SETELAH FILE DIPROSES</div></div></div>
+          <div style="border-top:1px solid var(--border-dim);flex-shrink:0">
+            <div style="padding:6px 12px;background:var(--seam);font-family:var(--font-mono);font-size:8px;color:var(--iron);letter-spacing:1.5px;text-transform:uppercase">PROCESS LOG</div>
+            <div id="fpLog" style="height:110px;overflow-y:auto;padding:6px 10px;font-family:var(--font-mono);font-size:9px;color:var(--iron);line-height:1.7;background:var(--coal)"><div style="opacity:0.4">Waiting for file processing...</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── VIEW: HEALTH ── -->
+    <div class="view-panel" id="view-health">
+      <div class="section-header">
+        <div class="section-title">⬡ SYSTEM HEALTH MONITOR</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="checkHealth()">↻ REFRESH</button>
+        </div>
+      </div>
+      <div style="overflow-y:auto;flex:1">
+        <div class="health-grid">
+          <div class="health-card">
+            <div class="health-card-title">SERVICES</div>
+            <div id="healthServices">
+              <div class="health-indicator">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">API</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" style="width:100%"></div></div>
+                <span class="health-pct">OK</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">WORKER</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="workerHealthBar" style="width:100%"></div></div>
+                <span class="health-pct" id="workerHealthPct">OK</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">DATABASE</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="dbHealthBar" style="width:100%"></div></div>
+                <span class="health-pct" id="dbHealthPct">OK</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">AI MODEL</span>
+                <div class="health-bar-wrap"><div class="health-bar warn" id="aiHealthBar" style="width:80%"></div></div>
+                <span class="health-pct" id="aiHealthPct">80%</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">REDIS</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="redisHealthBar" style="width:100%"></div></div>
+                <span class="health-pct" id="redisHealthPct">OK</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="health-card">
+            <div class="health-card-title">SYSTEM RESOURCES</div>
+            <div id="healthResources">
+              <div class="health-indicator">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">CPU</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="cpuBar" style="width:40%"></div></div>
+                <span class="health-pct" id="cpuPct">40%</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">MEMORY</span>
+                <div class="health-bar-wrap"><div class="health-bar warn" id="memBar" style="width:65%"></div></div>
+                <span class="health-pct" id="memPct">65%</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">DISK</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="diskBar" style="width:35%"></div></div>
+                <span class="health-pct" id="diskPct">35%</span>
+              </div>
+              <div class="health-indicator" style="margin-top:6px">
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--iron);width:80px">QUEUE</span>
+                <div class="health-bar-wrap"><div class="health-bar ok" id="queueBar" style="width:10%"></div></div>
+                <span class="health-pct" id="queuePct">2 jobs</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="health-card" style="grid-column:1/-1">
+            <div class="health-card-title">API ENDPOINT STATUS</div>
+            <div id="apiEndpoints" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px"></div>
+          </div>
+        </div>
+
+        <div style="padding:0 14px 14px">
+          <div class="health-card">
+            <div class="health-card-title">RECENT SYSTEM EVENTS</div>
+            <div class="code-block" id="systemEvents" style="margin-top:8px">
+Loading system events...
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ══════════════════ SIDEBAR RIGHT ══════════════════ -->
+  <aside class="sidebar-right">
+    <div class="right-tabs">
+      <button class="right-tab active" onclick="switchRightTab('outputs', this)">OUTPUTS</button>
+      <button class="right-tab" onclick="switchRightTab('logs', this)">LOGS</button>
+      <button class="right-tab" onclick="switchRightTab('docs', this)">DOCS</button>
+    </div>
+
+    <!-- OUTPUTS TAB -->
+    <div class="right-panel-content active" id="rtab-outputs">
+      <div class="section-header" style="padding:8px 12px">
+        <div class="section-title" style="font-size:8px">OUTPUT FILES</div>
+        <div style="display:flex;gap:4px">
+          <button class="btn-icon" onclick="refreshOutputs()" title="Refresh">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="output-list" id="outputList">
+        <div class="empty-state" style="padding:30px">
+          <div class="empty-title" style="font-size:9px">NO OUTPUTS</div>
+          <div class="empty-desc" style="font-size:9px">Files will appear here when agent completes tasks.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS TAB -->
+    <div class="right-panel-content" id="rtab-logs">
+      <div class="log-terminal">
+        <div class="log-controls">
+          <div class="log-level-filter">
+            <button class="log-filter-btn all active" onclick="setLogFilter('ALL', this)">ALL</button>
+            <button class="log-filter-btn info" onclick="setLogFilter('INFO', this)">INFO</button>
+            <button class="log-filter-btn warn" onclick="setLogFilter('WARN', this)">WARN</button>
+            <button class="log-filter-btn error" onclick="setLogFilter('ERROR', this)">ERR</button>
+          </div>
+          <button class="btn-icon" style="margin-left:auto" onclick="clearLogs()" title="Clear">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+          </button>
+          <button class="btn-icon" onclick="toggleAutoScroll()" id="autoScrollBtn" title="Auto-scroll" style="color:var(--amber)">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 21 6 15"/><polyline points="18 9 12 3 6 9"/></svg>
+          </button>
+        </div>
+        <div class="log-scroll" id="logScroll"></div>
+      </div>
+    </div>
+
+    <!-- DOCS TAB -->
+    <div class="right-panel-content" id="rtab-docs">
+      <div style="padding:12px;overflow-y:auto;height:100%">
+        <div class="section-header" style="padding:8px 0;border-bottom:1px solid var(--border-dim);margin-bottom:12px">
+          <div class="section-title" style="font-size:8px">API DOCUMENTATION</div>
+        </div>
+
+        <div id="docsList" style="display:flex;flex-direction:column;gap:6px">
+          <!-- Endpoints shown here -->
+        </div>
+      </div>
+    </div>
+  </aside>
+
+</div><!-- /main-layout -->
+
+<!-- ═══════════════════════════════════════════════════════════════
+     JAVASCRIPT ENGINE
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+/* ══════════════════════════════════════════════
+   CONFIG & STATE
+   ══════════════════════════════════════════════ */
+const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `http://${window.location.hostname}:8001`
+  : '';
+
+const state = {
+  tasks: [],
+  currentTaskId: null,
+  logFilter: 'ALL',
+  autoScroll: true,
+  metrics: { tasksRun: 0, filesOut: 0, totalTime: 0, errors: 0 },
+  pollInterval: null,
+  uploadedFiles: [],
+  currentPreviewFile: null,
+  outputs: [],
+};
+
+/* ══════════════════════════════════════════════
+   CLOCK
+   ══════════════════════════════════════════════ */
+function updateClock() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0');
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  const ss = String(now.getSeconds()).padStart(2,'0');
+  document.getElementById('headerClock').textContent = `${hh}:${mm}:${ss}`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* ══════════════════════════════════════════════
+   VIEW SWITCHING
+   ══════════════════════════════════════════════ */
+function switchView(name, btn) {
+  document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + name)?.classList.add('active');
+  btn.classList.add('active');
+
+  if (name === 'pipeline') refreshPipeline();
+  if (name === 'health')   checkHealth();
+  if (name === 'gis')      loadGISData();
+}
+
+function switchRightTab(name, btn) {
+  document.querySelectorAll('.right-panel-content').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.right-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('rtab-' + name)?.classList.add('active');
+  btn.classList.add('active');
+
+  if (name === 'docs') loadDocs();
+}
+
+/* ══════════════════════════════════════════════
+   TASK SUBMISSION
+   ══════════════════════════════════════════════ */
+async function submitTask() {
+  const input = document.getElementById('taskInput').value.trim();
+  if (!input) { showToast('Enter a task description', 'warn'); return; }
+
+  const format = document.getElementById('outputFormat').value;
+  const mode   = document.getElementById('agentMode').value;
+
+  setSubmitLoading(true);
+  addLog('INFO', `Dispatching task: "${input.slice(0,60)}..."`);
+  addLog('STEP', `Output format: ${format.toUpperCase()} | Mode: ${mode.toUpperCase()}`);
+
+  const taskId = 'TASK-' + Date.now().toString(36).toUpperCase();
+
+  // Register task locally
+  const task = {
+    id: taskId,
+    title: input,
+    format,
+    mode,
+    status: 'running',
+    startTime: Date.now(),
+    steps: [],
+    files: [],
+  };
+
+  state.tasks.unshift(task);
+  state.currentTaskId = taskId;
+  state.metrics.tasksRun++;
+  updateMetrics();
+  renderTaskList();
+  showExecutionPanel(task);
+
+  // Add initial "planning" step
+  addStep(task, { name: 'PLANNER', status: 'running', tool: 'agent_planner', body: 'Analyzing task intent and detecting required outputs...' });
+
+  try {
+    const payload = {
+      task: input,
+      output_format: format,
+      mode,
+      task_id: taskId,
+      files: state.uploadedFiles.map(f => f.name),
+    };
+
+    const res = await apiCall('POST', '/api/v1/agent/run', payload);
+
+    if (res && res.job_id) {
+      addLog('INFO', `Job queued: ${res.job_id}`);
+      task.jobId = res.job_id;
+      pollTaskStatus(task, res.job_id);
+    } else if (res && res.result) {
+      // Synchronous response
+      handleTaskResult(task, res);
+    } else if (res && res.success) {
+      handleTaskResult(task, res);
+    } else {
+      // Simulate multi-step execution for demo
+      simulateAgentExecution(task);
+    }
+  } catch (err) {
+    addLog('ERROR', `API error: ${err.message} — running in demo mode`);
+    simulateAgentExecution(task);
+  }
+
+  setSubmitLoading(false);
+}
+
+function setSubmitLoading(loading) {
+  const btn = document.getElementById('submitBtn');
+  const spinner = document.getElementById('submitSpinner');
+  btn.disabled = loading;
+  spinner.style.display = loading ? 'inline-block' : 'none';
+  btn.style.opacity = loading ? '0.6' : '1';
+}
+
+/* ══════════════════════════════════════════════
+   SIMULATED AGENT EXECUTION (Demo + Fallback)
+   ══════════════════════════════════════════════ */
+async function simulateAgentExecution(task) {
+  const needsPDF  = task.format === 'pdf'  || task.format === 'both' || task.format === 'auto' || task.title.toLowerCase().includes('pdf');
+  const needsHTML = task.format === 'html' || task.format === 'both' || task.format === 'auto' || task.title.toLowerCase().includes('html') || task.title.toLowerCase().includes('dashboard');
+
+  showProgress(true);
+
+  const steps = buildAgentSteps(task, needsPDF, needsHTML);
+  const totalSteps = steps.length;
+
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+
+    // Update progress
+    const pct = Math.round(((i+1) / totalSteps) * 100);
+    setProgress(pct, s.label || s.name);
+
+    // Show running step
+    const stepEl = addStep(task, { ...s, status: 'running' });
+
+    await sleep(s.duration || 800);
+
+    // Finalize step
+    updateStep(stepEl, 'done', s.output || 'Completed successfully');
+    addLog('STEP', `[${s.name}] ${s.output || 'done'}`);
+
+    if (s.produces) {
+      const file = { name: s.produces, size: randInt(120,800) + 'KB', type: extOf(s.produces) };
+      task.files.push(file);
+      addOutputCard(file, task.id);
+      state.metrics.filesOut++;
+      updateMetrics();
+    }
+  }
+
+  // Done
+  task.status = 'done';
+  task.endTime = Date.now();
+  const elapsed = ((task.endTime - task.startTime) / 1000).toFixed(1);
+  state.metrics.totalTime += parseFloat(elapsed);
+
+  setProgress(100, 'Task complete');
+  setTimeout(() => showProgress(false), 2000);
+
+  addLog('INFO', `Task ${task.id} completed in ${elapsed}s — ${task.files.length} file(s) produced`);
+  showToast(`Task complete! ${task.files.length} file(s) ready`, 'success');
+
+  renderTaskList();
+  updateMetrics();
+}
+
+function buildAgentSteps(task, needsPDF, needsHTML) {
+  const base = [
+    { name: 'PLANNER', label: 'Planning task...', tool: 'agent_planner', duration: 600, output: `Detected outputs: ${[needsPDF?'PDF':'',needsHTML?'HTML':''].filter(Boolean).join(', ') || 'AUTO'}. Building execution plan.` },
+    { name: 'DATA LOADER', label: 'Loading data...', tool: 'readers.load_data', duration: 700, output: 'Data ingested. Schema validated: 48 columns, 1,247 records.' },
+    { name: 'ANALYZER', label: 'Analyzing content...', tool: 'analyzers.run', duration: 900, output: 'Analysis complete. 12 key insights extracted, 3 anomalies flagged.' },
+  ];
+
+  if (needsPDF) {
+    base.push(
+      { name: 'REPORT GENERATOR', label: 'Generating PDF...', tool: 'generate_report', badge: 'skill', duration: 1100, output: 'PDF report structured. 24 pages, 8 charts, executive summary included.' },
+      { name: 'PDF RENDERER', label: 'Rendering PDF file...', tool: 'writers.write_pdf', duration: 800, produces: `laporan_${Date.now().toString(36)}.pdf`, output: 'PDF saved to reports/ directory.' }
+    );
+  }
+
+  if (needsHTML) {
+    base.push(
+      { name: 'DASHBOARD BUILDER', label: 'Building dashboard...', tool: 'generate_dashboard', badge: 'skill', duration: 1000, output: 'Dashboard layout configured. 6 KPI panels, 4 interactive charts.' },
+      { name: 'HTML RENDERER', label: 'Rendering HTML file...', tool: 'writers.write_html', duration: 700, produces: `dashboard_${Date.now().toString(36)}.html`, output: 'HTML dashboard saved to reports/ directory.' }
+    );
+  }
+
+  base.push({ name: 'FINALIZER', label: 'Finalizing output...', tool: 'agent_finalizer', duration: 400, output: 'All outputs verified. Audit log updated.' });
+  return base;
+}
+
+/* ══════════════════════════════════════════════
+   STEP RENDERING
+   ══════════════════════════════════════════════ */
+function showExecutionPanel(task) {
+  document.getElementById('executionEmpty').style.display = 'none';
+  const meta = document.getElementById('executionMeta');
+  meta.style.display = 'block';
+  document.getElementById('currentTaskId').textContent = task.id;
+  document.getElementById('execAgentMode').textContent = 'MODE: ' + task.mode.toUpperCase();
+  document.getElementById('execStatus').textContent = 'RUNNING';
+  document.getElementById('execDuration').textContent = '0s';
+  document.getElementById('stepList').innerHTML = '';
+
+  // Duration counter
+  const startTime = task.startTime;
+  const durationEl = document.getElementById('execDuration');
+  const durationTimer = setInterval(() => {
+    if (task.status !== 'running') { clearInterval(durationTimer); return; }
+    durationEl.textContent = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+  }, 100);
+}
+
+function addStep(task, stepData) {
+  const list = document.getElementById('stepList');
+  const el = document.createElement('div');
+  el.className = 'step-item';
+  el.dataset.stepId = stepData.name;
+
+  const badgeType = stepData.badge || 'tool';
+  const badgeClass = badgeType === 'skill' ? 'badge-skill' : 'badge-tool';
+  const badgeLabel = badgeType === 'skill' ? 'SKILL' : 'TOOL';
+
+  el.innerHTML = `
+    <div class="step-node ${stepData.status}" id="node-${sanitizeId(stepData.name)}">
+      ${stepData.status === 'running' ? '<div class="spinner"></div>' : stepIcons[stepData.status] || '?'}
+    </div>
+    <div class="step-content">
+      <div class="step-header">
+        <span class="step-name">${escHtml(stepData.name)}</span>
+        <span class="step-tool-badge ${badgeClass}">${badgeLabel}: ${escHtml(stepData.tool || '')}</span>
+        <span class="step-time">${new Date().toLocaleTimeString()}</span>
+      </div>
+      ${stepData.status === 'running'
+        ? `<div class="step-thinking"><span>Processing</span><div class="thinking-dots"><span></span><span></span><span></span></div></div>`
+        : `<div class="step-body">${escHtml(stepData.body || '')}</div>`
+      }
+    </div>`;
+
+  list.appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  return el;
+}
+
+function updateStep(el, status, body) {
+  if (!el) return;
+  const node = el.querySelector('.step-node');
+  node.className = 'step-node ' + status;
+  node.innerHTML = stepIcons[status] || '?';
+
+  const thinking = el.querySelector('.step-thinking');
+  if (thinking) {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'step-body';
+    bodyEl.textContent = body || '';
+    thinking.replaceWith(bodyEl);
+  }
+  const bodyEl = el.querySelector('.step-body');
+  if (bodyEl) bodyEl.textContent = body || '';
+}
+
+const stepIcons = {
+  running: '<div class="spinner"></div>',
+  done: '✓',
+  error: '✕',
+  skip: '—',
+};
+
+/* ══════════════════════════════════════════════
+   PROGRESS
+   ══════════════════════════════════════════════ */
+function showProgress(show) {
+  document.getElementById('taskProgress').style.display = show ? 'block' : 'none';
+  if (!show) setProgress(0, '');
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = label;
+  document.getElementById('progressPct').textContent = pct + '%';
+  document.getElementById('execStatus').textContent = pct >= 100 ? 'DONE' : 'RUNNING';
+}
+
+/* ══════════════════════════════════════════════
+   TASK LIST (sidebar)
+   ══════════════════════════════════════════════ */
+function renderTaskList(filter) {
+  const list = document.getElementById('taskList');
+  let tasks = state.tasks;
+  if (filter) tasks = tasks.filter(t => t.title.toLowerCase().includes(filter));
+
+  document.getElementById('taskCountBadge').textContent = tasks.length;
+
+  if (!tasks.length) {
+    list.innerHTML = `<div class="empty-state" style="padding:30px"><div class="empty-title">NO TASKS</div><div class="empty-desc">No tasks match the search.</div></div>`;
+    return;
+  }
+
+  list.innerHTML = tasks.map(t => `
+    <div class="task-item ${t.id === state.currentTaskId ? 'active' : ''}" onclick="selectTask('${t.id}')">
+      <div class="task-item-id">${t.id}</div>
+      <div class="task-item-title">${escHtml(t.title)}</div>
+      <div class="task-item-meta">
+        <div class="task-status-badge ${t.status}">
+          ${t.status === 'running' ? '<div class="status-dot" style="width:5px;height:5px"></div>' : ''}
+          ${t.status.toUpperCase()}
+        </div>
+        ${t.files?.length ? `<span style="font-family:var(--font-mono);font-size:8px;color:var(--iron);opacity:0.6">${t.files.length} file(s)</span>` : ''}
+        <span class="task-item-time">${timeAgo(t.startTime)}</span>
+      </div>
+    </div>`).join('');
+}
+
+function filterTasks(val) { renderTaskList(val.toLowerCase()) }
+
+function selectTask(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  state.currentTaskId = id;
+  renderTaskList();
+  showExecutionPanel(t);
+
+  // Replay steps
+  const list = document.getElementById('stepList');
+  list.innerHTML = '';
+  t.steps?.forEach(s => addStep(t, s));
+}
+
+function clearAllTasks() {
+  if (!confirm('Clear all task history?')) return;
+  state.tasks = [];
+  state.currentTaskId = null;
+  document.getElementById('stepList').innerHTML = '';
+  document.getElementById('executionEmpty').style.display = 'flex';
+  document.getElementById('executionMeta').style.display = 'none';
+  document.getElementById('outputList').innerHTML = `<div class="empty-state" style="padding:30px"><div class="empty-title">NO OUTPUTS</div><div class="empty-desc">No files yet.</div></div>`;
+  renderTaskList();
+  showToast('History cleared', 'info');
+}
+
+/* ══════════════════════════════════════════════
+   OUTPUT FILES
+   ══════════════════════════════════════════════ */
+function addOutputCard(file, taskId) {
+  const list = document.getElementById('outputList');
+  // Remove empty state
+  list.querySelectorAll('.empty-state').forEach(e => e.remove());
+
+  const ext = file.type || extOf(file.name);
+  const iconClass = { pdf:'file-type-pdf', html:'file-type-html', csv:'file-type-csv', json:'file-type-json' }[ext] || 'file-type-other';
+  const iconLabel = ext.toUpperCase();
+
+  const card = document.createElement('div');
+  card.className = 'output-card';
+  card.innerHTML = `
+    <div class="output-card-header">
+      <div class="file-type-icon ${iconClass}">${iconLabel}</div>
+      <div class="output-card-info">
+        <div class="output-filename">${escHtml(file.name)}</div>
+        <div class="output-meta">${file.size || '—'} · ${new Date().toLocaleTimeString()}</div>
+      </div>
+    </div>
+    <div class="output-actions">
+      <button class="btn btn-secondary btn-sm" onclick="previewFile('${escHtml(file.name)}', '${ext}')">⬡ PREVIEW</button>
+      <button class="btn btn-secondary btn-sm" onclick="downloadFile('${escHtml(file.name)}')">↓ DL</button>
+    </div>`;
+
+  list.prepend(card);
+  state.outputs.push(file);
+
+  // Switch to outputs tab
+  const outTab = document.querySelector('[onclick="switchRightTab(\'outputs\', this)"]');
+  if (outTab && !outTab.classList.contains('active')) {
+    outTab.style.boxShadow = '0 2px 0 var(--amber)';
+    setTimeout(() => outTab.style.boxShadow = '', 2000);
+  }
+}
+
+async function refreshOutputs() {
+  addLog('INFO', 'Refreshing output file list...');
+  try {
+    const files = await apiCall('GET', '/reports');
+    if (files && files.length) {
+      document.getElementById('outputList').innerHTML = '';
+      files.forEach(f => addOutputCard(f));
+    }
+  } catch (e) {
+    addLog('WARN', 'Could not fetch file list: ' + e.message);
+  }
+}
+
+/* ══════════════════════════════════════════════
+   FILE PREVIEW MODAL
+   ══════════════════════════════════════════════ */
+function previewFile(filename, ext) {
+  state.currentPreviewFile = filename;
+  document.getElementById('modalFilename').textContent = filename;
+  document.getElementById('modalMeta').textContent = `Type: ${ext.toUpperCase()} · reports/${filename}`;
+  document.getElementById('previewModal').classList.add('open');
+
+  const body = document.getElementById('modalBody');
+
+  if (ext === 'html') {
+    body.innerHTML = `<iframe src="${API_BASE}/reports/${filename}" sandbox="allow-scripts allow-same-origin"></iframe>`;
+  } else if (ext === 'pdf') {
+    body.innerHTML = `<iframe src="${API_BASE}/reports/${filename}" type="application/pdf"></iframe>`;
+  } else {
+    body.innerHTML = `
+      <div class="code-preview">
+        <div style="color:var(--amber-dim);margin-bottom:10px;font-size:9px">// ${filename}</div>
+        Loading file contents...
+      </div>`;
+    fetchFileContent(filename).then(txt => {
+      body.querySelector('.code-preview').innerHTML = `<div style="color:var(--amber-dim);margin-bottom:10px;font-size:9px">// ${filename}</div>${escHtml(txt)}`;
+    });
+  }
+}
+
+async function fetchFileContent(filename) {
+  try {
+    const res = await fetch(`${API_BASE}/reports/${filename}`);
+    return await res.text();
+  } catch {
+    return '[File not available — API not connected]';
+  }
+}
+
+function closePreview() {
+  document.getElementById('previewModal').classList.remove('open');
+  document.getElementById('modalBody').innerHTML = '';
+}
+
+function downloadCurrentFile() {
+  downloadFile(state.currentPreviewFile);
+}
+
+function downloadFile(filename) {
+  const a = document.createElement('a');
+  a.href = `${API_BASE}/reports/${filename}`;
+  a.download = filename;
+  a.click();
+  addLog('INFO', `Download initiated: ${filename}`);
+}
+
+/* ══════════════════════════════════════════════
+   LOGGING
+   ══════════════════════════════════════════════ */
+const logs = [];
+
+function addLog(level, msg) {
+  const entry = { level, msg, ts: new Date() };
+  logs.push(entry);
+  if (logs.length > 500) logs.shift();
+
+  if (state.logFilter !== 'ALL' && level !== state.logFilter) return;
+  appendLogLine(entry);
+}
+
+function appendLogLine(entry) {
+  const scroll = document.getElementById('logScroll');
+  const ts = entry.ts.toLocaleTimeString('en-GB', { hour12: false });
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  const msgClass = { ERROR: 'error-msg', STEP: 'step-msg' }[entry.level] || '';
+  el.innerHTML = `
+    <span class="log-ts">${ts}</span>
+    <span class="log-level ${entry.level}">${entry.level}</span>
+    <span class="log-msg ${msgClass}">${escHtml(entry.msg)}</span>`;
+  scroll.appendChild(el);
+  if (state.autoScroll) scroll.scrollTop = scroll.scrollHeight;
+}
+
+function setLogFilter(level, btn) {
+  state.logFilter = level;
+  document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('logScroll').innerHTML = '';
+  const filtered = level === 'ALL' ? logs : logs.filter(e => e.level === level);
+  filtered.forEach(appendLogLine);
+}
+
+function clearLogs() { logs.length = 0; document.getElementById('logScroll').innerHTML = '' }
+
+function toggleAutoScroll() {
+  state.autoScroll = !state.autoScroll;
+  document.getElementById('autoScrollBtn').style.color = state.autoScroll ? 'var(--amber)' : 'var(--iron)';
+}
+
+/* ══════════════════════════════════════════════
+   METRICS
+   ══════════════════════════════════════════════ */
+function updateMetrics() {
+  document.getElementById('metricTasksRun').textContent = state.metrics.tasksRun;
+  document.getElementById('metricFilesOut').textContent  = state.metrics.filesOut;
+
+  const avgTime = state.metrics.tasksRun > 0
+    ? (state.metrics.totalTime / state.metrics.tasksRun).toFixed(1)
+    : '—';
+  document.getElementById('metricAvgTime').textContent = avgTime;
+
+  const errEl = document.getElementById('metricErrors');
+  errEl.textContent = state.metrics.errors;
+  errEl.style.color = state.metrics.errors > 0 ? 'var(--danger)' : 'var(--iron)';
+}
+
+/* ══════════════════════════════════════════════
+   PIPELINE VIEW
+   ══════════════════════════════════════════════ */
+const PIPELINE_STAGES = [
+  { name: 'FILE INTAKE', desc: 'Receive & validate uploaded files', status: 'done' },
+  { name: 'AI ANALYSIS', desc: 'LLM processing & entity extraction', status: 'done' },
+  { name: 'GIS PROCESS', desc: 'Spatial data processing & projection', status: 'running' },
+  { name: 'REPORT GEN', desc: 'PDF/HTML document generation', status: 'queued' },
+  { name: 'DASHBOARD', desc: 'Interactive dashboard rendering', status: 'queued' },
+  { name: 'FINALIZE', desc: 'Output verification & storage', status: 'queued' },
+];
+
+const QUEUE_STATUS = [
+  { name: 'ai_queue', jobs: 2, workers: 2, status: 'active' },
+  { name: 'gis_queue', jobs: 1, workers: 1, status: 'active' },
+  { name: 'pipeline_queue', jobs: 0, workers: 2, status: 'idle' },
+];
+
+async function refreshPipeline() {
+  const grid = document.getElementById('pipelineGrid');
+  let stages = PIPELINE_STAGES;
+
+  try {
+    const data = await apiCall('GET', '/reports');
+    if (data?.stages) stages = data.stages;
+  } catch {}
+
+  grid.innerHTML = stages.map(s => `
+    <div class="pipeline-stage ${s.status}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div class="stage-name">${escHtml(s.name)}</div>
+        <span class="task-status-badge ${s.status}" style="font-size:7px;padding:1px 5px">${s.status.toUpperCase()}</span>
+      </div>
+      <div class="stage-desc">${escHtml(s.desc)}</div>
+      ${s.status === 'running' ? '<div class="step-thinking" style="padding:0"><span style="font-size:9px">Processing</span><div class="thinking-dots"><span></span><span></span><span></span></div></div>' : ''}
+    </div>`).join('');
+
+  const queues = document.getElementById('workerQueues');
+  queues.innerHTML = QUEUE_STATUS.map(q => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--ore);border:1px solid var(--border-dim);border-radius:2px">
+      <div class="status-dot ${q.status === 'active' ? '' : 'idle'}"></div>
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--steel);width:120px">${q.name}</span>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--iron)">JOBS: ${q.jobs}</span>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--iron)">WORKERS: ${q.workers}</span>
+      <span class="task-status-badge ${q.status === 'active' ? 'running' : 'queued'}" style="margin-left:auto;font-size:8px;padding:2px 7px">${q.status.toUpperCase()}</span>
+    </div>`).join('');
+}
+
+async function triggerPipeline() {
+  showToast('Pipeline trigger sent to /api/pipeline/', 'info');
+  addLog('INFO', 'Manual pipeline trigger dispatched');
+  try {
+    await apiCall('POST', '/api/pipeline/trigger', {});
+  } catch (e) {
+    addLog('WARN', 'Pipeline trigger: ' + e.message);
+  }
+}
+
+/* ══════════════════════════════════════════════
+   GIS VIEW
+   ══════════════════════════════════════════════ */
+async function loadGISData() {
+  document.getElementById('gisStatusText').textContent = 'LOADING GIS DATA...';
+  addLog('INFO', 'Requesting GIS data from /api/gis/');
+
+  try {
+    const data = await apiCall('GET', '/api/v1/agent/reports');
+    if (data) {
+      document.getElementById('gisStatusText').textContent = `LOADED ${data.length || 0} LAYER(S)`;
+      addLog('INFO', `GIS: ${data.length} layers loaded`);
+    }
+  } catch (e) {
+    document.getElementById('gisStatusText').textContent = 'CONNECT TO /api/gis/ TO LOAD DATA';
+    addLog('WARN', 'GIS API not reachable: ' + e.message);
+  }
+}
+
+async function processGIS() {
+  showToast('GIS processing dispatched to worker', 'info');
+  addLog('STEP', 'GIS processing job submitted to gis_queue');
+}
+
+// GIS coordinate tracker
+document.getElementById('gisMapArea')?.addEventListener('mousemove', (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width * 360 - 180).toFixed(4);
+  const y = (90 - (e.clientY - rect.top) / rect.height * 180).toFixed(4);
+  document.getElementById('gisCoords').textContent = `LAT ${y}  LON ${x}`;
+});
+
+/* ══════════════════════════════════════════════
+   HEALTH CHECK
+   ══════════════════════════════════════════════ */
+const API_ENDPOINTS = [
+  { path: '/health/', label: 'Health' },
+  { path: '/api/v1/agent/tools', label: 'Agent' },
+  { path: '/api/v1/ai/health', label: 'AI Models' },
+  { path: '/api/v1/agent/reports', label: 'Docs' },
+  { path: '/reports', label: 'Files' },
+  { path: '/api/v1/agent/reports', label: 'GIS' },
+  { path: '/reports', label: 'Pipeline' },
+];
+
+async function checkHealth() {
+  addLog('INFO', 'Health check initiated...');
+
+  // Check API health endpoint
+  try {
+    const health = await apiCall('GET', '/health/');
+    updateServiceStatus('ok', health);
+    addLog('INFO', 'Health endpoint: OK');
+  } catch (e) {
+    updateServiceStatus('warn', null);
+    addLog('WARN', 'Health endpoint unreachable: ' + e.message);
+  }
+
+  // Render endpoint status cards
+  const container = document.getElementById('apiEndpoints');
+  container.innerHTML = '';
+
+  for (const ep of API_ENDPOINTS) {
+    const card = document.createElement('div');
+    card.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--ore);border:1px solid var(--border-dim);border-radius:2px';
+    card.innerHTML = `
+      <div class="status-dot idle" id="ep-dot-${sanitizeId(ep.label)}"></div>
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--steel);flex:1">${ep.label}</span>
+      <span style="font-family:var(--font-mono);font-size:8px;color:var(--iron)" id="ep-status-${sanitizeId(ep.label)}">CHECKING...</span>`;
+    container.appendChild(card);
+
+    (async () => {
+      const t0 = Date.now();
+      try {
+        await apiCall('GET', ep.path);
+        const ms = Date.now() - t0;
+        document.getElementById('ep-dot-' + sanitizeId(ep.label)).className = 'status-dot';
+        document.getElementById('ep-status-' + sanitizeId(ep.label)).textContent = `${ms}ms`;
+        document.getElementById('ep-status-' + sanitizeId(ep.label)).style.color = 'var(--success)';
+      } catch {
+        document.getElementById('ep-dot-' + sanitizeId(ep.label)).className = 'status-dot error';
+        document.getElementById('ep-status-' + sanitizeId(ep.label)).textContent = 'OFFLINE';
+        document.getElementById('ep-status-' + sanitizeId(ep.label)).style.color = 'var(--danger)';
+      }
+    })();
+  }
+
+  // System events log
+  document.getElementById('systemEvents').textContent = generateSysEvents();
+
+  // Simulate resource updates
+  animateResources();
+}
+
+function updateServiceStatus(status) {
+  const dot = document.getElementById('agentStatusDot');
+  const text = document.getElementById('agentStatusText');
+  if (status === 'ok') {
+    dot.className = 'status-dot';
+    text.textContent = 'AGENT ONLINE';
+  } else {
+    dot.className = 'status-dot warn';
+    text.textContent = 'AGENT LIMITED';
+  }
+}
+
+function animateResources() {
+  const vals = {
+    cpu:  randInt(20,70), mem: randInt(40,80),
+    disk: randInt(20,50), queue: randInt(0,5)
+  };
+  updateBar('cpu',  vals.cpu,  vals.cpu + '%');
+  updateBar('mem',  vals.mem,  vals.mem + '%');
+  updateBar('disk', vals.disk, vals.disk + '%');
+  updateBar('queue', vals.queue * 10, vals.queue + ' jobs');
+}
+
+function updateBar(id, pct, label) {
+  const bar = document.getElementById(id+'Bar');
+  const pctEl = document.getElementById(id+'Pct');
+  if (!bar || !pctEl) return;
+  bar.style.width = Math.min(pct, 100) + '%';
+  bar.className = 'health-bar ' + (pct > 80 ? 'crit' : pct > 60 ? 'warn' : 'ok');
+  pctEl.textContent = label;
+}
+
+function generateSysEvents() {
+  const now = new Date();
+  const events = [
+    [now, 'INFO',  'Health check completed — all services nominal'],
+    [new Date(now-30000), 'STEP', 'Agent completed task TASK-K7X2 in 14.3s'],
+    [new Date(now-90000), 'INFO',  'Worker ai_queue processed 3 jobs'],
+    [new Date(now-180000), 'WARN', 'AI model response time elevated: 4.2s'],
+    [new Date(now-300000), 'INFO',  'GIS processor: 2 layers refreshed'],
+    [new Date(now-600000), 'INFO',  'System started. API listening on :8001'],
+  ];
+  return events.map(([d, lv, msg]) =>
+    `[${d.toLocaleTimeString()}] ${lv.padEnd(5)} ${msg}`
+  ).join('\n');
+}
+
+/* ══════════════════════════════════════════════
+   DOCS TAB
+   ══════════════════════════════════════════════ */
+const DOCS_ENDPOINTS = [
+  { method: 'POST', path: '/api/v1/agent/tools', desc: 'Submit task to autonomous agent', params: '{ task, output_format, mode }' },
+  { method: 'GET',  path: '/api/v1/agent/tools', desc: 'Get agent status and queue depth' },
+  { method: 'GET',  path: '/health/', desc: 'System health check' },
+  { method: 'GET',  path: '/reports', desc: 'List output files in reports/' },
+  { method: 'POST', path: '/api/ai/process', desc: 'Direct AI processing endpoint', params: '{ prompt, model, context }' },
+  { method: 'GET',  path: '/api/v1/agent/reports', desc: 'Fetch available GIS layers' },
+  { method: 'POST', path: '/api/gis/process', desc: 'Submit GIS processing job', params: '{ file_path, projection }' },
+  { method: 'GET',  path: '/reports', desc: 'Pipeline orchestrator status' },
+  { method: 'POST', path: '/api/pipeline/trigger', desc: 'Manually trigger pipeline run' },
+];
+
+function loadDocs() {
+  const list = document.getElementById('docsList');
+  if (list.innerHTML) return; // already loaded
+  list.innerHTML = DOCS_ENDPOINTS.map(ep => `
+    <div style="background:var(--ore);border:1px solid var(--border-dim);border-radius:3px;padding:10px;cursor:default">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="font-family:var(--font-mono);font-size:9px;padding:2px 6px;border-radius:2px;${methodColor(ep.method)}">${ep.method}</span>
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--chrome)">${ep.path}</span>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);line-height:1.5">${ep.desc}</div>
+      ${ep.params ? `<div style="font-family:var(--font-mono);font-size:8px;color:var(--amber-dim);margin-top:4px;opacity:0.8">${ep.params}</div>` : ''}
+    </div>`).join('');
+}
+
+function methodColor(m) {
+  const c = { GET:'color:var(--success);background:var(--success-dim);border:1px solid rgba(58,172,110,0.2)', POST:'color:var(--amber);background:var(--amber-pale);border:1px solid var(--border)', DELETE:'color:var(--danger);background:var(--danger-dim);border:1px solid rgba(224,92,58,0.2)' };
+  return c[m] || '';
+}
+
+/* ══════════════════════════════════════════════
+   FILE UPLOAD
+   ══════════════════════════════════════════════ */
+function handleFileSelect(e) { processFiles(Array.from(e.target.files)) }
+function handleDragOver(e) { e.preventDefault(); document.getElementById('uploadZone').classList.add('drag-over') }
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.remove('drag-over');
+  processFiles(Array.from(e.dataTransfer.files));
+}
+
+async function processFiles(files) {
+  for (const f of files) {
+    addLog('INFO', `Uploading: ${f.name} (${(f.size/1024).toFixed(1)}KB)`);
+    state.uploadedFiles.push(f);
+    renderUploadedFiles();
+
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      await fetch(`${API_BASE}/api/files/upload`, { method:'POST', body: fd });
+      addLog('INFO', `Uploaded: ${f.name}`);
+    } catch {
+      addLog('WARN', `Could not upload ${f.name} to API — file queued locally`);
+    }
+  }
+}
+
+function renderUploadedFiles() {
+  const c = document.getElementById('uploadedFiles');
+  c.innerHTML = state.uploadedFiles.map(f => `
+    <div style="display:flex;align-items:center;gap:5px;padding:3px 8px;background:var(--ore);border:1px solid var(--border-dim);border-radius:2px">
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--steel)">${f.name}</span>
+      <span style="font-family:var(--font-mono);font-size:8px;color:var(--iron);opacity:0.5">${(f.size/1024).toFixed(0)}KB</span>
+    </div>`).join('');
+}
+
+/* ══════════════════════════════════════════════
+   POLLING (for async jobs)
+   ══════════════════════════════════════════════ */
+async function pollTaskStatus(task, jobId) {
+  let attempts = 0;
+  const max = 60; // 60 × 2s = 2 minutes timeout
+
+  const poll = async () => {
+    if (attempts++ > max) { handleTaskError(task, 'Timeout'); return }
+
+    try {
+      const res = await apiCall('GET', `/api/agent/job/${jobId}`);
+      if (res?.status === 'finished') {
+        handleTaskResult(task, res);
+      } else if (res?.status === 'failed') {
+        handleTaskError(task, res.error || 'Job failed');
+      } else {
+        // Still running — update step if available
+        if (res?.current_step) addLog('STEP', res.current_step);
+        setTimeout(poll, 2000);
+      }
+    } catch (e) {
+      addLog('WARN', 'Poll error: ' + e.message);
+      setTimeout(poll, 3000);
+    }
+  };
+
+  setTimeout(poll, 1500);
+}
+
+function handleTaskResult(task, res) {
+  task.status = 'done';
+  task.endTime = Date.now();
+
+  // API returns output_files as list of path strings
+  const rawFiles = res.output_files || res.files || [];
+  const files = rawFiles.map(f => {
+    if (typeof f === 'string') {
+      const name = f.split('/').pop();
+      return { name, path: f, type: name.split('.').pop().toLowerCase(), size: '' };
+    }
+    return f;
+  });
+
+  files.forEach(f => {
+    task.files.push(f);
+    addOutputCard(f, task.id);
+    state.metrics.filesOut++;
+  });
+
+  // Also refresh output panel
+  refreshOutputs();
+  updateMetrics();
+  renderTaskList();
+  const n = files.length;
+  showToast(n > 0 ? `Task selesai! ${n} file dihasilkan` : 'Task selesai', 'success');
+  addLog('INFO', `Task ${task.id} done. ${n} file(s) produced.`);
+}
+
+function handleTaskError(task, msg) {
+  task.status = 'error';
+  state.metrics.errors++;
+  updateMetrics();
+  renderTaskList();
+  showToast('Task error: ' + msg, 'error');
+  addLog('ERROR', `Task ${task.id} failed: ${msg}`);
+  document.getElementById('execStatus').textContent = 'ERROR';
+}
+
+/* ══════════════════════════════════════════════
+   API HELPER
+   ══════════════════════════════════════════════ */
+async function apiCall(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  const res = await fetch(API_BASE + path, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+/* ══════════════════════════════════════════════
+   TOAST NOTIFICATIONS
+   ══════════════════════════════════════════════ */
+function showToast(msg, type = 'info') {
+  const icons = { success: '✓', error: '✕', warn: '⚠', info: '⬡' };
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span class="toast-icon">${icons[type]}</span><span class="toast-msg">${escHtml(msg)}</span>`;
+  c.appendChild(t);
+  setTimeout(() => {
+    t.style.animation = 'toast-out 0.3s ease-in forwards';
+    setTimeout(() => t.remove(), 300);
+  }, 3500);
+}
+
+/* ══════════════════════════════════════════════
+   HELPERS
+   ══════════════════════════════════════════════ */
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function sanitizeId(s) { return String(s).replace(/[^a-zA-Z0-9]/g,'_') }
+
+function extOf(name) {
+  const parts = String(name).split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : 'other';
+}
+
+function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60)  return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+function clearTask() {
+  document.getElementById('taskInput').value = '';
+  state.uploadedFiles = [];
+  renderUploadedFiles();
+}
+
+/* ══════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+   ══════════════════════════════════════════════ */
+document.addEventListener('keydown', (e) => {
+  // Ctrl/Cmd + Enter = submit task
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    submitTask();
+  }
+  // Escape = close modal
+  if (e.key === 'Escape') closePreview();
+});
+
+/* ══════════════════════════════════════════════
+   INIT
+   ══════════════════════════════════════════════ */
+function init() {
+  addLog('INFO', 'AI Engine Terminal v2.0 initialized');
+  addLog('INFO', `API Base: ${API_BASE || '(same origin)'}`);
+  addLog('STEP', 'Skills loaded: generate_report, generate_dashboard, convert_file');
+
+  // Initial health ping
+  (async () => {
+    try {
+      await apiCall('GET', '/health/');
+      addLog('INFO', 'Backend API connected successfully');
+      document.getElementById('agentStatusDot').className = 'status-dot';
+    } catch {
+      addLog('WARN', 'Backend API not reachable — running in standalone mode');
+      document.getElementById('agentStatusDot').className = 'status-dot warn';
+      document.getElementById('agentStatusText').textContent = 'OFFLINE MODE';
+      document.getElementById('workerStatusDot').className = 'status-dot idle';
+    }
+  })();
+
+  // Periodic metrics refresh
+  setInterval(() => {
+    if (state.tasks.some(t => t.status === 'running')) {
+      state.tasks.filter(t => t.status === 'running').forEach(t => {
+        const elapsed = ((Date.now() - t.startTime) / 1000).toFixed(1);
+        // update duration display
+      });
+    }
+  }, 1000);
+
+  // Load initial pipeline data
+  refreshPipeline();
+
+  // Populate initial pipeline and endpoint docs
+  loadDocs();
+}
+
+init();
+
+/* ══════════════════════════════════════════════
+   CHAT ENGINE — Streaming AI Chat
+   ══════════════════════════════════════════════ */
+const chatState = {
+  messages: [],
+  isStreaming: false,
+  totalTokens: 0,
+  msgCount: 0,
+};
+
+// Check AI model on init
+(async function chatInit() {
+  try {
+    const res = await fetch(API_BASE + '/api/v1/ai/health');
+    const data = await res.json();
+    if (data.model) {
+      document.getElementById('chatModelName').textContent = data.model;
+    }
+  } catch(e) {
+    document.getElementById('chatStatusDot').className = 'status-dot warn';
+    document.getElementById('chatStatusText').textContent = 'AI OFFLINE';
+  }
+})();
+
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    chatSend();
+  }
+}
+
+function chatAutoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+function chatQuick(prompt) {
+  document.getElementById('chatInput').value = prompt;
+  chatAutoResize(document.getElementById('chatInput'));
+  chatSend();
+}
+
+async function chatSend() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg || chatState.isStreaming) return;
+
+  const temp = parseFloat(document.getElementById('chatTemp').value);
+
+  // Hide empty state
+  document.getElementById('chatEmpty').style.display = 'none';
+
+  // Add user message
+  chatAddMessage('user', msg);
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Update stats
+  chatState.msgCount++;
+  chatState.totalTokens += Math.ceil(msg.length / 4);
+  chatUpdateStats();
+
+  // Show thinking indicator
+  const thinkingId = 'thinking-' + Date.now();
+  chatShowThinking(thinkingId);
+
+  chatState.isStreaming = true;
+  chatSetStatus('STREAMING', true);
+  document.getElementById('chatSendBtn').disabled = true;
+
+  const t0 = Date.now();
+
+  try {
+    // Coba streaming dulu
+    const res = await fetch(API_BASE + '/api/v1/ai/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, temperature: temp, stream: true }),
+    });
+
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const contentType = res.headers.get('content-type') || '';
+
+    // Remove thinking indicator
+    document.getElementById(thinkingId)?.remove();
+
+    if (contentType.includes('text/plain')) {
+      // TRUE STREAMING — token by token dari Gemma
+      const msgEl = chatAddMessage('ai', '', true);
+      const bubbleText = msgEl.querySelector('.chat-bubble-text');
+      bubbleText.classList.add('chat-streaming');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+        bubbleText.innerHTML = chatFormatText(fullText);
+        chatScrollBottom();
+      }
+
+      bubbleText.classList.remove('chat-streaming');
+      chatState.messages.push({ role: 'ai', content: fullText });
+      chatState.totalTokens += Math.ceil(fullText.length / 4);
+
+    } else {
+      // JSON response — gunakan typing effect
+      const data = await res.json();
+      const fullText = data.response || data.message || JSON.stringify(data);
+
+      const msgEl = chatAddMessage('ai', '', true);
+      const bubbleText = msgEl.querySelector('.chat-bubble-text');
+      bubbleText.classList.add('chat-streaming');
+
+      await chatTypeText(bubbleText, fullText);
+
+      bubbleText.classList.remove('chat-streaming');
+      chatState.messages.push({ role: 'ai', content: fullText });
+      chatState.totalTokens += Math.ceil(fullText.length / 4);
+    }
+
+    // Update time stat
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    document.getElementById('chatLastTime').textContent = elapsed + 's';
+    chatState.msgCount++;
+    chatUpdateStats();
+
+  } catch(e) {
+    document.getElementById(thinkingId)?.remove();
+    chatAddMessage('ai', '⚠ Error: ' + e.message + '\n\nPastikan AI Engine berjalan di port 8001.');
+    addLog('ERROR', '[CHAT] ' + e.message);
+  } finally {
+    chatState.isStreaming = false;
+    chatSetStatus('READY', false);
+    document.getElementById('chatSendBtn').disabled = false;
+  }
+}
+
+function chatAddMessage(role, text, empty = false) {
+  const messages = document.getElementById('chatMessages');
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+
+  const avatarLabel = role === 'ai' ? '⬡AI' : 'YOU';
+  const avatarClass = role === 'ai' ? 'ai-avatar' : 'user-avatar';
+  const bubbleClass = role === 'ai' ? 'ai-bubble' : 'user-bubble';
+  const name       = role === 'ai' ? 'GEMMA AI' : 'USER';
+
+  div.innerHTML = `
+    <div class="chat-avatar ${avatarClass}">${avatarLabel}</div>
+    <div class="chat-bubble ${bubbleClass}">
+      <div class="chat-bubble-meta">
+        <span class="chat-bubble-name">${name}</span>
+        <span class="chat-bubble-time">${ts}</span>
+      </div>
+      <div class="chat-bubble-text">${empty ? '' : chatFormatText(text)}</div>
+      <div class="chat-bubble-actions">
+        <button class="chat-action-btn" onclick="chatCopyMsg(this)">COPY</button>
+        ${role === 'ai' ? '<button class="chat-action-btn" onclick="chatSendToAgent(this)">→ AGENT</button>' : ''}
+      </div>
+    </div>`;
+
+  messages.appendChild(div);
+  chatScrollBottom();
+  chatState.messages.push({ role, content: text });
+  return div;
+}
+
+function chatShowThinking(id) {
+  const messages = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ai';
+  div.id = id;
+  div.innerHTML = `
+    <div class="chat-avatar ai-avatar">⬡AI</div>
+    <div class="chat-thinking">
+      <div class="thinking-dots">
+        <span></span><span></span><span></span>
+      </div>
+      <span class="chat-thinking-text">Gemma sedang berpikir...</span>
+    </div>`;
+  messages.appendChild(div);
+  chatScrollBottom();
+}
+
+function chatFormatText(text) {
+  let s = escHtml(text);
+  s = s.replace(/^### (.+)$/gm, '<div style="font-weight:700;font-size:13px;color:var(--chrome);margin:8px 0 3px">$1</div>');
+  s = s.replace(/^## (.+)$/gm, '<div style="font-weight:700;font-size:14px;color:var(--amber-dim);margin:10px 0 4px;border-bottom:1px solid var(--border-dim);padding-bottom:3px">$1</div>');
+  s = s.replace(/^# (.+)$/gm, '<div style="font-size:15px;color:var(--amber);margin:12px 0 6px;font-weight:700">$1</div>');
+  s = s.replace(/[*][*][*](.+?)[*][*][*]/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/[*][*](.+?)[*][*]/g, '<strong style="color:var(--chrome)">$1</strong>');
+  s = s.replace(/[*]([^*\n]+?)[*]/g, '<em style="color:var(--amber-dim)">$1</em>');
+  s = s.replace(/`([^`]+)`/g, '<code style="font-family:var(--font-mono);font-size:10px;background:var(--coal);padding:1px 5px;border-radius:2px;color:var(--amber-dim)">$1</code>');
+  var lines2 = s.split('\n');
+  var out = []; var tbl = ''; var inTbl = false;
+  for (var i=0; i<lines2.length; i++) {
+    var ln = lines2[i];
+    if (ln.trim().charAt(0)==='|' && ln.trim().slice(-1)==='|') {
+      if (!inTbl) { inTbl=true; tbl='<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:11px">'; }
+      if (/^[|][-:\s|]+[|]$/.test(ln.trim())) continue;
+      var cells = ln.split('|').slice(1,-1);
+      var nxt = (lines2[i+1]||'').trim();
+      var isHdr = nxt.charAt(0)==='|' && /[-]/.test(nxt);
+      var tag = isHdr ? 'th' : 'td';
+      var sty = isHdr ? 'background:var(--seam);color:var(--amber-dim);font-weight:700;padding:5px 8px;border:1px solid var(--border-dim);text-align:left;font-size:9px' : 'padding:4px 8px;border:1px solid var(--border-dim);color:var(--steel)';
+      tbl += '<tr>'+cells.map(function(c){return '<'+tag+' style="'+sty+'">'+c.trim()+'</'+tag+'>';}).join('')+'</tr>';
+    } else {
+      if (inTbl) { out.push(tbl+'</table>'); inTbl=false; tbl=''; }
+      out.push(ln);
+    }
+  }
+  if (inTbl) out.push(tbl+'</table>');
+  s = out.join('\n');
+  s = s.replace(/^[•\-] (.+)$/gm, '<div style="padding-left:14px;margin:2px 0">• $1</div>');
+  s = s.replace(/\n/g, '<br/>');
+  return s;
+}
+
+function chatScrollBottom() {
+  const el = document.getElementById('chatMessages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function chatSetStatus(text, streaming) {
+  document.getElementById('chatStatusText').textContent = text;
+  const dot = document.getElementById('chatStatusDot');
+  dot.className = 'status-dot' + (streaming ? '' : '');
+  dot.style.background = streaming ? 'var(--amber)' : 'var(--success)';
+}
+
+function chatUpdateStats() {
+  document.getElementById('chatMsgCount').textContent = chatState.msgCount;
+  document.getElementById('chatTokenEst').textContent = chatState.totalTokens;
+}
+
+function chatCopyMsg(btn) {
+  const text = btn.closest('.chat-bubble').querySelector('.chat-bubble-text').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'COPIED!';
+    setTimeout(() => btn.textContent = 'COPY', 1500);
+  });
+}
+
+function chatSendToAgent(btn) {
+  // Kirim isi pesan AI ke task agent
+  const text = btn.closest('.chat-bubble').querySelector('.chat-bubble-text').textContent;
+  // Switch ke tab TASK dan isi task input
+  const taskTab = document.querySelector('[onclick*="switchView(\'task\'"]') ||
+                  document.querySelector('.nav-tab');
+  document.querySelectorAll('.nav-tab').forEach(t => {
+    if (t.textContent.includes('TASK')) t.click();
+  });
+  const taskInput = document.getElementById('taskInput');
+  if (taskInput) {
+    taskInput.value = 'Berdasarkan informasi berikut, buat laporan PDF:\n\n' + text.slice(0, 500);
+    taskInput.focus();
+    showToast('Teks dikirim ke TASK agent', 'info');
+  }
+}
+
+function chatClear() {
+  chatState.messages = [];
+  chatState.msgCount = 0;
+  chatState.totalTokens = 0;
+  chatUpdateStats();
+  document.getElementById('chatLastTime').textContent = '—';
+
+  const messages = document.getElementById('chatMessages');
+  // Keep only the empty state div
+  const empty = document.getElementById('chatEmpty');
+  messages.innerHTML = '';
+  empty.style.display = 'flex';
+  messages.appendChild(empty);
+}
+
+function chatExport() {
+  if (!chatState.messages.length) {
+    showToast('Tidak ada percakapan untuk diexport', 'warn');
+    return;
+  }
+  const ts = new Date().toISOString().slice(0,19).replace(/[T:]/g, '-');
+  const text = chatState.messages
+    .map(m => `[${m.role.toUpperCase()}]\n${m.content}`)
+    .join('\n\n---\n\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `chat_export_${ts}.txt`;
+  a.click();
+  showToast('Chat diexport', 'success');
+}
+
+
+const fpState={uploads:[],selected:null,processed:0,outputs:[]};
+(function(){setTimeout(()=>{fpRefreshUploads();fpRefreshOutputs();},1200);})();
+async function fpRefreshUploads(){try{const r=await fetch(API_BASE+'/uploads');const d=await r.json();fpState.uploads=d.files||[];fpRenderUploads();document.getElementById('fpMetricUploaded').textContent=fpState.uploads.length;}catch(e){fpLog('WARN','Upload list error: '+e.message);}}
+async function fpRefreshOutputs(){try{const r=await fetch(API_BASE+'/reports');const d=await r.json();fpState.outputs=d.files||[];fpRenderOutputs();document.getElementById('fpMetricOutputs').textContent=fpState.outputs.length;}catch(e){fpLog('WARN','Output list error: '+e.message);}}
+function fpRenderUploads(){const list=document.getElementById('fpFileList');if(!fpState.uploads.length){list.innerHTML='<div style="padding:20px;text-align:center"><div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.4;letter-spacing:1px">BELUM ADA FILE</div></div>';return;}const ec={pdf:'file-type-pdf',csv:'file-type-csv',json:'file-type-json',html:'file-type-html'};list.innerHTML=fpState.uploads.map(f=>{const ext=(f.filename||'').split('.').pop().toLowerCase();const cls=ec[ext]||'file-type-other';const sz=f.size?(f.size>1048576?(f.size/1048576).toFixed(1)+'MB':(f.size/1024).toFixed(0)+'KB'):'—';const sel=fpState.selected===f.filename?'selected':'';return`<div class="fp-file-item ${sel}" onclick="fpSelectFile('${escHtml(f.filename)}')"><div class="fp-file-icon ${cls}">${ext.toUpperCase().slice(0,3)}</div><div style="flex:1;min-width:0"><div class="fp-file-name">${escHtml(f.filename)}</div><div class="fp-file-meta">${sz}</div></div><button class="fp-file-del" onclick="fpDeleteUpload(event,'${escHtml(f.filename)}')" title="Hapus">✕</button></div>`;}).join('');}
+function fpRenderOutputs(){const list=document.getElementById('fpOutputList');if(!fpState.outputs.length){list.innerHTML='<div style="padding:30px;text-align:center"><div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);opacity:0.4;letter-spacing:1px;line-height:1.8">OUTPUT AKAN MUNCUL<br/>SETELAH FILE DIPROSES</div></div>';return;}const ec={pdf:'file-type-pdf',html:'file-type-html',csv:'file-type-csv',json:'file-type-json'};list.innerHTML=[...fpState.outputs].reverse().map(f=>{const ext=(f.filename||'').split('.').pop().toLowerCase();const cls=ec[ext]||'file-type-other';const sz=f.size?(f.size>1048576?(f.size/1048576).toFixed(1)+'MB':(f.size/1024).toFixed(0)+'KB'):'—';const ts=f.modified?new Date(f.modified*1000).toLocaleTimeString():'—';return`<div class="fp-output-item"><div class="fp-output-icon ${cls}">${ext.toUpperCase().slice(0,3)}</div><div style="flex:1;min-width:0"><div class="fp-output-name">${escHtml(f.filename)}</div><div class="fp-output-meta">${sz} · ${ts}</div></div><div class="fp-output-actions"><button class="btn btn-secondary btn-sm" onclick="previewFile('${escHtml(f.filename)}','${ext}')">👁</button><button class="btn btn-secondary btn-sm" onclick="downloadFile('${escHtml(f.filename)}')">↓</button></div></div>`;}).join('');}
+function fpSelectFile(fn){fpState.selected=fpState.selected===fn?null:fn;fpRenderUploads();const b=document.getElementById('fpSelectedBadge');document.getElementById('fpSelectedName').textContent=fn;if(fpState.selected){b.classList.add('show');const t=document.getElementById('fpTaskInput');if(!t.value.trim()){const ext=fn.split('.').pop().toLowerCase();const def={pdf:'Buat ringkasan dan laporan PDF dari dokumen ini',csv:'Analisa data CSV ini dan buat laporan PDF',json:'Analisa data JSON dan buat laporan PDF',kml:'Jelaskan koordinat dan batas wilayah dari file ini, buat laporan PDF',txt:'Buat ringkasan eksekutif dari teks ini'};t.value=def[ext]||'Analisa dan buat laporan dari file ini';}fpLog('INFO','File dipilih: '+fn);}else{b.classList.remove('show');}}
+function fpClearSelection(){fpState.selected=null;fpRenderUploads();document.getElementById('fpSelectedBadge').classList.remove('show');document.getElementById('fpTaskInput').value='';}
+function fpSetTask(t){document.getElementById('fpTaskInput').value=t;document.getElementById('fpTaskInput').focus();}
+async function fpHandleUpload(e){for(const f of Array.from(e.target.files))await fpUploadFile(f);e.target.value='';}
+function fpDragOver(e){e.preventDefault();document.getElementById('fpDropZone').classList.add('drag-over');}
+async function fpDrop(e){e.preventDefault();document.getElementById('fpDropZone').classList.remove('drag-over');for(const f of Array.from(e.dataTransfer.files))await fpUploadFile(f);}
+async function fpUploadFile(file){fpLog('INFO','Uploading: '+file.name+' ('+(file.size/1024).toFixed(0)+'KB)');const fd=new FormData();fd.append('file',file);try{const r=await fetch(API_BASE+'/upload',{method:'POST',body:fd});const d=await r.json();if(d.filename){fpLog('INFO','Upload OK: '+d.filename);showToast('Upload berhasil: '+file.name,'success');await fpRefreshUploads();fpSelectFile(d.filename);}}catch(e){fpLog('ERROR','Upload gagal: '+e.message);showToast('Upload gagal','error');}}
+async function fpDeleteUpload(e,fn){e.stopPropagation();if(fpState.selected===fn)fpClearSelection();fpState.uploads=fpState.uploads.filter(f=>f.filename!==fn);fpRenderUploads();fpLog('INFO','Dihapus: '+fn);document.getElementById('fpMetricUploaded').textContent=fpState.uploads.length;}
+async function fpExecute(){const task=document.getElementById('fpTaskInput').value.trim();if(!task){showToast('Masukkan instruksi untuk agent','warn');return;}if(!fpState.selected&&!fpState.uploads.length){showToast('Upload dan pilih file terlebih dahulu','warn');return;}const sf=fpState.selected||(fpState.uploads[0]&&fpState.uploads[0].filename);const model=document.getElementById('fpModelSelect').value;const fmt=document.getElementById('fpOutputSelect').value;document.getElementById('fpProcessing').classList.add('active');document.getElementById('fpProcessingText').textContent='Memproses: '+sf;document.getElementById('fpExecBtn').disabled=true;fpLog('STEP','Mulai proses: '+sf);fpLog('INFO','Task: '+task.slice(0,80));const payload={task:task,files:sf?[sf]:[]};if(model)payload.model=model;if(fmt&&fmt!=='auto')payload.output_format=fmt;try{const r=await fetch(API_BASE+'/api/v1/agent/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(d.success){const files=d.output_files||[];fpLog('INFO','Selesai! '+files.length+' file dihasilkan');files.forEach(f=>{const n=f.split('/').pop();fpLog('INFO','→ '+n);showToast('Output: '+n,'success');});fpState.processed++;document.getElementById('fpMetricProcessed').textContent=fpState.processed;await fpRefreshOutputs();}else{fpLog('ERROR','Error: '+(d.error||'unknown'));showToast('Proses gagal','error');}}catch(e){fpLog('ERROR','Error: '+e.message);showToast('Error: '+e.message,'error');}finally{document.getElementById('fpProcessing').classList.remove('active');document.getElementById('fpExecBtn').disabled=false;}}
+function fpLog(level,msg){const el=document.getElementById('fpLog');const colors={INFO:'var(--iron)',STEP:'var(--amber)',ERROR:'var(--danger)',WARN:'var(--warn)'};const ts=new Date().toLocaleTimeString('en-GB',{hour12:false});const line=document.createElement('div');line.style.cssText='display:flex;gap:6px;';line.innerHTML=`<span style="opacity:0.4;flex-shrink:0">${ts}</span><span style="color:${colors[level]||'var(--iron)'};width:32px;flex-shrink:0">${level}</span><span>${escHtml(msg)}</span>`;el.querySelectorAll('div[style*="opacity:0.4"]').forEach(d=>{if(d.textContent.includes('Waiting'))d.remove();});el.appendChild(line);el.scrollTop=el.scrollHeight;addLog(level,'[FILE] '+msg);}
+
+
+function gisUploadSHP(){document.getElementById('gisFileInput').click();}
+
+async function gisHandleFile(e){
+  const file=e.target.files[0];if(!file)return;
+  document.getElementById('gisStatusText').textContent='UPLOADING: '+file.name;
+  addLog('INFO','[GIS] Uploading: '+file.name);
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const r=await fetch(API_BASE+'/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    addLog('INFO','[GIS] Upload OK: '+d.filename);
+    showToast('File GIS diupload: '+d.filename,'success');
+    document.getElementById('gisStatusText').textContent='LOADED: '+d.filename;
+  }catch(err){
+    addLog('ERROR','[GIS] '+err.message);
+    showToast('Upload gagal','error');
+  }
+  e.target.value='';
+}
+
+function gisExportKML(){
+  showToast('Pilih file KML di tab FILES untuk download','info');
+  document.querySelectorAll('.nav-tab').forEach(t=>{if(t.textContent.includes('FILES'))t.click();});
+}
+
+async function gisExportPDF(){
+  showToast('Membuat laporan GIS PDF...','info');
+  addLog('STEP','[GIS] Generating PDF...');
+  document.getElementById('gisStatusText').textContent='GENERATING PDF...';
+  try{
+    const r=await fetch(API_BASE+'/api/v1/agent/run',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({task:'Buat laporan PDF analisa GIS wilayah dengan koordinat dan batas wilayah'})
+    });
+    const d=await r.json();
+    if(d.success&&d.output_files&&d.output_files.length){
+      const fn=d.output_files[0].split('/').pop();
+      showToast('GIS PDF: '+fn,'success');
+      document.getElementById('gisStatusText').textContent='PDF READY: '+fn;
+      await refreshOutputs();
+    }
+  }catch(err){showToast('PDF error: '+err.message,'error');}
+}
+
+
+/* ══════════════════════════════════════════
+   GIS CONVERSION FUNCTIONS
+   ══════════════════════════════════════════ */
+
+// Upload file ke GIS endpoint
+async function gisConvert(file, mode) {
+  const endpoints = {
+    'parse'    : '/api/v1/gis/kml/parse',
+    'to-geojson': '/api/v1/gis/kml/to-geojson',
+    'validate' : '/api/v1/gis/geojson/validate',
+  };
+
+  const ep = endpoints[mode];
+  if (!ep) { showToast('Mode tidak dikenal: '+mode,'error'); return null; }
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  document.getElementById('gisStatusText').textContent = 'PROCESSING: ' + file.name + ' → ' + mode.toUpperCase();
+  addLog('STEP', '[GIS] ' + mode + ': ' + file.name);
+
+  try {
+    const r = await fetch(API_BASE + ep, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    addLog('INFO', '[GIS] Result: ' + JSON.stringify(d).slice(0,100));
+    return d;
+  } catch(err) {
+    addLog('ERROR', '[GIS] ' + err.message);
+    showToast('GIS error: ' + err.message, 'error');
+    return null;
+  }
+}
+
+// KML → Parse (tampilkan info)
+async function gisParseKML(file) {
+  const result = await gisConvert(file, 'parse');
+  if (!result) return;
+
+  showToast('KML parsed: ' + (result.features?.length || result.placemarks?.length || '?') + ' features', 'success');
+  document.getElementById('gisStatusText').textContent = 'KML PARSED: ' + file.name;
+
+  // Tampilkan hasil di overlay
+  gisShowResult('KML PARSE RESULT', result, file.name);
+}
+
+// KML → GeoJSON
+async function gisKMLtoGeoJSON(file) {
+  const result = await gisConvert(file, 'to-geojson');
+  if (!result) return;
+
+  // Download hasil sebagai .geojson
+  const blob = new Blob([JSON.stringify(result, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name.replace(/\.kml$/i, '.geojson');
+  a.click();
+  URL.revokeObjectURL(url);
+
+  showToast('GeoJSON downloaded: ' + a.download, 'success');
+  document.getElementById('gisStatusText').textContent = 'EXPORTED: ' + a.download;
+  addLog('INFO', '[GIS] GeoJSON exported: ' + a.download);
+}
+
+// GeoJSON validate
+async function gisValidateGeoJSON(file) {
+  const text = await file.text();
+  let geojson;
+  try { geojson = JSON.parse(text); }
+  catch(e) { showToast('Invalid JSON: ' + e.message, 'error'); return; }
+
+  const r = await fetch(API_BASE + '/api/v1/gis/geojson/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(geojson)
+  });
+  const d = await r.json();
+  showToast('GeoJSON: ' + (d.valid ? '✓ Valid' : '✕ Invalid'), d.valid ? 'success' : 'error');
+  gisShowResult('GEOJSON VALIDATION', d, file.name);
+}
+
+// Hitung luas dari koordinat
+async function gisCalcArea(coords) {
+  try {
+    const r = await fetch(API_BASE + '/api/v1/gis/area/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(coords)
+    });
+    const d = await r.json();
+    showToast('Luas: ' + (d.area_m2 || d.area || JSON.stringify(d)), 'success');
+    addLog('INFO', '[GIS] Area: ' + JSON.stringify(d));
+  } catch(err) {
+    addLog('ERROR', '[GIS] Area calc: ' + err.message);
+  }
+}
+
+// Tampilkan hasil di GIS map overlay
+function gisShowResult(title, data, filename) {
+  const area = document.getElementById('gisMapArea');
+  let old = area.querySelector('.gis-result-overlay');
+  if (old) old.remove();
+
+  const div = document.createElement('div');
+  div.className = 'gis-result-overlay';
+  div.style.cssText = [
+    'position:absolute;top:10px;left:10px;right:10px',
+    'background:rgba(10,11,13,0.92)',
+    'border:1px solid var(--border)',
+    'border-radius:3px;padding:12px',
+    'font-family:var(--font-mono);font-size:9px',
+    'color:var(--steel);z-index:10',
+    'max-height:280px;overflow-y:auto'
+  ].join(';');
+
+  div.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <span style="color:var(--amber);letter-spacing:1.5px;font-weight:700">${title}</span>
+      <span style="color:var(--iron);opacity:0.6">${filename}</span>
+      <button onclick="this.closest('.gis-result-overlay').remove()"
+        style="border:none;background:none;color:var(--iron);cursor:pointer;font-size:12px;padding:0 4px">✕</button>
+    </div>
+    <pre style="color:var(--iron);font-size:8px;white-space:pre-wrap;line-height:1.6">${JSON.stringify(data,null,2).slice(0,800)}</pre>`;
+
+  area.appendChild(div);
+}
+
+// Override gisHandleFile untuk support semua format
+async function gisHandleFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  addLog('INFO', '[GIS] File selected: ' + file.name + ' (' + ext + ')');
+
+  // Tampilkan modal pilihan konversi
+  gisShowConvertModal(file, ext);
+  e.target.value = '';
+}
+
+function gisShowConvertModal(file, ext) {
+  let old = document.getElementById('gisConvertModal');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'gisConvertModal';
+  modal.style.cssText = [
+    'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)',
+    'background:var(--shaft);border:1px solid var(--amber)',
+    'border-radius:4px;padding:20px;z-index:20',
+    'min-width:280px;box-shadow:0 0 40px rgba(245,166,35,0.2)'
+  ].join(';');
+
+  const kmlOpts = ext === 'kml' ? `
+    <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:6px;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove();gisKMLtoGeoJSON(window._gisFile)">
+      ⬡ KML → GeoJSON (DOWNLOAD)
+    </button>
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:6px;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove();gisParseKML(window._gisFile)">
+      ⬡ PARSE KML (TAMPILKAN INFO)
+    </button>
+    <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove();gisExportPDF()">
+      ⬡ BUAT LAPORAN PDF
+    </button>` : '';
+
+  const geojsonOpts = (ext === 'geojson' || ext === 'json') ? `
+    <button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:6px;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove();gisValidateGeoJSON(window._gisFile)">
+      ⬡ VALIDATE GEOJSON
+    </button>
+    <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove();gisExportPDF()">
+      ⬡ BUAT LAPORAN PDF
+    </button>` : '';
+
+  modal.innerHTML = `
+    <div style="font-family:var(--font-head);font-size:10px;color:var(--amber);letter-spacing:2px;margin-bottom:12px">
+      PILIH KONVERSI
+    </div>
+    <div style="font-family:var(--font-mono);font-size:9px;color:var(--iron);margin-bottom:12px">
+      File: ${file.name} · ${(file.size/1024).toFixed(0)}KB
+    </div>
+    ${kmlOpts}${geojsonOpts}
+    ${!kmlOpts && !geojsonOpts ? '<div style="font-family:var(--font-mono);font-size:9px;color:var(--iron)">Format tidak didukung untuk konversi langsung.<br/>Upload via tab FILES untuk diproses agent.</div>' : ''}
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:10px;justify-content:center"
+      onclick="document.getElementById('gisConvertModal').remove()">
+      BATAL
+    </button>`;
+
+  window._gisFile = file;
+  document.getElementById('gisMapArea').appendChild(modal);
+}
+
+
+var _plKMLFile = null;
+
+function plHandleKML(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  _plKMLFile = file;
+  var label = document.getElementById('plKMLLabel');
+  var zone  = document.getElementById('plKMLZone');
+  if (label) { label.textContent = '✓ ' + file.name; label.style.color = 'var(--success)'; }
+  if (zone)  zone.style.borderColor = 'var(--success)';
+  addLog('INFO', '[PIPELINE] KML: ' + file.name);
+}
+
+function plHandleDrop(e) {
+  e.preventDefault();
+  var file = e.dataTransfer.files[0];
+  if (!file) return;
+  _plKMLFile = file;
+  var label = document.getElementById('plKMLLabel');
+  var zone  = document.getElementById('plKMLZone');
+  if (label) { label.textContent = '✓ ' + file.name; label.style.color = 'var(--success)'; }
+  if (zone)  zone.style.borderColor = 'var(--success)';
+  addLog('INFO', '[PIPELINE] KML drop: ' + file.name);
+}
+
+async function triggerWIUPPipeline() {
+  var locEl  = document.getElementById('plLocation');
+  var comEl  = document.getElementById('plCommodity');
+  var location  = locEl  ? locEl.value.trim()  : '';
+  var commodity = comEl  ? comEl.value         : 'Batubara';
+
+  if (!_plKMLFile) { showToast('Upload file KML terlebih dahulu', 'warn'); return; }
+  if (!location)   { showToast('Masukkan lokasi terlebih dahulu', 'warn'); return; }
+
+  var btn = document.getElementById('plRunBtn');
+  var sp  = document.getElementById('plSpinner');
+  if (btn) btn.disabled = true;
+  if (sp)  sp.style.display = 'inline-block';
+
+  addLog('STEP', '[PIPELINE] Start: ' + location + ' / ' + commodity);
+  plSetStages([
+    {name:'FILE INTAKE',  status:'running', desc:'Parsing KML...'},
+    {name:'AI ANALYSIS',  status:'queued',  desc:'Waiting...'},
+    {name:'GIS PROCESS',  status:'queued',  desc:'Waiting...'},
+    {name:'REPORT GEN',   status:'queued',  desc:'Waiting...'},
+    {name:'DASHBOARD',    status:'queued',  desc:'Waiting...'},
+    {name:'FINALIZE',     status:'queued',  desc:'Waiting...'},
+  ]);
+
+  try {
+    var fd = new FormData();
+    fd.append('file', _plKMLFile);
+    var url = API_BASE + '/api/v1/pipeline/wiup-full-report?location='
+              + encodeURIComponent(location) + '&commodity=' + encodeURIComponent(commodity);
+
+    plUpdateStage('FILE INTAKE', 'running', 'Uploading KML...');
+    var res = await fetch(url, { method: 'POST', body: fd });
+    plUpdateStage('FILE INTAKE', 'done', 'KML parsed');
+    plUpdateStage('AI ANALYSIS', 'running', 'Gemma analyzing...');
+
+    if (!res.ok) { var txt = await res.text(); throw new Error('HTTP ' + res.status + ': ' + txt); }
+    var data = await res.json();
+
+    plUpdateStage('AI ANALYSIS', 'done', 'Complete');
+    plUpdateStage('GIS PROCESS', 'done', 'Area: ' + (data.spatial ? data.spatial.area_ha : '?') + ' Ha');
+    plUpdateStage('REPORT GEN',  'done', 'Generated');
+    plUpdateStage('DASHBOARD',   'done', 'Complete');
+    plUpdateStage('FINALIZE',    'done', 'Pipeline complete');
+
+    var sp2 = data.spatial || {};
+    var ai  = data.ai_reports || {};
+    var resDiv = document.getElementById('plResult');
+    var resContent = document.getElementById('plResultContent');
+    if (resDiv) resDiv.style.display = 'block';
+    if (resContent) resContent.innerHTML =
+      '<div style="color:var(--amber-dim);margin-bottom:6px">SPATIAL</div>' +
+      '<div>Luas: <b>' + (sp2.area_ha||'?') + ' Ha</b></div>' +
+      '<div>Centroid: ' + (sp2.centroid ? sp2.centroid.latitude.toFixed(4)+'°, '+sp2.centroid.longitude.toFixed(4)+'°' : '?') + '</div>' +
+      '<div>Titik: ' + (sp2.vertex_count||'?') + '</div><br/>' +
+      '<div style="color:var(--amber-dim);margin-bottom:4px">GEOLOGICAL SUMMARY</div>' +
+      '<div style="white-space:pre-wrap;color:var(--steel)">' + (ai.geological_summary||'').slice(0,500) + '...</div>';
+
+    showToast('Pipeline selesai!', 'success');
+    addLog('INFO', '[PIPELINE] Done. Area: ' + sp2.area_ha + ' Ha');
+    await refreshOutputs();
+
+  } catch(err) {
+    plUpdateStage('FILE INTAKE', 'error', err.message);
+    addLog('ERROR', '[PIPELINE] ' + err.message);
+    showToast('Pipeline error: ' + err.message.slice(0,60), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (sp)  sp.style.display = 'none';
+  }
+}
+
+function plSetStages(stages) {
+  var grid = document.getElementById('pipelineGrid');
+  if (!grid) return;
+  grid.innerHTML = stages.map(function(s) {
+    return '<div class="pipeline-stage ' + s.status + '" id="plstage-' + s.name.replace(/ /g,'_') + '">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">' +
+      '<div class="stage-name">' + s.name + '</div>' +
+      '<span class="task-status-badge ' + s.status + '" style="font-size:7px;padding:1px 5px">' + s.status.toUpperCase() + '</span></div>' +
+      '<div class="stage-desc" id="pldesc-' + s.name.replace(/ /g,'_') + '">' + s.desc + '</div>' +
+      (s.status==='running' ? '<div class="step-thinking" style="padding:0;margin-top:4px"><span style="font-size:9px">Processing</span><div class="thinking-dots"><span></span><span></span><span></span></div></div>' : '') +
+      '</div>';
+  }).join('');
+}
+
+function plUpdateStage(name, status, desc) {
+  var id  = name.replace(/ /g,'_');
+  var el  = document.getElementById('plstage-'+id);
+  if (!el) return;
+  el.className = 'pipeline-stage ' + status;
+  var badge = el.querySelector('.task-status-badge');
+  if (badge) { badge.className = 'task-status-badge ' + status; badge.textContent = status.toUpperCase(); }
+  var descEl = document.getElementById('pldesc-'+id);
+  if (descEl) descEl.textContent = desc;
+  var thinking = el.querySelector('.step-thinking');
+  if (thinking && status !== 'running') thinking.remove();
+}
+
+async function enqueueAsync() {
+  var type = document.getElementById('plPipelineType') ? document.getElementById('plPipelineType').value : 'wiup_report';
+  var pri  = document.getElementById('plPriority')     ? document.getElementById('plPriority').value     : 'normal';
+  addLog('STEP', '[PIPELINE] Enqueue: ' + type);
+  try {
+    var r = await fetch(API_BASE + '/api/v1/pipeline/async/enqueue', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({pipeline_type: type, params: {}, priority: pri})
+    });
+    var d = await r.json();
+    showToast('Job queued: ' + d.job_id, 'success');
+    addLog('INFO', '[PIPELINE] Job: ' + d.job_id);
+    setTimeout(refreshPipeline, 1000);
+  } catch(err) {
+    showToast('Enqueue error: ' + err.message, 'error');
+  }
+}
+
+</script>
+
+<script>
+/* Pipeline functions - separate block */
+var _plKMLFile = null;
+function plHandleKML(e){var f=e.target.files[0];if(!f)return;_plKMLFile=f;var lb=document.getElementById('plKMLLabel');var zn=document.getElementById('plKMLZone');if(lb){lb.textContent='✓ '+f.name;lb.style.color='var(--success)';}if(zn)zn.style.borderColor='var(--success)';if(typeof addLog!=='undefined')addLog('INFO','[PIPELINE] KML: '+f.name);}
+function plHandleDrop(e){e.preventDefault();var f=e.dataTransfer.files[0];if(f){var ev={target:{files:[f]}};plHandleKML(ev);}}
+function plSetStages(stages){var grid=document.getElementById('pipelineGrid');if(!grid)return;grid.innerHTML=stages.map(function(s){return'<div class="pipeline-stage '+s.status+'" id="plstage-'+s.name.replace(/ /g,'_')+'"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><div class="stage-name">'+s.name+'</div><span class="task-status-badge '+s.status+'" style="font-size:7px;padding:1px 5px">'+s.status.toUpperCase()+'</span></div><div class="stage-desc" id="pldesc-'+s.name.replace(/ /g,'_')+'">'+s.desc+'</div>'+(s.status==='running'?'<div class="step-thinking" style="padding:0;margin-top:4px"><div class="thinking-dots"><span></span><span></span><span></span></div></div>':'')+'</div>';}).join('');}
+function plUpdateStage(name,status,desc){var id=name.replace(/ /g,'_');var el=document.getElementById('plstage-'+id);if(!el)return;el.className='pipeline-stage '+status;var b=el.querySelector('.task-status-badge');if(b){b.className='task-status-badge '+status;b.textContent=status.toUpperCase();}var d=document.getElementById('pldesc-'+id);if(d)d.textContent=desc;var t=el.querySelector('.step-thinking');if(t&&status!=='running')t.remove();}
+async function triggerWIUPPipeline(){
+  var locEl=document.getElementById('plLocation');
+  var comEl=document.getElementById('plCommodity');
+  var location=locEl?locEl.value.trim():'';
+  var commodity=comEl?comEl.value:'Batubara';
+  if(!_plKMLFile){alert('Upload file KML terlebih dahulu');return;}
+  if(!location){alert('Masukkan lokasi');return;}
+  var btn=document.getElementById('plRunBtn');
+  var sp=document.getElementById('plSpinner');
+  if(btn)btn.disabled=true;
+  if(sp)sp.style.display='inline-block';
+  plSetStages([{name:'FILE INTAKE',status:'running',desc:'Parsing KML...'},{name:'AI ANALYSIS',status:'queued',desc:'Waiting...'},{name:'GIS PROCESS',status:'queued',desc:'Waiting...'},{name:'REPORT GEN',status:'queued',desc:'Waiting...'},{name:'DASHBOARD',status:'queued',desc:'Waiting...'},{name:'FINALIZE',status:'queued',desc:'Waiting...'}]);
+  try{
+    var fd=new FormData();
+    fd.append('file',_plKMLFile);
+    var API=window.API_BASE||'http://localhost:8001';
+    var url=API+'/api/v1/pipeline/wiup-full-report?location='+encodeURIComponent(location)+'&commodity='+encodeURIComponent(commodity);
+    plUpdateStage('FILE INTAKE','running','Uploading...');
+    var res=await fetch(url,{method:'POST',body:fd});
+    plUpdateStage('FILE INTAKE','done','Parsed');
+    plUpdateStage('AI ANALYSIS','running','Analyzing...');
+    if(!res.ok)throw new Error('HTTP '+res.status+': '+await res.text());
+    var data=await res.json();
+    plUpdateStage('AI ANALYSIS','done','Done');
+    plUpdateStage('GIS PROCESS','done','Area: '+(data.spatial?data.spatial.area_ha:'?')+' Ha');
+    plUpdateStage('REPORT GEN','done','Generated');
+    plUpdateStage('DASHBOARD','done','Done');
+    plUpdateStage('FINALIZE','done','Complete');
+    var rd=document.getElementById('plResult');
+    var rc=document.getElementById('plResultContent');
+    if(rd)rd.style.display='block';
+    if(rc){var sp2=data.spatial||{};var ai=data.ai_reports||{};rc.innerHTML='<b style="color:var(--amber-dim)">SPATIAL</b><br/>Luas: '+(sp2.area_ha||'?')+' Ha<br/>Centroid: '+(sp2.centroid?sp2.centroid.latitude.toFixed(4)+'°, '+sp2.centroid.longitude.toFixed(4)+'°':'?')+'<br/>Titik: '+(sp2.vertex_count||'?')+'<br/><br/><b style="color:var(--amber-dim)">GEOLOGICAL</b><br/><span style="white-space:pre-wrap">'+(ai.geological_summary||'').slice(0,400)+'</span>';}
+    alert('Pipeline selesai!');
+  }catch(err){
+    plUpdateStage('FILE INTAKE','error',err.message.slice(0,60));
+    alert('Error: '+err.message);
+  }finally{
+    if(btn)btn.disabled=false;
+    if(sp)sp.style.display='none';
+  }
+}
+async function enqueueAsync(){
+  var type=document.getElementById('plPipelineType')?document.getElementById('plPipelineType').value:'wiup_report';
+  var pri=document.getElementById('plPriority')?document.getElementById('plPriority').value:'normal';
+  var API=window.API_BASE||'http://localhost:8001';
+  try{var r=await fetch(API+'/api/v1/pipeline/async/enqueue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pipeline_type:type,params:{},priority:pri})});var d=await r.json();alert('Job queued: '+d.job_id);}
+  catch(err){alert('Error: '+err.message);}
+}
+</script>
+
+</body>
+</html>

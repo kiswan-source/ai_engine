@@ -1,0 +1,27 @@
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Runtime data / output ---
+audit.log
+*.log
+backups/
+uploads/
+reports/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/

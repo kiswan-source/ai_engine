@@ -1,0 +1,49 @@
+# ─── Web Framework ────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+geoalchemy2==0.16.0
+alembic==1.14.0
+
+# ─── Redis / Queue ────────────────────────────────────────────────────────────
+redis==5.2.1
+rq==1.16.2
+rq-dashboard==0.6.1
+
+# ─── HTTP Client (Ollama) ─────────────────────────────────────────────────────
+httpx==0.28.1
+tenacity==9.0.0
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+structlog==24.4.0
+
+# ─── Document Processing ──────────────────────────────────────────────────────
+pypdf==5.1.0
+python-docx==1.1.2
+reportlab==4.2.5
+lxml==5.3.0
+
+# ─── Image processing (read/transform, NOT generation) ───────────────────────
+Pillow==12.2.0
+pytesseract==0.3.13   # optional OCR; needs `tesseract` binary on the host
+
+# ─── GIS ──────────────────────────────────────────────────────────────────────
+shapely==2.0.6
+pyproj==3.7.0
+fiona==1.10.1
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1
+openpyxl==3.1.5

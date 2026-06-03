@@ -1,0 +1,115 @@
+services:
+  # ─── Database ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: ai_engine_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_engine}
+      POSTGRES_USER: ${POSTGRES_USER:-aiuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aipassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Cache / Broker ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ai_engine_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── FastAPI ──────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: ai_engine_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiuser}:${POSTGRES_PASSWORD:-aipassword}@postgres:5432/${POSTGRES_DB:-ai_engine}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://172.29.239.93:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+      - ./reports:/home/appuser/ai_engine/reports
+      - ./uploads:/home/appuser/ai_engine/uploads
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ─── RQ Workers ──────────────────────────────────────────────────────────────
+  worker_ai:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: ai_engine_worker_ai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiuser}:${POSTGRES_PASSWORD:-aipassword}@postgres:5432/${POSTGRES_DB:-ai_engine}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://172.29.239.93:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m worker.ai.worker_ai
+    volumes:
+      - ./:/app
+      - ./reports:/home/appuser/ai_engine/reports
+
+  worker_gis:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: ai_engine_worker_gis
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiuser}:${POSTGRES_PASSWORD:-aipassword}@postgres:5432/${POSTGRES_DB:-ai_engine}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m worker.gis.worker_gis
+    volumes:
+      - ./:/app
+      - ./reports:/home/appuser/ai_engine/reports
+
+  # ─── RQ Dashboard ────────────────────────────────────────────────────────────
+  rq_dashboard:
+    image: eoranged/rq-dashboard:latest
+    container_name: ai_engine_rq_dashboard
+    restart: unless-stopped
+    environment:
+      RQ_DASHBOARD_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "9181:9181"
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
