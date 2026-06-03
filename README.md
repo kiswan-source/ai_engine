@@ -1,5 +1,7 @@
 # AI Engine — Asisten File Lokal (Gemma × FastAPI × PostGIS × RQ)
 
+[![CI](https://github.com/kiswan-source/ai_engine/actions/workflows/ci.yml/badge.svg)](https://github.com/kiswan-source/ai_engine/actions/workflows/ci.yml)
+
 AI engine untuk mining & GIS workflows, powered oleh **Gemma via Ollama** (LLM lokal).
 
 ## ✨ Chat Asisten File (fitur utama)
