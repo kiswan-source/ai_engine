@@ -25,6 +25,13 @@ from .exceptions import (
 
 logger = get_logger(__name__)
 
+# Newer Claude models (e.g. the Sonnet 5 default, Bab 20) reject `temperature`/
+# `top_p` outright ("<field> is deprecated for this model") rather than
+# clamping or ignoring them — unlike older Claude 3.x models, which accept
+# both. Rather than hardcode a model allowlist that will go stale, detect the
+# rejection from the API's own error and retry once without sampling params.
+_SAMPLING_UNSUPPORTED_HINT = "deprecated for this model"
+
 
 class ClaudeProvider(BaseProvider):
     """Provider for Anthropic Claude Messages API."""
@@ -33,7 +40,10 @@ class ClaudeProvider(BaseProvider):
 
     def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None) -> None:
         super().__init__(model or settings.CLAUDE_MODEL)
-        self._api_key = api_key or settings.ANTHROPIC_API_KEY
+        # `is not None` (not `or`): an explicit api_key="" must mean "no key",
+        # not silently fall back to settings — `"" or settings.X` would defeat
+        # exactly the override this parameter exists for.
+        self._api_key = api_key if api_key is not None else settings.ANTHROPIC_API_KEY
         self._base_url = (base_url or settings.ANTHROPIC_BASE_URL).rstrip("/")
         self._timeout = settings.PROVIDER_TIMEOUT
 
@@ -46,15 +56,18 @@ class ClaudeProvider(BaseProvider):
             "Content-Type": "application/json",
         }
 
-    def _payload(self, prompt: str, params: GenerationParams, stream: bool) -> dict[str, Any]:
+    def _payload(
+        self, prompt: str, params: GenerationParams, stream: bool, *, sampling: bool = True
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": params.max_tokens,
-            "temperature": params.temperature,
-            "top_p": params.top_p,
             "messages": [{"role": "user", "content": prompt}],
             "stream": stream,
         }
+        if sampling:
+            payload["temperature"] = params.temperature
+            payload["top_p"] = params.top_p
         if params.system:
             payload["system"] = params.system
         if params.stop:
@@ -62,17 +75,35 @@ class ClaudeProvider(BaseProvider):
         payload.update(params.extra)
         return payload
 
+    @staticmethod
+    def _is_sampling_unsupported(exc: httpx.HTTPStatusError) -> bool:
+        return exc.response.status_code == 400 and _SAMPLING_UNSUPPORTED_HINT in exc.response.text
+
+    async def _post_messages(self, client: httpx.AsyncClient, prompt: str, params: GenerationParams) -> dict:
+        try:
+            resp = await client.post(
+                f"{self._base_url}/v1/messages",
+                headers=self._headers(),
+                json=self._payload(prompt, params, stream=False),
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if not self._is_sampling_unsupported(exc):
+                raise
+            logger.info("claude.sampling_unsupported_retry", model=self.model)
+            resp = await client.post(
+                f"{self._base_url}/v1/messages",
+                headers=self._headers(),
+                json=self._payload(prompt, params, stream=False, sampling=False),
+            )
+            resp.raise_for_status()
+        return resp.json()
+
     async def generate(self, prompt: str, params: GenerationParams | None = None) -> ProviderResponse:
         params = params or GenerationParams()
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    f"{self._base_url}/v1/messages",
-                    headers=self._headers(),
-                    json=self._payload(prompt, params, stream=False),
-                )
-                resp.raise_for_status()
-                data = resp.json()
+                data = await self._post_messages(client, prompt, params)
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(str(exc), provider=self.name) from exc
         except httpx.HTTPStatusError as exc:
@@ -99,30 +130,48 @@ class ClaudeProvider(BaseProvider):
             raw=data,
         )
 
+    async def _stream_once(
+        self, client: httpx.AsyncClient, prompt: str, params: GenerationParams, *, sampling: bool
+    ) -> AsyncIterator[Chunk]:
+        """One streaming attempt; raises ``httpx.HTTPStatusError`` on a non-2xx response."""
+        async with client.stream(
+            "POST",
+            f"{self._base_url}/v1/messages",
+            headers=self._headers(),
+            json=self._payload(prompt, params, stream=True, sampling=sampling),
+        ) as resp:
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                await resp.aread()  # body isn't buffered on a streamed response until read
+                raise
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line[len("data:"):].strip())
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "content_block_delta":
+                    text = event.get("delta", {}).get("text", "")
+                    if text:
+                        yield Chunk(text=text, done=False)
+                elif event.get("type") == "message_stop":
+                    break
+
     async def stream(self, prompt: str, params: GenerationParams | None = None) -> AsyncIterator[Chunk]:
         params = params or GenerationParams()
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self._base_url}/v1/messages",
-                    headers=self._headers(),
-                    json=self._payload(prompt, params, stream=True),
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        try:
-                            event = json.loads(line[len("data:"):].strip())
-                        except json.JSONDecodeError:
-                            continue
-                        if event.get("type") == "content_block_delta":
-                            text = event.get("delta", {}).get("text", "")
-                            if text:
-                                yield Chunk(text=text, done=False)
-                        elif event.get("type") == "message_stop":
-                            break
+                try:
+                    async for chunk in self._stream_once(client, prompt, params, sampling=True):
+                        yield chunk
+                except httpx.HTTPStatusError as exc:
+                    if not self._is_sampling_unsupported(exc):
+                        raise
+                    logger.info("claude.sampling_unsupported_retry", model=self.model)
+                    async for chunk in self._stream_once(client, prompt, params, sampling=False):
+                        yield chunk
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(str(exc), provider=self.name) from exc
         except httpx.HTTPError as exc:

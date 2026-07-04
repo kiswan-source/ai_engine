@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     # Google (Gemini) — research, vision, documents.
     GOOGLE_API_KEY: str = ""
     GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    GEMINI_MODEL: str = "gemini-1.5-pro"
+    GEMINI_MODEL: str = "gemini-pro-latest"
     GEMINI_EMBED_MODEL: str = "text-embedding-004"
 
     # Ollama / Gemma (local, always available)

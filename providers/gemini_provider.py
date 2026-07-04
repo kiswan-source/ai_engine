@@ -33,7 +33,10 @@ class GeminiProvider(BaseProvider):
 
     def __init__(self, model: str | None = None, api_key: str | None = None, base_url: str | None = None) -> None:
         super().__init__(model or settings.GEMINI_MODEL)
-        self._api_key = api_key or settings.GOOGLE_API_KEY
+        # `is not None` (not `or`): an explicit api_key="" must mean "no key",
+        # not silently fall back to settings — `"" or settings.X` would defeat
+        # exactly the override this parameter exists for.
+        self._api_key = api_key if api_key is not None else settings.GOOGLE_API_KEY
         self._base_url = (base_url or settings.GEMINI_BASE_URL).rstrip("/")
         self._timeout = settings.PROVIDER_TIMEOUT
 

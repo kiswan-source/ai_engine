@@ -196,6 +196,50 @@ async def test_claude_generate_success(monkeypatch):
     assert resp.completion_tokens == 3
 
 
+async def test_claude_generate_retries_without_sampling_when_unsupported(monkeypatch):
+    """Newer Claude models (e.g. claude-sonnet-5) reject temperature/top_p outright."""
+    success_payload = {
+        "model": "claude-sonnet-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "usage": {"input_tokens": 7, "output_tokens": 3},
+        "stop_reason": "end_turn",
+    }
+
+    class RetryClient(_FakeAsyncClient):
+        calls: list = []
+
+        async def post(self, url, headers=None, json=None):
+            type(self).calls.append(json)
+            if "temperature" in json:
+                resp = _FakeResp({}, status=400)
+                resp.text = '{"error":{"message":"`temperature` is deprecated for this model."}}'
+                return resp
+            return _FakeResp(success_payload)
+
+    RetryClient.calls = []
+    monkeypatch.setattr("providers.claude_provider.httpx.AsyncClient", RetryClient)
+    prov = ClaudeProvider(model="claude-sonnet-5", api_key="sk-ant")
+    resp = await prov.generate("hi")
+
+    assert resp.text == "answer"
+    assert len(RetryClient.calls) == 2
+    assert "temperature" in RetryClient.calls[0] and "top_p" in RetryClient.calls[0]
+    assert "temperature" not in RetryClient.calls[1] and "top_p" not in RetryClient.calls[1]
+
+
+async def test_claude_generate_reraises_other_400_errors(monkeypatch):
+    class ErrorClient(_FakeAsyncClient):
+        async def post(self, url, headers=None, json=None):
+            resp = _FakeResp({}, status=400)
+            resp.text = '{"error":{"message":"invalid_request: bad messages format"}}'
+            return resp
+
+    monkeypatch.setattr("providers.claude_provider.httpx.AsyncClient", ErrorClient)
+    prov = ClaudeProvider(model="claude-sonnet-5", api_key="sk-ant")
+    with pytest.raises(ProviderError):
+        await prov.generate("hi")
+
+
 async def test_gemini_generate_success(monkeypatch):
     payload = {
         "candidates": [{"content": {"parts": [{"text": "riset"}]}, "finishReason": "STOP"}],
