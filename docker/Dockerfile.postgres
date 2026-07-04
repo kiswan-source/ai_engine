@@ -1,0 +1,15 @@
+# Postgres + PostGIS + pgvector (MASTER_INSTRUCTION.md Bab 29, Tahap 5).
+#
+# Alpine ships a prebuilt `postgresql-pgvector` package matching PostgreSQL 16,
+# but it installs alongside Alpine's own postgresql16 package under
+# /usr/share/postgresql16 + /usr/lib/postgresql16 — a separate install from
+# the postgis/postgis base image's actual server, which is a custom build
+# living under /usr/local (its own --pkglibdir/--sharedir). The server can't
+# see the apk package's files at all, so they're copied into the paths the
+# running server actually reads from.
+FROM postgis/postgis:16-3.4-alpine
+
+RUN apk add --no-cache postgresql-pgvector \
+    && cp /usr/lib/postgresql16/vector.so /usr/local/lib/postgresql/ \
+    && cp /usr/share/postgresql16/extension/vector* /usr/local/share/postgresql/extension/ \
+    && apk del postgresql-pgvector postgresql16 postgresql16-client

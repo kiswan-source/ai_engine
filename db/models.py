@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from sqlalchemy import String, Float, Integer, DateTime, Text, JSON, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
+from api.config import settings
 from db.connection import Base
 
 
@@ -75,4 +77,27 @@ class Document(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     entities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class VectorEmbedding(Base):
+    """Shared pgvector-backed store (MASTER_INSTRUCTION.md Bab 22 Vector Memory
+    tier + Bab 29 RAG document corpus — one table, distinguished by
+    ``namespace`` (e.g. ``"memory:writer"`` vs ``"rag:documents"``) rather than
+    two near-identical schemas. Requires the Postgres ``vector`` extension
+    (``VECTOR_BACKEND=pgvector``; ``CREATE EXTENSION vector`` — see
+    scripts/init_db.sql / docker/Dockerfile.postgres).
+
+    The column width is fixed at table-creation time to ``RAG_EMBEDDING_DIM``
+    — changing embedding provider/model to a different dimension requires
+    re-indexing into a fresh table, not just a config change.
+    """
+
+    __tablename__ = "vector_embeddings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    namespace: Mapped[str] = mapped_column(String(128), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(settings.RAG_EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

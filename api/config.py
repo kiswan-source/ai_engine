@@ -72,7 +72,31 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     GEMINI_MODEL: str = "gemini-pro-latest"
-    GEMINI_EMBED_MODEL: str = "text-embedding-004"
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
+
+    # ─── RAG (MASTER_INSTRUCTION.md Bab 29, Tahap 5) ─────────────────────────
+    # Which provider's .embed() backs both Vector Memory (Bab 22) and the RAG
+    # document corpus: "openai" | "gemini" | "ollama" | "hashed" (dependency-free
+    # placeholder, Bab 12 — always available, used when no embedding key is set).
+    RAG_EMBEDDING_PROVIDER: str = "openai"
+    # Must match RAG_EMBEDDING_PROVIDER's output width (pgvector column is fixed
+    # at table-creation time): openai text-embedding-3-small=1536,
+    # gemini-embedding-001=3072, hashed placeholder=configurable (this value).
+    RAG_EMBEDDING_DIM: int = 1536
+    # Vector index backend: "memory" (in-process cosine, dev/CI default, Bab 12)
+    # or "pgvector" (production, needs the `vector` extension on Postgres).
+    VECTOR_BACKEND: str = "memory"
+    # Chunking strategy (Bab 29 rule 1) — characters, not tokens (dependency-free).
+    RAG_CHUNK_SIZE: int = 800
+    RAG_CHUNK_OVERLAP: int = 100
+    RAG_TOP_K: int = 5
+    # Hybrid search weight (Bab 29 rule 2): 1.0 = pure semantic, 0.0 = pure keyword.
+    RAG_HYBRID_ALPHA: float = 0.5
+    RAG_RERANK_ENABLED: bool = True
+    # context_builder.py's prompt-injection budget (chars, not tokens — cheap
+    # and provider-agnostic; see BaseProvider.count_tokens for the token estimate
+    # used elsewhere).
+    RAG_MAX_CONTEXT_CHARS: int = 4000
 
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"

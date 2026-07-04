@@ -4,7 +4,7 @@
 > (tersimpan di `D:\01_Project\AI ENGINE` = `/mnt/d/01_Project/AI ENGINE`).
 > Sumber kebenaran = MASTER_INSTRUCTION.md (67 Bab) + 9 dokumen pendamping.
 
-## Status per 2026-07-04
+## Status per 2026-07-05
 
 | Tahap | Fokus | Status |
 |---|---|---|
@@ -12,8 +12,8 @@
 | 2 | Orchestrator + Workflow (sequential, parallel) | ✅ SELESAI |
 | 3 | Shared Memory + Message Bus (Redis/Postgres) | ✅ SELESAI |
 | 4 | Reflection / Consensus / Confidence / Human Approval | ✅ SELESAI |
-| 5 | RAG penuh | ⏭️ BERIKUTNYA |
-| 6 | Observability + Cost | belum |
+| 5 | RAG penuh (chunker→embed→store→retrieve→hybrid→rerank→context) | ✅ SELESAI |
+| 6 | Observability + Cost | ⏭️ BERIKUTNYA |
 | 7 | Security hardening | belum |
 | 8 | Kubernetes ready | belum |
 
@@ -43,9 +43,9 @@
 - `memory/`: `stores.py` (HashStore/ListStore in-memory|Redis) + 6 tier:
   working (Redis TTL), conversation (PostgreSQL `conversation_messages`),
   summary (summarizer injektabel, default provider peran `memory`), long_term
-  (PostgreSQL `memory_entries`, upsert), vector (hashed-BOW placeholder → Tahap 5),
-  reflection (jurnal per peran, capped) + `memory_manager.py` (facade/factory dari
-  `MEMORY_BACKEND` + `MEMORY_PERSISTENT_BACKEND`).
+  (PostgreSQL `memory_entries`, upsert), vector (Tahap 3: hashed-BOW placeholder;
+  Tahap 5: embedding + pgvector nyata, lihat di bawah), reflection (jurnal per
+  peran, capped) + `memory_manager.py` (facade/factory).
 - Integrasi: Orchestrator publish `workflow.<state>` di tiap transisi; Dispatcher
   publish `agent.assigned/running/retry/completed/failed` (exit criteria Tahap 3).
   `TaskManager` dapat seam `TaskStore` → `RedisTaskStore` (klien sync, TTL) via
@@ -79,50 +79,98 @@
 - `Planner.plan()` menerima 5 mode sekarang (`sequential`, `parallel`,
   `reflection`, `voting`, `consensus`); mode chained vs independen diatur satu
   set konstanta (`_CHAINED_MODES`).
-- **Bugfix laten:** `orchestrator/orchestrator.py` mengimpor `from workflows
-  import WORKFLOWS` di level modul, dan `workflows/__init__.py` (lewat
-  `consensus.py`/`reflection.py`/`voting.py`) mengimpor balik `orchestrator.*` —
-  siklus ini sudah ada sejak Tahap 2 tapi baru kepegang sekarang karena
-  `workflows/__init__.py` jadi lebih berat: kalau `workflows` diimpor duluan
-  (mis. `from workflows.approval import ...` sebagai baris pertama test),
-  `ImportError: cannot import name 'WORKFLOWS' from partially initialized
-  module`. Diperbaiki dengan mengimpor `WORKFLOWS`/`HumanApprovalGate` secara
-  lokal di dalam method (pola yang sama dengan
-  `registry.agent_registry.build_default_agent_registry` dan
-  `task_manager._default_store`), anotasi tipe tetap jalan lewat
-  `from __future__ import annotations` + `TYPE_CHECKING`. Diverifikasi tahan di
-  kedua urutan impor (`import workflows; import orchestrator` dan sebaliknya).
+- **Bugfix laten:** siklus impor `orchestrator` ↔ `workflows` (ada sejak Tahap 2,
+  baru kepegang saat `workflows/__init__.py` jadi lebih berat) — diperbaiki
+  dengan impor lokal di dalam method, bukan level modul. Lihat ADR-0007.
+
+**Antara Tahap 4 dan 5 — API key cloud diaktifkan**
+- OpenAI, Anthropic, Google API key live di `.env` lokal (gitignored; sumber
+  `D:\01_Project\AI ENGINE\engine-k.txt`). Diverifikasi dengan `generate()`
+  sungguhan, bukan cuma `health_check()`.
+- **3 bug provider ditemukan & diperbaiki** (sebelumnya masking karena tak
+  pernah dites live): (1) `claude-sonnet-5` menolak `temperature`/`top_p`
+  ("deprecated for this model") — `ClaudeProvider` retry otomatis tanpa
+  sampling param; (2) `GEMINI_MODEL` default (`gemini-1.5-pro`) sudah 404 —
+  diganti `gemini-pro-latest`; (3) ketiga provider salah menangani
+  `api_key=""` eksplisit (`"" or settings.X` jatuh ke key asli) — diganti
+  `is not None`. Model aktual: `gpt-4o`, `claude-sonnet-5`, `gemini-pro-latest`.
+
+**Tahap 5 — RAG penuh (Bab 29)** — ADR: `ADR-0008-*.md`
+- **Infra pgvector**: `docker/Dockerfile.postgres` (postgis/postgis:16-3.4-alpine
+  + `apk add postgresql-pgvector`, file extension di-copy manual ke path yang
+  dibaca server sungguhan — base image punya build Postgres sendiri di
+  `/usr/local`, terpisah dari paket Alpine di `/usr/share/postgresql16`).
+  `docker-compose.yml`: service `postgres` dari `image:` jadi `build:`.
+  Container sudah direbuild+direstart (volume data utuh), `CREATE EXTENSION
+  vector` sudah dijalankan di DB yang hidup. `scripts/init_db.sql` diupdate
+  untuk volume baru di masa depan.
+- `db.models.VectorEmbedding` — satu tabel `vector_embeddings`
+  (`namespace`, `text`, `meta`, `embedding Vector(RAG_EMBEDDING_DIM)`) dipakai
+  BAIK oleh Vector Memory (namespace `"memory"`) MAUPUN korpus RAG (namespace
+  `"rag:documents"` dst) — bukan dua skema terpisah.
+- `rag/` (7 modul Bab 29): `chunker.py` (chunking karakter+overlap, snap ke
+  spasi), `embeddings.py` (`default_embedder()` pilih provider dari
+  `RAG_EMBEDDING_PROVIDER`, jatuh ke hashed-BOW deterministik jika provider
+  nonaktif — TIDAK fallback ke provider cloud lain karena dimensi vektor beda),
+  `knowledge_store.py` (`KnowledgeStore` ABC: `InMemoryKnowledgeStore` dev/CI +
+  `PgVectorKnowledgeStore` produksi, `cosine_distance` via `<=>`),
+  `retriever.py` (`Retriever.index_document()` — satu-satunya jalur resmi
+  index dokumen, memaksa lewat chunker + tag `chunk_index` untuk sitasi),
+  `hybrid_search.py` (BM25 manual di atas kandidat semantic, tanpa dependency
+  baru, blend via `RAG_HYBRID_ALPHA`), `reranker.py` (`rerank()` heuristik
+  boost token mirip-kode selalu aktif via `RAG_RERANK_ENABLED`; `llm_rerank()`
+  opsional pakai role `consensus`/`critic`, tak otomatis di pipeline default),
+  `context_builder.py` (`build_context()` — blok bersitasi di bawah budget
+  `RAG_MAX_CONTEXT_CHARS`).
+- `memory/vector_memory.py` diupdate memenuhi janji ADR-0006: `VectorMemory`
+  kini terima `store`/`embedder` pluggable (default tetap hashed-BOW +
+  in-memory, Bab 12); `memory_manager.build_memory_manager()` yang membaca
+  `VECTOR_BACKEND`/`RAG_EMBEDDING_PROVIDER` untuk memasang yang nyata.
+  **Satu perubahan kontrak:** `VectorMemory.count()`/`.clear()` jadi async
+  (perlu untuk delegasi ke store async) — `add`/`search` tak berubah.
+- **Diverifikasi live end-to-end**: embedding OpenAI nyata (`text-embedding-3-small`,
+  1536 dim) + pgvector nyata — dokumen dengan nomor sertifikat spesifik
+  (`IUP-2024-0087`) naik dari peringkat semantic #1 (score 0.627) tetap #1
+  setelah hybrid+rerank (score 1.0), sementara dokumen tak relevan turun.
+  `memory_manager.build_memory_manager()` juga diverifikasi memasang
+  `PgVectorKnowledgeStore` + embedder OpenAI otomatis dari `.env`.
+- **Ditemukan, di luar cakupan Tahap 5**: tabel `documents` (dibuat
+  `scripts/init_db.sql` lama dengan `id UUID`) tak cocok dengan
+  `db.models.Document.id` (`String(36)`) — INSERT lewat SQLAlchemy ORM gagal.
+  Bug lama, baru ketahuan saat mencoba index row `Document` sungguhan untuk
+  verifikasi. Belum diperbaiki — di luar lingkup RAG.
 
 ## Test
-- **139/139 lulus** (`pytest -q`). Baru Tahap 4: `test_confidence.py`,
-  `test_reflection.py`, `test_consensus.py`, `test_approval.py`, + 6 test
-  integrasi Orchestrator (escalate→REVIEWING→finalize_approval, mode
-  reflection/voting, feature flag `ENABLE_HUMAN_APPROVAL`/`ENABLE_CONSENSUS_VOTING`)
-  di `test_orchestrator.py`. Semua agent tetap stub (Bab 12.3) — CI tanpa
-  layanan hidup.
-- Tahap 1-3 tetap 109/109 seperti sebelumnya (diverifikasi live: Redis pub/sub,
-  Postgres, Ollama qwen2.5:3b e2e — lihat riwayat commit).
+- **166/166 lulus** (`pytest -q`). Baru Tahap 5: `tests/unit/test_rag.py` (25
+  test — chunker, embeddings dengan fallback, InMemoryKnowledgeStore,
+  retriever + index_document, hybrid_search, rerank + llm_rerank (mocked),
+  context_builder) + 2 test baru di `test_providers.py` (Claude sampling-param
+  retry). Semua CI-safe (hashed-BOW/stub, bukan panggilan live) — backend
+  pgvector/provider nyata diverifikasi live terpisah (lihat di atas), sama
+  seperti PostgresConversationStore/PostgresLongTermStore Tahap 3 tak
+  di-unit-test langsung.
 
 ## Catatan penting untuk sesi berikutnya
-- Tahap 1-4 **sudah di-commit** ke `main` (per tahap, lihat `git log`).
-- Default config sengaja service-free (`memory`); produksi set di `.env`:
-  `MESSAGE_BROKER=redis`, `MEMORY_BACKEND=redis`,
-  `MEMORY_PERSISTENT_BACKEND=postgres`, `TASK_STATE_BACKEND=redis`.
-- Hanya **Ollama** aktif (belum ada API key cloud) → peran cloud fallback ke
-  Ollama lokal (Bab 54). `gemma4:e2b` masih mengembalikan output kosong
-  (kuirk model); pakai `qwen2.5:3b`/`gemma4:26b` untuk verifikasi live —
-  termasuk untuk mencoba mode `reflection`/`voting`/`consensus` end-to-end.
-- Batas sengaja: Vector Memory = hashed-BOW placeholder (embedding nyata +
-  vector store → Tahap 5); Confidence Scoring belum pakai sinyal guardrail
-  (Bab 30 → Tahap 7); cost masih 0.0 (→ Tahap 6). Confidence Agent (role
-  `confidence` di Model Registry) belum dipanggil sebagai LLM terpisah —
-  ConfidenceScorer murni kode, lihat ADR-0007 alternatif yang dipertimbangkan.
+- Tahap 1-5 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
+- Cloud API key AKTIF (bukan cuma Ollama lagi) — role apa pun yang dirutekan
+  ke openai/claude/gemini akan benar-benar keluar biaya. Jika perlu murni
+  offline lagi, kosongkan key di `.env` (Model Registry otomatis fallback ke
+  Ollama, Bab 54).
+- `VECTOR_BACKEND=pgvector` aktif di `.env` lokal — Vector Memory & RAG
+  korpus keduanya nyata sekarang, bukan in-memory. Default `.env.example`
+  tetap `memory` untuk CI/dev baru; produksi eksplisit set `pgvector`.
+- Batas sengaja: `llm_rerank()` ada tapi tak otomatis dipasang (biaya/latensi
+  per query); RAG belum dikaitkan otomatis ke setiap dispatch Orchestrator —
+  pemanggil pakai `Retriever`/`build_context` eksplisit saat butuh (Bab 29
+  rule 4: RAG itu pengaya opsional, bukan wajib). Cost Tracking (Bab 27)
+  masih 0.0 di mana-mana (→ Tahap 6).
 
-## Titik mulai Tahap 5
-Bangun RAG penuh (Bab 29): ganti `memory/vector_memory.py`'s embedder
-hashed-BOW dengan embedding nyata (mis. via provider role `research`/`analyst`
-atau model embedding lokal) + vector store sungguhan (pgvector — catatan
-ADR-0006 sudah menandai ini ditunda ke sini, bukan Redis/in-memory list
-seperti sekarang), retrieval pipeline yang menyuntik hasil pencarian ke prompt
-sebelum dispatch, dan `Document`/`GISProject` existing sebagai sumber korpus
-pertama untuk diindeks.
+## Titik mulai Tahap 6
+Bangun Observability + Cost (Bab 27, 33-35): `telemetry/cost_tracker.py`
+(catat biaya token per agent/provider/task — provider layer sudah punya
+`prompt_tokens`/`completion_tokens` di `ProviderResponse`, tinggal dikalikan
+tarif per model), dashboard minimum (Bab 62) di atas event yang sudah mengalir
+sejak Tahap 3 (`agent.*`/`workflow.*`/`consensus.decided`), dan cost budget
+per-task/sesi yang memicu penghentian/eskalasi (bukan berjalan tanpa batas) —
+titik integrasi alami: Dispatcher (sudah emit event tiap percobaan) dan
+Human Approval gate (Bab 61.2 — biaya lampaui budget = wajib approval).

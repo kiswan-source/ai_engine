@@ -7,6 +7,9 @@ tiers, so backend choices stay in one place:
   ``memory`` (in-process, default) or ``redis``.
 * ``MEMORY_PERSISTENT_BACKEND`` → durable tiers (conversation/long-term):
   ``memory`` (default) or ``postgres``.
+* ``VECTOR_BACKEND``            → vector tier: ``memory`` (default) or
+  ``pgvector``; ``RAG_EMBEDDING_PROVIDER`` picks the real embedder (Tahap 5,
+  see ``rag/``), falling back to the offline hashed placeholder automatically.
 
 Defaults are service-free so dev/CI runs without Redis/Postgres (Bab 12);
 production opts in via ``.env``.
@@ -53,11 +56,14 @@ class MemoryManager:
 def build_memory_manager(
     volatile_backend: str | None = None,
     persistent_backend: str | None = None,
+    vector_backend: str | None = None,
     summarizer: Summarizer | None = None,
     embedder: Embedder | None = None,
 ) -> MemoryManager:
     """Assemble a :class:`MemoryManager` from settings (overridable per arg)."""
     from api.config import settings
+    from rag.embeddings import default_embedder
+    from rag.knowledge_store import build_knowledge_store
 
     volatile = (volatile_backend or settings.MEMORY_BACKEND).lower()
     persistent = (persistent_backend or settings.MEMORY_PERSISTENT_BACKEND).lower()
@@ -84,6 +90,10 @@ def build_memory_manager(
         conversation=ConversationMemory(conversation_store),
         summary=SummaryMemory(summary_store, summarizer=summarizer),
         long_term=LongTermMemory(long_term_store),
-        vector=VectorMemory(embedder=embedder),
+        vector=VectorMemory(
+            embedder=embedder or default_embedder(),
+            store=build_knowledge_store(vector_backend),
+            namespace="memory",
+        ),
         reflection=ReflectionMemory(reflection_store),
     )

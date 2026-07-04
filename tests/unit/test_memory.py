@@ -160,9 +160,9 @@ async def test_vector_memory_min_score_and_clear():
     vm = VectorMemory()
     await vm.add("dokumen wiup batubara")
     assert await vm.search("zzz qqq xxx", min_score=0.9) == []
-    assert vm.count() == 1
-    vm.clear()
-    assert vm.count() == 0
+    assert await vm.count() == 1
+    await vm.clear()
+    assert await vm.count() == 0
     assert await vm.search("apa saja") == []
 
 
