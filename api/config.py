@@ -20,7 +20,33 @@ class Settings(BaseSettings):
     RQ_QUEUE_GIS: str = "gis_queue"
     RQ_QUEUE_PIPELINE: str = "pipeline_queue"
 
-    # Ollama / Gemma
+    # ─── Provider Layer (MASTER_INSTRUCTION.md Bab 16) ───────────────────────
+    # Shared timeout (seconds) for cloud provider HTTP calls (Bab 9 — timeout
+    # mandatory on every external call).
+    PROVIDER_TIMEOUT: int = 120
+    # Fallback Strategy (Bab 54): retries on the same provider before switching.
+    PROVIDER_MAX_RETRIES: int = 2
+    PROVIDER_RETRY_BACKOFF: float = 1.0  # base seconds for exponential backoff
+
+    # OpenAI (ChatGPT) — orchestration, planning, review, QA.
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_MODEL: str = "gpt-4o"
+    OPENAI_EMBED_MODEL: str = "text-embedding-3-small"
+
+    # Anthropic (Claude) — analysis, writing, coding, critique.
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_BASE_URL: str = "https://api.anthropic.com"
+    ANTHROPIC_VERSION: str = "2023-06-01"
+    CLAUDE_MODEL: str = "claude-sonnet-5"
+
+    # Google (Gemini) — research, vision, documents.
+    GOOGLE_API_KEY: str = ""
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
+    GEMINI_MODEL: str = "gemini-1.5-pro"
+    GEMINI_EMBED_MODEL: str = "text-embedding-004"
+
+    # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     GEMMA_MODEL: str = "gemma4:e2b"
     OLLAMA_TIMEOUT: int = 600
