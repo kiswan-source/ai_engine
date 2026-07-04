@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Float, Integer, DateTime, Text, JSON, ForeignKey, func
+from sqlalchemy import String, Float, Integer, DateTime, Text, JSON, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.connection import Base
 
@@ -35,6 +35,33 @@ class GISProject(Base):
     geojson: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ConversationMessage(Base):
+    """One chat message in Conversation Memory (MASTER_INSTRUCTION.md Bab 22)."""
+
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    role: Mapped[str] = mapped_column(String(32))  # user | assistant | system | tool
+    content: Mapped[str] = mapped_column(Text)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class MemoryEntry(Base):
+    """One long-term memory fact, keyed by (namespace, key) (Bab 22)."""
+
+    __tablename__ = "memory_entries"
+    __table_args__ = (UniqueConstraint("namespace", "key", name="uq_memory_namespace_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    namespace: Mapped[str] = mapped_column(String(128), index=True)
+    key: Mapped[str] = mapped_column(String(256))
+    value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 

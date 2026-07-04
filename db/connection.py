@@ -25,6 +25,10 @@ class Base(DeclarativeBase):
 
 
 async def init_db():
+    # Import registers the ORM models on Base.metadata; without it create_all
+    # sees an empty metadata and silently creates nothing.
+    import db.models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured")

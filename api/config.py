@@ -20,6 +20,20 @@ class Settings(BaseSettings):
     RQ_QUEUE_GIS: str = "gis_queue"
     RQ_QUEUE_PIPELINE: str = "pipeline_queue"
 
+    # ─── Messaging & Memory (MASTER_INSTRUCTION.md Bab 22–23, Tahap 3) ──────
+    # Physical broker for Message Bus / Event Bus / Task Queue (Bab 23):
+    # "memory" (in-process; dev/CI) or "redis" (production, multi-process).
+    MESSAGE_BROKER: str = "memory"
+    # Volatile memory tiers — working/summary/reflection: "memory" or "redis".
+    MEMORY_BACKEND: str = "memory"
+    # Durable memory tiers — conversation/long-term: "memory" or "postgres".
+    MEMORY_PERSISTENT_BACKEND: str = "memory"
+    # Working Memory scope TTL in seconds (Bab 22 — volatile by design).
+    WORKING_MEMORY_TTL: int = 3600
+    # Task/Workflow state tracking (Bab 49): "memory" or "redis" (survives restarts).
+    TASK_STATE_BACKEND: str = "memory"
+    TASK_STATE_TTL: int = 86400
+
     # ─── Provider Layer (MASTER_INSTRUCTION.md Bab 16) ───────────────────────
     # Shared timeout (seconds) for cloud provider HTTP calls (Bab 9 — timeout
     # mandatory on every external call).
