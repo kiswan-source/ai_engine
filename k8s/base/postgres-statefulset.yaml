@@ -45,13 +45,20 @@ spec:
                   name: ai-engine-secrets
                   key: POSTGRES_PASSWORD
           readinessProbe:
+            # $(VAR) substitution only applies to a container's own command/args,
+            # NOT to probe exec commands — kubelet passes it through literally,
+            # which made pg_isready fall back to authenticating as the OS user
+            # (root) and spam "FATAL: role root does not exist" every cycle.
+            # Wrapping in sh -c lets the shell expand the real env vars instead.
+            # -d is also required: pg_isready defaults the database name to the
+            # username when omitted, which isn't a real database here either.
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:

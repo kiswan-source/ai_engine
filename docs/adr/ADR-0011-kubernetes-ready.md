@@ -130,12 +130,59 @@ langsung seperti tahap-tahap sebelumnya yang selalu diverifikasi live.
   nyata". Diterima secara eksplisit oleh Boss sebagai keterbatasan
   lingkungan, bukan kelalaian.
 
+## Addendum (2026-07-05): Verifikasi Live di `kind`
+
+Boss meminta verifikasi live via `kind` (Kubernetes-in-Docker) setelah
+Tahap 8 selesai, membalik keputusan "manifest only" di atas. Dilakukan:
+cluster `kind create cluster --name ai-engine-test`, tiga image di-build
+lokal (`ai-engine-api`, `ai-engine-worker`, `ai-engine-postgres` — nama
+`ai-engine-postgres` di-tag ulang dari image Tahap 5), didorong ke registry
+lokal (`localhost:5001`, workaround bug interop `kind load docker-image`
+vs. Docker containerd snapshotter — didokumentasikan sebagai known issue
+kind, bukan bug proyek ini), lalu `kubectl apply -k` (via overlay sementara
+yang me-remap image ke registry lokal — TIDAK disimpan ke repo).
+
+**Hasil:** 6 pod `1/1 Running` (Postgres, Redis, API, 2× worker-ai,
+worker-gis). Diverifikasi nyata: `/health/`+`/health/ready` return 200 baik
+lewat pod langsung maupun lewat `ai-engine-api` ClusterIP Service; RQ worker
+subscribe `ai_queue`/`gis_queue` ke Redis in-cluster; API `init_db()` sukses
+ke Postgres in-cluster.
+
+**Satu bug nyata ditemukan & diperbaiki** (commit ini): `postgres-statefulset.yaml`'s
+`readinessProbe`/`livenessProbe` pakai `exec.command: ["pg_isready", "-U",
+"$(POSTGRES_USER)"]`. Substitusi `$(VAR)` Kubernetes HANYA berlaku untuk
+`command`/`args` container sendiri, BUKAN untuk `exec.command` di probe —
+kubelet meneruskan string itu apa adanya. Akibatnya `pg_isready` gagal
+autentikasi sebagai user OS (`root`) dan membanjiri log dengan
+`FATAL: role "root" does not exist` tiap siklus poll selamanya (pod tetap
+`Ready=true` karena `pg_isready` menganggap penolakan auth = server
+reachable, jadi gejalanya senyap kecuali dicek log). Diperbaiki dengan
+membungkus probe di `sh -c` supaya shell yang melakukan ekspansi env var
+sungguhan; sekalian menambah `-d "$POSTGRES_DB"` eksplisit karena tanpa itu
+`pg_isready` default ke nama database = username, yang juga bukan database
+yang valid (bug kedua, sama akarnya). Diverifikasi: log Postgres bersih
+sama sekali setelah fix, tanpa FATAL berulang.
+
+**Gap RWX PVC dikonfirmasi nyata** (bukan cuma prediksi manual lagi):
+`ai-engine-uploads`/`ai-engine-reports` benar-benar `Pending` dengan event
+`ProvisioningFailed: NodePath only supports ReadWriteOnce and
+ReadWriteOncePod access modes` di StorageClass `standard` (rancher.io/local-path)
+bawaan kind — memblokir scheduling API/worker sampai diturunkan ke RWO
+(hanya di overlay uji sementara, BUKAN di `k8s/base` yang disimpan — RWX
+tetap keputusan sengaja untuk cluster produksi yang punya StorageClass RWX).
+
+Cluster `kind` dan registry lokal dibongkar setelah verifikasi selesai
+(`kind delete cluster`, `docker rm -f kind-registry`) — tidak ada
+infrastruktur menetap yang ditambahkan ke lingkungan dev.
+
 ## Konsekuensi
 
-- Exit criteria Tahap 8 (versi "manifest siap" bukan "sudah live di cluster"):
-  4 dari 5 syarat Bab 38 sudah terpenuhi sejak sebelumnya, satu yang bolong
-  (statelessness Human Approval) sudah diperbaiki dan diverifikasi live
-  (simulasi dua pod berbagi state via Redis). 271/271 test lulus (4 baru).
+- Exit criteria Tahap 8, sekarang versi **"sudah live di cluster"** (lihat
+  addendum): 4 dari 5 syarat Bab 38 sudah terpenuhi sejak sebelumnya, satu
+  yang bolong (statelessness Human Approval) sudah diperbaiki dan
+  diverifikasi live (simulasi dua pod berbagi state via Redis) — dan sekarang
+  seluruh manifest set juga sudah diverifikasi `kubectl apply` sungguhan di
+  `kind`, bukan cuma dinalar dari YAML. 271/271 test lulus (4 baru).
 - Roadmap 8-tahap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` **selesai
   seluruhnya** — lihat `docs/PROGRESS.md` untuk ringkasan Tahap 1-8 dan daftar
   gap yang diakui secara kumulatif (Circuit Breaker Bab 55, RBAC belum

@@ -15,7 +15,7 @@
 | 5 | RAG penuh (chunker→embed→store→retrieve→hybrid→rerank→context) | ✅ SELESAI |
 | 6 | Observability + Cost (tracing, metrics, cost_tracker, dashboards) | ✅ SELESAI |
 | 7 | Security hardening (guardrails, output validation, audit log, RBAC) | ✅ SELESAI |
-| 8 | Kubernetes ready (manifest siap; belum diuji cluster sungguhan) | ✅ SELESAI |
+| 8 | Kubernetes ready (manifest siap + diverifikasi live di kind) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -263,16 +263,24 @@
   worker tanpa kode tambahan; tidak ada liveness/readiness probe untuk
   worker (RQ tanpa HTTP surface, exec probe berarti butuh tooling yang
   belum ada di image — dicatat sebagai gap, bukan probe palsu).
-- **Batasan sesi eksplisit**: tidak ada cluster K8s aktif di lingkungan ini
-  (tidak ada kubectl/minikube/kind) — dikonfirmasi ke Boss, disepakati
-  manifest divalidasi via sintaks YAML (`yaml.safe_load_all` semua file +
-  cross-check referensi ConfigMap/Secret/PVC) dan penalaran manual, BUKAN
-  `kubectl apply` yang diamati live seperti tahap-tahap lain.
+- **Diverifikasi live di `kind`** (2026-07-05, susulan ke sesi awal Tahap 8,
+  lihat addendum ADR-0011): cluster lokal, image di-push ke registry lokal,
+  `kubectl apply -k` → 6 pod `1/1 Running` (Postgres, Redis, API, 2×
+  worker-ai, worker-gis); `/health/`+`/health/ready` 200 lewat pod maupun
+  Service; RQ worker subscribe queue; API `init_db()` sukses ke Postgres
+  in-cluster. **Satu bug nyata ditemukan & diperbaiki**: probe
+  `pg_isready` di `postgres-statefulset.yaml` pakai `$(POSTGRES_USER)` yang
+  TIDAK di-ekspansi Kubernetes untuk `exec.command` probe (beda dari
+  `command`/`args` container biasa) — akibatnya autentikasi sebagai `root`
+  dan membanjiri log `FATAL: role root does not exist` tiap 10 detik
+  selamanya (silent karena pod tetap `Ready`); diperbaiki bungkus `sh -c`
+  + tambah `-d "$POSTGRES_DB"` eksplisit.
 - **Gap yang diakui**: Dockerfile belum multi-stage (Bab 37 rule 2) —
   ditolak dikerjakan sesi ini karena image yang sama baru diperbaiki dari
-  insiden gagal-start Tahap 6 (ADR-0009), risiko regresi nyata tanpa
-  verifikasi cluster; PVC uploads/reports asumsi `ReadWriteMany` (kebanyakan
-  `StorageClass` cuma RWO); Postgres/Redis single-instance, bukan HA;
+  insiden gagal-start Tahap 6 (ADR-0009); PVC uploads/reports asumsi
+  `ReadWriteMany` — **dikonfirmasi nyata gagal di kind**
+  (`ProvisioningFailed: NodePath only supports ReadWriteOnce`, StorageClass
+  `standard` bawaan kind cuma RWO); Postgres/Redis single-instance, bukan HA;
   CI belum build/push image container.
 
 ## Test
@@ -298,10 +306,11 @@
 - **Postgres/Redis single-instance** — tidak ada operator HA (Patroni/
   CloudNativePG untuk Postgres, Sentinel/Cluster untuk Redis) baik di
   `docker-compose.yml` maupun `k8s/`. Dicatat sejak ADR-0011.
-- **Belum ada verifikasi cluster K8s sungguhan** — `k8s/` divalidasi sintaks
-  + penalaran manual saja (lihat ADR-0011); prasyarat sebelum produksi
-  sungguhan: build+push image ke registry, isi `secret.yaml` dengan nilai
-  asli via metode di header filenya, lalu `kubectl apply -k` diamati live.
+- **Verifikasi cluster K8s sungguhan SELESAI** (2026-07-05, `kind` lokal —
+  lihat addendum ADR-0011); prasyarat sebelum produksi sungguhan yang masih
+  tersisa: build+push image ke registry nyata, isi `secret.yaml` dengan nilai
+  asli via metode di header filenya, sediakan StorageClass RWX kalau mau
+  API >1 replika (lihat gap RWX di atas).
 - **`MESSAGE_BROKER=redis`'s race condition** (dicatat ADR-0009) — cost
   budget check di `Orchestrator.run()` mengasumsikan pengiriman event
   sinkron; perlu ditinjau ulang sebelum multi-instance paralel dengan
@@ -311,13 +320,13 @@
 
 ## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` sudah selesai
-seluruhnya. Kandidat prioritas untuk sesi berikutnya, dari yang paling murah
-dieksekusi: (1) verifikasi `k8s/` di cluster sungguhan (kind/minikube lokal
-atau cluster nyata) — akan mengungkap kesalahan yang tak kelihatan dari
-sintaks saja; (2) Circuit Breaker (Bab 55) — pola state machine yang sudah
-familiar (mirip `TaskManager`), terintegrasi ke `Dispatcher`; (3) RBAC nyata
-ke `agent/tools/` via strangler pattern (Bab 45.1) mulai dari SATU tool
-berisiko tinggi dulu, bukan semua sekaligus; (4) Dockerfile multi-stage
-dengan rebuild+verifikasi live penuh (bukan cuma review kode) mengingat
-riwayat insiden ADR-0009.
+seluruhnya, termasuk verifikasi live K8s di kind. Kandidat prioritas untuk
+sesi berikutnya, dari yang paling murah dieksekusi: (1) Circuit Breaker
+(Bab 55) — pola state machine yang sudah familiar (mirip `TaskManager`),
+terintegrasi ke `Dispatcher`; (2) RBAC nyata ke `agent/tools/` via strangler
+pattern (Bab 45.1) mulai dari SATU tool berisiko tinggi dulu, bukan semua
+sekaligus; (3) Dockerfile multi-stage dengan rebuild+verifikasi live penuh
+(bukan cuma review kode) mengingat riwayat insiden ADR-0009; (4) solusi
+storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage) kalau
+memang butuh API >1 replika di produksi.
 

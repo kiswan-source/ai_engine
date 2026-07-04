@@ -4,12 +4,16 @@ These map the existing `docker-compose.yml` services onto Kubernetes, using
 plain `kubectl`-bundled Kustomize (no Helm — Bab 45.3, avoid a new tool
 where one isn't needed).
 
-**Not yet tested against a live cluster.** No `kubectl`/`minikube`/`kind`/
-`k3s` is available in this development environment, so verification here is
-YAML validity (`kustomize build` succeeds, every doc parses) plus manual
-review against the Kubernetes API shapes — not an actual `kubectl apply` +
-observed running pods. Treat this as a solid first draft to apply and
-iterate on against a real cluster, not a battle-tested deployment.
+**Verified live on a local `kind` cluster** (2026-07-05, see ADR-0011
+addendum). `kubectl apply -k` against `k8s/base` (via a registry-remapped
+overlay, since kind needs images pushed to a registry it can pull from) got
+all 6 pods to `1/1 Running`: Postgres, Redis, API, both workers. Confirmed
+live: `/health/`, `/health/ready` return 200 both pod-direct and through the
+`ai-engine-api` ClusterIP Service; RQ workers bind `ai_queue`/`gis_queue`
+against in-cluster Redis; API connects to in-cluster Postgres and runs
+`init_db()`. One real bug found and fixed in this pass (see below). The
+`ai-engine-uploads`/`ai-engine-reports` RWX PVCs behave exactly as predicted
+below — they do NOT bind on kind's default StorageClass.
 
 ## What maps to what
 
@@ -61,15 +65,17 @@ kubectl apply -k k8s/overlays/production      # real registry images, higher rep
 
 ## Gaps (deliberately not solved here)
 
-- **No live-cluster verification** — see the top of this file.
 - **RWX storage assumption** — `api-deployment.yaml`'s `uploads`/`reports`
   PVCs request `ReadWriteMany` so every API replica sees the same files;
   most default `StorageClass`es (e.g. plain `local-path`, most cloud block
-  storage) only support `ReadWriteOnce`. Either pick a `StorageClass` that
-  supports RWX (NFS, EFS, Filestore, Longhorn) or move `uploads`/`reports`
-  to object storage (S3-compatible) — a bigger change than this tahap's
-  scope, since `agent/tools/readers.py`/`writers.py` (protected, Bab 45.1)
-  currently assume local filesystem paths.
+  storage) only support `ReadWriteOnce`. **Confirmed live on kind**: the PVCs
+  sit `Pending` with `ProvisioningFailed: NodePath only supports
+  ReadWriteOnce and ReadWriteOncePod access modes`, blocking every pod that
+  mounts them. Either pick a `StorageClass` that supports RWX (NFS, EFS,
+  Filestore, Longhorn) or move `uploads`/`reports` to object storage
+  (S3-compatible) — a bigger change than this tahap's scope, since
+  `agent/tools/readers.py`/`writers.py` (protected, Bab 45.1) currently
+  assume local filesystem paths.
 - **Postgres and Redis are single instances**, not HA — a real production
   deployment needs a Postgres operator (Patroni, CloudNativePG) and Redis
   Sentinel/Cluster; out of scope here.
