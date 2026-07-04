@@ -187,6 +187,8 @@ class Orchestrator:
             await self._transition(trace_id, State.REVIEWING)
             if over_budget:
                 reason = "cost_budget_exceeded"
+            elif result.guardrail_blocked:
+                reason = "guardrail_blocked"
             elif mode == "reflection":
                 reason = "reflection_exhausted"
             else:
@@ -211,13 +213,25 @@ class Orchestrator:
         return result
 
     async def finalize_approval(
-        self, trace_id: str, approved: bool, decided_by: str, reason: str = ""
+        self, trace_id: str, approved: bool, decided_by: str, reason: str = "", role: str | None = None
     ) -> State:
         """Resolve a pending Human Approval request (Bab 61) and settle the task.
 
+        Args:
+            role: Optional RBAC role of the decider (Bab 30 rule 2). When
+                given, the caller must hold the ``approve_workflow``
+                permission or this raises — omit it to keep the pre-Tahap-7
+                behavior of any caller being able to decide (no principal
+                concept existed before this).
+
         Raises:
             KeyError: If ``trace_id`` has no pending approval request.
+            PermissionError: If ``role`` is given but lacks ``approve_workflow``.
         """
+        if role is not None:
+            from security.permissions import require_permission
+
+            require_permission(role, "approve_workflow")
         await self.approval.decide(trace_id, approved=approved, decided_by=decided_by, reason=reason)
         if approved:
             await self._transition(trace_id, State.APPROVED)

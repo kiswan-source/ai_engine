@@ -497,3 +497,68 @@ async def test_orchestrator_metrics_and_tracer_observe_the_run():
     timeline = await orch.tracer.timeline(result.trace_id)
     assert "workflow.completed" in [s.event_type for s in timeline]
     assert "agent.completed" in [s.event_type for s in timeline]
+
+
+# ─── Tahap 7: Guardrail escalation + RBAC on approval (Bab 30, 31, 61.2) ──────
+
+class BlockedAgent(StubAgent):
+    """Simulates security.prompt_guard blocking the dispatch outright."""
+
+    async def execute(self, task):
+        return AgentResult(
+            output="",
+            confidence=0.0,
+            trace_id=task.trace_id,
+            provider_used=self._provider,
+            model_used="stub-m",
+            role=self.role,
+            agent_id=self.agent_id,
+            guardrail_blocked=True,
+            error="blocked by prompt_guard: ignore_instructions",
+        )
+
+
+async def test_orchestrator_escalates_on_guardrail_block():
+    reg = registry_with(BlockedAgent("writer"))
+    orch = Orchestrator(agent_registry=reg)
+
+    result = await orch.run("halo", ["writer"], mode="sequential")
+
+    assert result.guardrail_blocked
+    assert result.escalate
+    assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
+    assert orch.pending_approvals()[0].reason == "guardrail_blocked"
+
+
+async def test_finalize_approval_rejects_insufficient_role():
+    reg = registry_with(BlockedAgent("writer"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("halo", ["writer"], mode="sequential")
+
+    with pytest.raises(PermissionError):
+        await orch.finalize_approval(result.trace_id, approved=True, decided_by="eve", role="user")
+
+    # still pending — the rejected attempt must not have consumed the request.
+    assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
+
+
+async def test_finalize_approval_accepts_sufficient_role():
+    reg = registry_with(BlockedAgent("writer"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("halo", ["writer"], mode="sequential")
+
+    final_state = await orch.finalize_approval(
+        result.trace_id, approved=True, decided_by="rudy", reason="reviewed", role="approver"
+    )
+
+    assert final_state == State.COMPLETED
+
+
+async def test_finalize_approval_without_role_keeps_pre_tahap7_behavior():
+    reg = registry_with(BlockedAgent("writer"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("halo", ["writer"], mode="sequential")
+
+    final_state = await orch.finalize_approval(result.trace_id, approved=True, decided_by="rudy")
+
+    assert final_state == State.COMPLETED

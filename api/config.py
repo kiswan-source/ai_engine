@@ -117,6 +117,26 @@ class Settings(BaseSettings):
     ALERT_ERROR_RATE_THRESHOLD: float = 0.2
     ALERT_LATENCY_P95_MS: int = 30000
 
+    # ─── Security (MASTER_INSTRUCTION.md Bab 30, 31, 58, Tahap 7) ────────────
+    # Prompt Injection detection (Bab 30): "neutralize" per rule 1 — above the
+    # suspicious threshold the prompt is sanitized (not blocked); only above
+    # the block threshold does the dispatch fail outright.
+    ENABLE_PROMPT_GUARD: bool = True
+    PROMPT_GUARD_SUSPICIOUS_THRESHOLD: float = 0.4
+    PROMPT_GUARD_BLOCK_THRESHOLD: float = 0.8
+    # PII redaction before a prompt leaves the system to an external provider
+    # (Bab 30 table — "sebelum dikirim ke provider eksternal"; Ollama is local,
+    # so it's exempt).
+    ENABLE_PII_REDACTION: bool = True
+    ENABLE_OUTPUT_VALIDATION: bool = True
+    # Append-only audit trail (Bab 30 — distinct from the plain-text `audit.log`
+    # this deployment's systemd unit already uses for general stdout capture).
+    AUDIT_LOG_PATH: str = "security_audit.log"
+    # Comma-separated valid API keys for security.auth's principal lookup;
+    # blank disables the dependency (dev default — matches no existing route
+    # requiring auth today, Bab 45 no-big-rewrite).
+    API_KEYS: str = ""
+
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     GEMMA_MODEL: str = "gemma4:e2b"

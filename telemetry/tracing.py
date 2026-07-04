@@ -1,11 +1,12 @@
 """Execution Tracing (MASTER_INSTRUCTION.md Bab 34) — reconstruct the Execution Timeline.
 
-Subscribes to the Event Bus (``agent.*``, ``workflow.*``, ``consensus.decided``
-— every trace_id-carrying domain event, Bab 23 prinsip 1) and records each as
-a :class:`Span` keyed by trace_id, so any multi-agent task can be
-reconstructed end-to-end: which agent ran, when, with which provider, how
-long, and what happened. Zero coupling to Dispatcher/Orchestrator — it only
-ever reads what they already publish.
+Subscribes to the Event Bus (``agent.*``, ``workflow.*``, ``consensus.decided``,
+``security.*`` — every trace_id-carrying domain event, Bab 23 prinsip 1) and
+records each as a :class:`Span` keyed by trace_id, so any multi-agent task
+can be reconstructed end-to-end: which agent ran, when, with which provider,
+how long, what happened, and any guardrail/audit action taken along the way
+(Bab 30, Tahap 7). Zero coupling to Dispatcher/Orchestrator/security — it
+only ever reads what they already publish.
 
 Reuses :mod:`memory.stores`' ``ListStore`` (Tahap 3) instead of a new storage
 abstraction — a trace's spans are just another append-only list per scope
@@ -24,7 +25,7 @@ from messaging.schemas import Event
 
 logger = get_logger(__name__)
 
-_PATTERNS = ("agent.*", "workflow.*", "consensus.decided")
+_PATTERNS = ("agent.*", "workflow.*", "consensus.decided", "security.*")
 
 
 @dataclass(frozen=True)

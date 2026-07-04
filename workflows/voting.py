@@ -57,5 +57,6 @@ class VotingWorkflow(BaseWorkflow):
             step_outputs=aggregated.step_outputs,
             degraded=aggregated.degraded or decision.winner.degraded,
             failed=not decision.winner.ok,
-            escalate=escalate,
+            escalate=escalate or aggregated.guardrail_blocked,
+            guardrail_blocked=aggregated.guardrail_blocked,
         )

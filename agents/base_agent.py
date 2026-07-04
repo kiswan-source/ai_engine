@@ -66,6 +66,14 @@ class AgentResult:
     error: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Bab 30/28, Tahap 7: set when security.prompt_guard blocked the prompt
+    # outright (rather than just neutralizing it) — workflows fold this into
+    # WorkflowResult.escalate so it reaches Human Approval, not a silent drop
+    # (Bab 31 rule 4). guardrail_score is security.output_validator's score,
+    # the Bab 28 signal table's fourth Confidence Scoring input (ADR-0007
+    # left it unfilled pending this module).
+    guardrail_blocked: bool = False
+    guardrail_score: float | None = None
 
     @property
     def ok(self) -> bool:

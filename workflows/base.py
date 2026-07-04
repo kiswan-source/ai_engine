@@ -4,6 +4,11 @@ Internal base module for the workflow patterns in this package. Every workflow
 consumes an :class:`~orchestrator.execution_graph.ExecutionGraph` and a
 ``Dispatcher``, and returns a uniform :class:`WorkflowResult` so the Orchestrator
 (Bab 18) treats all patterns interchangeably.
+
+Tahap 7: ``_aggregate`` folds any step's ``AgentResult.guardrail_blocked``
+into ``escalate`` for *every* mode (not just reflection/voting/consensus,
+which already had their own escalate reasons) — a blocked prompt must reach
+Human Approval, never fail silently (Bab 31 rule 4).
 """
 from __future__ import annotations
 
@@ -31,9 +36,11 @@ class WorkflowResult:
     failed: bool = False
     # Set when the result needs Human Approval before it can complete (Bab 25
     # rule 3, Bab 61) — e.g. Reflection never reached its confidence threshold,
-    # or Consensus/Voting agreement fell below it. The Orchestrator, not this
-    # dataclass, decides what to do about it.
+    # Consensus/Voting agreement fell below it, or (any mode) a step was
+    # blocked by security.prompt_guard (Bab 31 rule 4). The Orchestrator, not
+    # this dataclass, decides what to do about it.
     escalate: bool = False
+    guardrail_blocked: bool = False
 
 
 class BaseWorkflow(ABC):
@@ -58,6 +65,7 @@ class BaseWorkflow(ABC):
         step_outputs = dict(ordered)
         degraded = any(r.degraded for r in results)
         failed = any(not r.ok for r in results)
+        guardrail_blocked = any(r.guardrail_blocked for r in results)
         # Final output: the last successful output, else the last output produced.
         final = ""
         for r in results:
@@ -73,5 +81,6 @@ class BaseWorkflow(ABC):
             step_outputs=step_outputs,
             degraded=degraded,
             failed=failed,
-            escalate=escalate,
+            escalate=escalate or guardrail_blocked,
+            guardrail_blocked=guardrail_blocked,
         )

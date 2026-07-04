@@ -14,8 +14,8 @@
 | 4 | Reflection / Consensus / Confidence / Human Approval | ✅ SELESAI |
 | 5 | RAG penuh (chunker→embed→store→retrieve→hybrid→rerank→context) | ✅ SELESAI |
 | 6 | Observability + Cost (tracing, metrics, cost_tracker, dashboards) | ✅ SELESAI |
-| 7 | Security hardening | ⏭️ BERIKUTNYA |
-| 8 | Kubernetes ready | belum |
+| 7 | Security hardening (guardrails, output validation, audit log, RBAC) | ✅ SELESAI |
+| 8 | Kubernetes ready | ⏭️ BERIKUTNYA |
 
 ## Yang sudah dibangun
 
@@ -183,18 +183,69 @@
   Memory Dashboard cuma lapor `vector.count()` (tier lain tak punya metode
   ukuran). Tak ada route API/frontend untuk dashboard — murni lapisan data.
 
+**Tahap 7 — Security hardening (Bab 30, 31, 45, 58)** — ADR: `ADR-0010-*.md`
+- `security/` 6 modul: `prompt_guard.py` (heuristik pattern-based, dua
+  ambang — di atas `PROMPT_GUARD_SUSPICIOUS_THRESHOLD` menetralisir span
+  mencurigakan jadi `[neutralized]`, di atas `PROMPT_GUARD_BLOCK_THRESHOLD`
+  memblokir total, persis kata Bab 30 "mendeteksi dan menetralisir"),
+  `pii_detector.py` (regex email/telepon ID/NIK/kartu kredit/IPv4, redaksi
+  hanya untuk provider eksternal — bukan Ollama), `output_validator.py`
+  (skor kebijakan output: kosong/truncated/artefak template/kebocoran PII —
+  **mengisi sinyal ke-4 Confidence Scoring yang ditinggalkan kosong sejak
+  ADR-0007**), `audit_log.py` (JSON append-only ke `AUDIT_LOG_PATH` —
+  file terpisah dari `audit.log` yang sudah dipakai systemd — + terbitkan
+  event `security.*`), `auth.py` (Principal + API-key lookup, `API_KEYS`
+  kosong = nonaktif), `permissions.py` (RBAC role→permission, `has_permission`/
+  `require_permission`/`require_role`).
+- **Satu choke point**: `agents/generic_agent.py`'s `GenericLLMAgent.execute()`
+  (dipakai semua 15 peran, BUKAN folder `agent/tools/` yang FONDASI
+  terlindungi) — prompt_guard + redaksi PII sebelum `generate()`,
+  output_validator sesudahnya. `AgentResult` dapat 2 field baru:
+  `guardrail_blocked`, `guardrail_score`.
+- **Eskalasi otomatis di SEMUA mode workflow** — `BaseWorkflow._aggregate()`
+  kini menghitung `guardrail_blocked = any(...)` dan meng-OR-kannya ke
+  `escalate`, bukan cuma reflection/voting/consensus yang sudah py escalate
+  sendiri (Bab 31 rule 4 — blokir wajib eskalasi, bukan gagal diam-diam).
+  `Orchestrator.run()` pilih reason `"guardrail_blocked"` saat itu penyebabnya.
+- **`ConfidenceScorer.score()`** dapat param `guardrail_score` yang **default
+  ke `result.guardrail_score`** bila tak diberi — `ReflectionEngine`
+  otomatis dapat sinyal ini TANPA perubahan kode di `reflection.py` sama
+  sekali (opt-out, bukan opt-in). Bobot dirombak 3→4 sinyal (self-reported
+  0.4, history 0.2, agreement 0.15, guardrail 0.25).
+- **RBAC nyata satu titik**: `Orchestrator.finalize_approval(..., role=None)`
+  — beri `role` untuk memaksa cek `approve_workflow`; tanpa `role` (default)
+  = perilaku persis sebelum Tahap 7. `HumanApprovalGate.decide()` sekarang
+  benar-benar menulis audit log (memenuhi Bab 61.3 rule 2 yang belum
+  terpenuhi sejak Tahap 4).
+- `telemetry.tracing.Tracer` tambah pola subscribe `security.*` — Execution
+  Timeline ikut memuat aksi keamanan.
+- **`tests/conftest.py` baru** (autouse, isolasi `AUDIT_LOG_PATH` ke temp
+  file per test) — perlu karena `HumanApprovalGate.decide()` yang dipakai
+  luas sejak Tahap 4 kini menulis file sungguhan; tanpa ini seluruh suite
+  akan mengotori `security_audit.log` di root repo setiap dijalankan.
+- **Diverifikasi live end-to-end**: prompt berisi PII nyata → redacted
+  sebelum ke Claude, jawaban normal; prompt injection nyata ("ignore all
+  previous instructions...") → diblokir total, eskalasi ke REVIEWING
+  dengan reason `guardrail_blocked`; RBAC menolak role `user` lalu menerima
+  role `approver`; audit trail berisi kedua kejadian dengan trace_id yang
+  benar.
+- **Gap yang diakui**: RBAC tidak dipasang ke `agent/tools/` (Bab 30 rule 2's
+  sasaran asli) — folder itu FONDASI terlindungi (Bab 45.1), butuh migrasi
+  bertahap di luar cakupan satu sesi. `auth.py`/`permissions.py` tidak
+  dipasang ke route API manapun — semua endpoint tetap terbuka persis
+  seperti sebelumnya.
+
 ## Test
-- **206/206 lulus** (`pytest -q`). Baru Tahap 6: `test_tracing.py` (7),
-  `test_metrics.py` (12), `test_cost_tracker.py` (10), `test_monitoring.py`
-  (8) + 3 test integrasi Orchestrator (cost-budget escalation, under-budget
-  completes normally, metrics+tracer observe a run). Semua CI-safe (event
-  bus terisolasi per test via `InMemoryBroker()` sendiri) —
-  `check_readiness()`/`provider_dashboard()`/`queue_dashboard()` butuh
-  layanan hidup, diverifikasi live terpisah (sama seperti pola
-  Postgres*Store Tahap 3, PgVectorKnowledgeStore Tahap 5).
+- **267/267 lulus** (`pytest -q`). Baru Tahap 7: `test_prompt_guard.py` (7),
+  `test_pii_detector.py` (9), `test_output_validator.py` (9),
+  `test_audit_log.py` (6), `test_auth_permissions.py` (13),
+  `test_generic_agent.py` (10) + 4 test integrasi Orchestrator (guardrail
+  escalation, RBAC accept/reject pada `finalize_approval`) + 2 test baru di
+  `test_confidence.py` (sinyal guardrail). Semua CI-safe, audit log
+  terisolasi via `tests/conftest.py`.
 
 ## Catatan penting untuk sesi berikutnya
-- Tahap 1-6 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
+- Tahap 1-7 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
 - Cloud API key AKTIF (bukan cuma Ollama lagi) — role apa pun yang dirutekan
   ke openai/claude/gemini akan benar-benar keluar biaya, dan sekarang
   benar-benar tercatat lewat `telemetry.cost_tracker`. Jika perlu murni
@@ -206,21 +257,26 @@
 - `TRACE_BACKEND`/`COST_BACKEND` default `memory` di `.env` lokal (belum
   di-set ke `redis`) — cost/timeline hilang tiap restart proses. Set eksplisit
   kalau butuh persisten.
+- `ENABLE_PROMPT_GUARD`/`ENABLE_PII_REDACTION`/`ENABLE_OUTPUT_VALIDATION`
+  semua aktif secara default (`true`) — setiap dispatch nyata sekarang
+  melewati ketiganya, termasuk yang sudah jalan di container Docker.
 - **Ingat rebuild image Docker setiap kali `requirements.txt` berubah** —
-  ini persis penyebab regresi `ai_engine_api` yang baru diperbaiki;
+  ini persis penyebab regresi `ai_engine_api` yang diperbaiki di Tahap 6;
   `docker compose build <service>` lalu `up -d <service>`, bukan cuma restart.
 - Batas sengaja: `llm_rerank()` (Tahap 5) ada tapi tak otomatis dipasang;
   RAG belum dikaitkan otomatis ke setiap dispatch Orchestrator. Circuit
-  Breaker (Bab 55) belum ada sama sekali — kandidat kuat untuk Tahap 7
-  (Security) atau tahap tersendiri.
+  Breaker (Bab 55) belum ada sama sekali. RBAC belum menyentuh
+  `agent/tools/` atau route API manapun (lihat gap Tahap 7 di atas).
 
-## Titik mulai Tahap 7
-Bangun Security hardening (Bab 30, 31, 45, 58): `security/prompt_guard.py`
-(deteksi prompt injection sebelum masuk provider), `security/pii_detector.py`
-(redaksi PII di log/memory), `security/output_validator.py` (sinyal keempat
-untuk `ConfidenceScorer` Tahap 4 — sudah ditandai sebagai slot kosong sejak
-ADR-0007), `security/auth.py`/`permissions.py`, audit log append-only
-sungguhan (Bab 30 — `audit.log` saat ini cuma stdout redirect, bukan audit
-trail terstruktur), dan `Secrets Management Lanjutan` (Bab 58) untuk
-`.env`-based key seperti yang sekarang dipakai.
+## Titik mulai Tahap 8
+Bangun Kubernetes ready (Bab 38, 58.1, 64): manifest dasar (Deployment,
+Service, ConfigMap untuk `api/config.py`'s env var non-sensitif, Secret
+untuk `API_KEYS`/API key provider — migrasi alami dari `.env` lokal saat
+ini, Bab 58.3's prinsip "kode aplikasi tidak perlu tahu dari mekanisme mana
+secret berasal" sudah terpenuhi sejak awal karena semua baca lewat
+`api/config.py`), health/readiness probe memakai `/health/ready` yang
+sudah ada (Tahap 6), horizontal scaling check (Orchestrator sudah stateless
+sejak Tahap 2 — state di TaskManager/Redis, bukan process globals), dan
+strategi untuk `MESSAGE_BROKER=redis`'s race condition yang dicatat di
+ADR-0009 sebelum benar-benar menjalankan banyak instance paralel.
 

@@ -7,6 +7,12 @@ already produced. A task lands here by transitioning to ``State.REVIEWING``
 — this module never auto-decides anything (Bab 61.3 rule 1: approval must not
 become a silent bottleneck, but resolving that is an SLA/escalation concern
 for the caller, not a timeout that fabricates a decision).
+
+Tahap 7: every decision is recorded in the append-only security audit trail
+with the approver's identity and reason (Bab 61.3 rule 2), not just the
+structured logger — RBAC-gating *who* may call :meth:`decide` is the
+caller's job (``Orchestrator.finalize_approval``), since this class has no
+notion of a principal.
 """
 from __future__ import annotations
 
@@ -66,7 +72,9 @@ class HumanApprovalGate:
         return req
 
     async def decide(self, trace_id: str, approved: bool, decided_by: str, reason: str = "") -> ApprovalRequest:
-        """Record a human approve/reject decision (Bab 61.3 rule 2 — audited by caller)."""
+        """Record a human approve/reject decision (Bab 61.3 rule 2 — audited here)."""
+        from security import audit_log
+
         req = self._pending.get(trace_id)
         if req is None:
             raise KeyError(f"no pending approval for trace_id: {trace_id!r}")
@@ -81,6 +89,13 @@ class HumanApprovalGate:
             source="human_approval",
             trace_id=trace_id,
             payload={"decided_by": decided_by, "reason": reason},
+        )
+        await audit_log.record(
+            "human_approval.decided",
+            actor=decided_by,
+            detail={"approved": approved, "request_reason": req.reason, "decision_reason": reason},
+            trace_id=trace_id,
+            event_bus=self._events,
         )
         logger.info("approval.decided", trace_id=trace_id, approved=approved, decided_by=decided_by)
         return req
