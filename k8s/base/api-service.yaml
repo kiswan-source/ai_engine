@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-engine-api
+  namespace: ai-engine
+spec:
+  selector:
+    app.kubernetes.io/name: ai-engine-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  type: ClusterIP

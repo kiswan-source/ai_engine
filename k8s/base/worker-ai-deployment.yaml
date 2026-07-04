@@ -1,0 +1,57 @@
+# AI Worker (RQ, ai_queue) — deliberately separate Deployment from worker-gis
+# and the API (Bab 38 rule 4 / Bab 37 rule 5): scales independently so a
+# backlog of long AI jobs never starves GIS jobs or the chat API's
+# responsiveness.
+#
+# No liveness/readiness probe: RQ workers have no HTTP surface, and a
+# meaningful exec-based check (e.g. `rq info` or a process-liveness check)
+# would need process-inspection tooling this image doesn't currently ship
+# (see k8s/README.md's gaps section) — restartPolicy: Always plus RQ's own
+# warm-shutdown handling (Bab 38 rule 5; verified against installed rq==1.16.2,
+# see ADR-0011) already recovers from crashes and drains the current job on
+# SIGTERM without a custom probe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-engine-worker-ai
+  namespace: ai-engine
+  labels:
+    app.kubernetes.io/name: ai-engine-worker-ai
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-engine-worker-ai
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-engine-worker-ai
+    spec:
+      # Long document/AI jobs in flight get real time to finish (RQ's warm
+      # shutdown waits for the current job) before a forced kill.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ai
+          image: ai-engine-worker:latest  # replaced by kustomize images: in overlays
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "worker.ai.worker_ai"]
+          envFrom:
+            - configMapRef:
+                name: ai-engine-config
+            - secretRef:
+                name: ai-engine-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: reports
+              mountPath: /app/reports
+      volumes:
+        - name: reports
+          persistentVolumeClaim:
+            claimName: ai-engine-reports

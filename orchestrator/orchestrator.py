@@ -240,9 +240,9 @@ class Orchestrator:
             await self._transition(trace_id, State.CANCELLED)
         return self.tasks.state_of(trace_id)
 
-    def pending_approvals(self) -> list[ApprovalRequest]:
+    async def pending_approvals(self) -> list[ApprovalRequest]:
         """Approval requests still awaiting a human decision (Bab 61.3)."""
-        return self.approval.pending()
+        return await self.approval.pending()
 
     async def run_single(
         self,

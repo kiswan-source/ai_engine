@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-engine
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - postgres-statefulset.yaml
+  - redis-deployment.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - worker-ai-deployment.yaml
+  - worker-gis-deployment.yaml
+
+# Generated straight from the real file (scripts/init_db.sql) so the ConfigMap
+# can never drift from what docker-compose's postgres service already mounts
+# at the same docker-entrypoint-initdb.d path.
+configMapGenerator:
+  - name: ai-engine-postgres-initdb
+    files:
+      - init.sql=../../scripts/init_db.sql
+
+# Placeholder image names — overlays/production (or your own overlay) must
+# point these at real registry references built from docker/Dockerfile.api,
+# docker/Dockerfile.worker, docker/Dockerfile.postgres (see k8s/README.md).
+images:
+  - name: ai-engine-api
+    newName: ai-engine-api
+    newTag: latest
+  - name: ai-engine-worker
+    newName: ai-engine-worker
+    newTag: latest
+  - name: ai-engine-postgres
+    newName: ai-engine-postgres
+    newTag: latest

@@ -1,0 +1,103 @@
+# API service (MASTER_INSTRUCTION.md Bab 38). Stateless by design since
+# Tahap 2 (Bab 18.2) — task/workflow state lives in TaskManager/Redis, not
+# process memory — so this can run more than one replica once
+# MESSAGE_BROKER/TASK_STATE_BACKEND/APPROVAL_STATE_BACKEND/etc. are all set
+# to their Redis/Postgres backends (see configmap.yaml — the production
+# defaults already are).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-engine-api
+  namespace: ai-engine
+  labels:
+    app.kubernetes.io/name: ai-engine-api
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-engine-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-engine-api
+    spec:
+      # SSE chat streams (core/chat/, protected Bab 45.1) can be long-lived —
+      # give in-flight requests real time to finish on rolling update/scale-down
+      # (Bab 38 rule 5, graceful shutdown; uvicorn itself already stops
+      # accepting new connections on SIGTERM and drains existing ones).
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: api
+          image: ai-engine-api:latest  # replaced by kustomize images: in overlays
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ai-engine-config
+            - secretRef:
+                name: ai-engine-secrets
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            # Bab 35 rule 3 / Bab 38 rule 3: checks DB, Redis, Ollama, and
+            # every enabled cloud provider (telemetry.monitoring.check_readiness,
+            # Tahap 6/7) — not ready until all of them answer.
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+            - name: reports
+              mountPath: /app/reports
+      volumes:
+        # Bab 38 rule 1 caveat: a ReadWriteOnce PVC only works cleanly with a
+        # single replica per node, or on storage classes that support
+        # ReadWriteMany — see k8s/README.md for why this is the honest
+        # limit of "stateless" for locally-stored files (uploads/reports)
+        # versus state that's already fully externalized (DB/Redis).
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: ai-engine-uploads
+        - name: reports
+          persistentVolumeClaim:
+            claimName: ai-engine-reports
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-engine-uploads
+  namespace: ai-engine
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-engine-reports
+  namespace: ai-engine
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 5Gi

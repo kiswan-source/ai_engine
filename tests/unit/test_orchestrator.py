@@ -396,13 +396,13 @@ async def test_orchestrator_escalates_to_review_and_finalizes_on_approval():
 
     assert result.escalate
     assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
-    assert orch.pending_approvals()[0].trace_id == result.trace_id
+    assert (await orch.pending_approvals())[0].trace_id == result.trace_id
 
     final_state = await orch.finalize_approval(
         result.trace_id, approved=True, decided_by="rudy", reason="acceptable for internal use"
     )
     assert final_state == State.COMPLETED
-    assert orch.pending_approvals() == []
+    assert await orch.pending_approvals() == []
 
 
 async def test_orchestrator_finalize_approval_rejected_cancels_task():
@@ -438,7 +438,7 @@ async def test_orchestrator_disabled_human_approval_falls_through(monkeypatch):
     assert result.escalate
     # gate disabled: task must still resolve to a terminal state, not hang in REVIEWING.
     assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
-    assert orch.pending_approvals() == []
+    assert await orch.pending_approvals() == []
 
 
 async def test_orchestrator_rejects_disabled_consensus_voting(monkeypatch):
@@ -472,7 +472,7 @@ async def test_orchestrator_tracks_cost_and_escalates_over_budget(monkeypatch):
 
     assert not result.escalate  # confidence itself is fine
     assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
-    assert orch.pending_approvals()[0].reason == "cost_budget_exceeded"
+    assert (await orch.pending_approvals())[0].reason == "cost_budget_exceeded"
     cost = await orch.costs.cost_for_trace(result.trace_id)
     assert cost > 1.0
 
@@ -527,7 +527,7 @@ async def test_orchestrator_escalates_on_guardrail_block():
     assert result.guardrail_blocked
     assert result.escalate
     assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
-    assert orch.pending_approvals()[0].reason == "guardrail_blocked"
+    assert (await orch.pending_approvals())[0].reason == "guardrail_blocked"
 
 
 async def test_finalize_approval_rejects_insufficient_role():

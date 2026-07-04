@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     ENABLE_HUMAN_APPROVAL: bool = True
     # Human In The Loop (Bab 61.3): SLA before a pending approval counts as overdue.
     APPROVAL_SLA_SECONDS: int = 3600
+    # Pending-approval state (Bab 38 rule 1 — services must be stateless):
+    # "memory" (dev/CI, single instance) or "redis" (survives pod restarts,
+    # shared across replicas).
+    APPROVAL_STATE_BACKEND: str = "memory"
 
     # ─── Provider Layer (MASTER_INSTRUCTION.md Bab 16) ───────────────────────
     # Shared timeout (seconds) for cloud provider HTTP calls (Bab 9 — timeout

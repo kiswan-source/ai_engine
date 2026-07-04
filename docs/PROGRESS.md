@@ -15,7 +15,9 @@
 | 5 | RAG penuh (chunker→embed→store→retrieve→hybrid→rerank→context) | ✅ SELESAI |
 | 6 | Observability + Cost (tracing, metrics, cost_tracker, dashboards) | ✅ SELESAI |
 | 7 | Security hardening (guardrails, output validation, audit log, RBAC) | ✅ SELESAI |
-| 8 | Kubernetes ready | ⏭️ BERIKUTNYA |
+| 8 | Kubernetes ready (manifest siap; belum diuji cluster sungguhan) | ✅ SELESAI |
+
+**Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
 ## Yang sudah dibangun
 
@@ -235,48 +237,87 @@
   dipasang ke route API manapun — semua endpoint tetap terbuka persis
   seperti sebelumnya.
 
+**Tahap 8 — Kubernetes ready (Bab 37, 38, 58.1, 64)** — ADR: `ADR-0011-*.md`
+- **Bugfix statelessness (Bab 38 rule 1)**: `workflows/approval.py`'s
+  `HumanApprovalGate` pindah dari `dict` in-memory ke `HashStore` pluggable
+  (pola sama dengan setiap tier lain sejak Tahap 3) — config baru
+  `APPROVAL_STATE_BACKEND` (memory|redis). `get()`/`pending()`/`overdue()`
+  jadi async (breaking change sejenis `VectorMemory` Tahap 5).
+  `Orchestrator.pending_approvals()` ikut jadi async. Diverifikasi live: dua
+  instance `HumanApprovalGate` di atas `RedisHashStore` yang sama
+  benar-benar saling melihat request & keputusan — simulasi dua pod.
+- **`k8s/` manifest set (Kustomize, bukan Helm — Bab 45.3)**: `base/`
+  (Namespace, ConfigMap persis mengikuti `api/config.py`, Secret template
+  ber-placeholder eksplisit, StatefulSet Postgres+headless Service+PVC
+  pakai image pgvector dari `docker/Dockerfile.postgres`, Deployment
+  Redis+Service+PVC, Deployment API 2 replika + Service dengan liveness
+  `/health/` & readiness `/health/ready`, dua Deployment worker terpisah —
+  Bab 38 rule 4). `overlays/production/` mendemonstrasikan Bab 64
+  "build once, promote everywhere" (image sama, tag registry + replica
+  count beda). `scripts/init_db.sql` di-generate via kustomize
+  `configMapGenerator` langsung dari file asli — cegah drift yang sama
+  seperti insiden Tahap 5 (ADR-0008).
+- **Verifikasi RQ graceful shutdown** — dicek langsung di source `rq==1.16.2`
+  terpasang: `Worker.request_stop()` sudah warm-shutdown (tunggu job
+  selesai) built-in di SIGTERM pertama. Bab 38 rule 5 terpenuhi untuk
+  worker tanpa kode tambahan; tidak ada liveness/readiness probe untuk
+  worker (RQ tanpa HTTP surface, exec probe berarti butuh tooling yang
+  belum ada di image — dicatat sebagai gap, bukan probe palsu).
+- **Batasan sesi eksplisit**: tidak ada cluster K8s aktif di lingkungan ini
+  (tidak ada kubectl/minikube/kind) — dikonfirmasi ke Boss, disepakati
+  manifest divalidasi via sintaks YAML (`yaml.safe_load_all` semua file +
+  cross-check referensi ConfigMap/Secret/PVC) dan penalaran manual, BUKAN
+  `kubectl apply` yang diamati live seperti tahap-tahap lain.
+- **Gap yang diakui**: Dockerfile belum multi-stage (Bab 37 rule 2) —
+  ditolak dikerjakan sesi ini karena image yang sama baru diperbaiki dari
+  insiden gagal-start Tahap 6 (ADR-0009), risiko regresi nyata tanpa
+  verifikasi cluster; PVC uploads/reports asumsi `ReadWriteMany` (kebanyakan
+  `StorageClass` cuma RWO); Postgres/Redis single-instance, bukan HA;
+  CI belum build/push image container.
+
 ## Test
-- **267/267 lulus** (`pytest -q`). Baru Tahap 7: `test_prompt_guard.py` (7),
-  `test_pii_detector.py` (9), `test_output_validator.py` (9),
-  `test_audit_log.py` (6), `test_auth_permissions.py` (13),
-  `test_generic_agent.py` (10) + 4 test integrasi Orchestrator (guardrail
-  escalation, RBAC accept/reject pada `finalize_approval`) + 2 test baru di
-  `test_confidence.py` (sinyal guardrail). Semua CI-safe, audit log
-  terisolasi via `tests/conftest.py`.
+- **271/271 lulus** (`pytest -q`). Baru Tahap 8: 4 test
+  `test_approval.py` (default backend memory/redis, dua gate berbagi state
+  via `RedisHashStore` — simulasi dua pod, pending mengecualikan yang sudah
+  diputuskan).
 
-## Catatan penting untuk sesi berikutnya
-- Tahap 1-7 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
-- Cloud API key AKTIF (bukan cuma Ollama lagi) — role apa pun yang dirutekan
-  ke openai/claude/gemini akan benar-benar keluar biaya, dan sekarang
-  benar-benar tercatat lewat `telemetry.cost_tracker`. Jika perlu murni
-  offline lagi, kosongkan key di `.env` (Model Registry otomatis fallback ke
-  Ollama, Bab 54).
-- `VECTOR_BACKEND=pgvector` aktif di `.env` lokal — Vector Memory & RAG
-  korpus keduanya nyata sekarang, bukan in-memory. Default `.env.example`
-  tetap `memory` untuk CI/dev baru; produksi eksplisit set `pgvector`.
-- `TRACE_BACKEND`/`COST_BACKEND` default `memory` di `.env` lokal (belum
-  di-set ke `redis`) — cost/timeline hilang tiap restart proses. Set eksplisit
-  kalau butuh persisten.
-- `ENABLE_PROMPT_GUARD`/`ENABLE_PII_REDACTION`/`ENABLE_OUTPUT_VALIDATION`
-  semua aktif secara default (`true`) — setiap dispatch nyata sekarang
-  melewati ketiganya, termasuk yang sudah jalan di container Docker.
-- **Ingat rebuild image Docker setiap kali `requirements.txt` berubah** —
-  ini persis penyebab regresi `ai_engine_api` yang diperbaiki di Tahap 6;
-  `docker compose build <service>` lalu `up -d <service>`, bukan cuma restart.
-- Batas sengaja: `llm_rerank()` (Tahap 5) ada tapi tak otomatis dipasang;
-  RAG belum dikaitkan otomatis ke setiap dispatch Orchestrator. Circuit
-  Breaker (Bab 55) belum ada sama sekali. RBAC belum menyentuh
-  `agent/tools/` atau route API manapun (lihat gap Tahap 7 di atas).
+## Gap kumulatif (Tahap 1-8, diakui bukan disamarkan)
+- **Circuit Breaker (Bab 55)** — belum diimplementasikan sama sekali;
+  Dispatcher cuma retry+fallback (Bab 54). Dicatat sejak ADR-0009.
+- **RBAC (Bab 30 rule 2)** — dibangun lengkap (`security/auth.py`/
+  `permissions.py`) tapi cuma dipasang di satu titik
+  (`Orchestrator.finalize_approval`); belum menyentuh `agent/tools/`
+  (FONDASI terlindungi, Bab 45.1) atau route API manapun. Dicatat sejak
+  ADR-0010.
+- **RAG belum otomatis** — `Retriever`/`build_context`/`llm_rerank()` (Tahap 5)
+  ada dan teruji tapi tak dikaitkan otomatis ke setiap dispatch Orchestrator
+  — pemanggil pakai eksplisit saat butuh (Bab 29 rule 4: pengaya opsional).
+- **Dockerfile belum multi-stage (Bab 37 rule 2)** — `docker/Dockerfile.api`/
+  `Dockerfile.worker` install build tooling ke image final. Dicatat sejak
+  ADR-0011.
+- **Postgres/Redis single-instance** — tidak ada operator HA (Patroni/
+  CloudNativePG untuk Postgres, Sentinel/Cluster untuk Redis) baik di
+  `docker-compose.yml` maupun `k8s/`. Dicatat sejak ADR-0011.
+- **Belum ada verifikasi cluster K8s sungguhan** — `k8s/` divalidasi sintaks
+  + penalaran manual saja (lihat ADR-0011); prasyarat sebelum produksi
+  sungguhan: build+push image ke registry, isi `secret.yaml` dengan nilai
+  asli via metode di header filenya, lalu `kubectl apply -k` diamati live.
+- **`MESSAGE_BROKER=redis`'s race condition** (dicatat ADR-0009) — cost
+  budget check di `Orchestrator.run()` mengasumsikan pengiriman event
+  sinkron; perlu ditinjau ulang sebelum multi-instance paralel dengan
+  broker Redis (bukan `MESSAGE_BROKER=memory` yang jadi default saat ini).
+- **CI (`.github/workflows/ci.yml`)** masih cuma `pytest --cov` — belum
+  build/push image container atau apply manifest K8s.
 
-## Titik mulai Tahap 8
-Bangun Kubernetes ready (Bab 38, 58.1, 64): manifest dasar (Deployment,
-Service, ConfigMap untuk `api/config.py`'s env var non-sensitif, Secret
-untuk `API_KEYS`/API key provider — migrasi alami dari `.env` lokal saat
-ini, Bab 58.3's prinsip "kode aplikasi tidak perlu tahu dari mekanisme mana
-secret berasal" sudah terpenuhi sejak awal karena semua baca lewat
-`api/config.py`), health/readiness probe memakai `/health/ready` yang
-sudah ada (Tahap 6), horizontal scaling check (Orchestrator sudah stateless
-sejak Tahap 2 — state di TaskManager/Redis, bukan process globals), dan
-strategi untuk `MESSAGE_BROKER=redis`'s race condition yang dicatat di
-ADR-0009 sebelum benar-benar menjalankan banyak instance paralel.
+## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
+Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` sudah selesai
+seluruhnya. Kandidat prioritas untuk sesi berikutnya, dari yang paling murah
+dieksekusi: (1) verifikasi `k8s/` di cluster sungguhan (kind/minikube lokal
+atau cluster nyata) — akan mengungkap kesalahan yang tak kelihatan dari
+sintaks saja; (2) Circuit Breaker (Bab 55) — pola state machine yang sudah
+familiar (mirip `TaskManager`), terintegrasi ke `Dispatcher`; (3) RBAC nyata
+ke `agent/tools/` via strangler pattern (Bab 45.1) mulai dari SATU tool
+berisiko tinggi dulu, bukan semua sekaligus; (4) Dockerfile multi-stage
+dengan rebuild+verifikasi live penuh (bukan cuma review kode) mengingat
+riwayat insiden ADR-0009.
 

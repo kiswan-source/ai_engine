@@ -1,0 +1,38 @@
+# Bab 64: "build once, promote everywhere" — the application code/image is
+# identical to every other environment; only configuration and scale differ
+# here. Replace the registry/tag placeholders below with your actual CI-built
+# images before applying.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-engine
+
+resources:
+  - ../../base
+
+images:
+  - name: ai-engine-api
+    newName: ghcr.io/kiswan-source/ai_engine-api
+    newTag: CHANGE_ME_TO_A_REAL_BUILD_TAG
+  - name: ai-engine-worker
+    newName: ghcr.io/kiswan-source/ai_engine-worker
+    newTag: CHANGE_ME_TO_A_REAL_BUILD_TAG
+  - name: ai-engine-postgres
+    newName: ghcr.io/kiswan-source/ai_engine-postgres
+    newTag: CHANGE_ME_TO_A_REAL_BUILD_TAG
+
+patches:
+  - target:
+      kind: Deployment
+      name: ai-engine-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target:
+      kind: Deployment
+      name: ai-engine-worker-ai
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 4

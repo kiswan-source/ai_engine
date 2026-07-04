@@ -1,0 +1,105 @@
+# Non-sensitive configuration for AI_ENGINE (MASTER_INSTRUCTION.md Bab 38 rule 2
+# — configuration purely through ConfigMap/Secret, nothing baked into the image).
+# Mirrors api/config.py's sections; keep both in sync when adding a setting.
+# Sensitive values (API keys, DATABASE_URL, REDIS_URL, SECRET_KEY) live in
+# secret.yaml instead — see that file's header for why.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-engine-config
+  namespace: ai-engine
+data:
+  # ─── App ────────────────────────────────────────────────────────────────
+  APP_NAME: "AI Engine"
+  APP_ENV: "production"
+  DEBUG: "false"
+  ALLOWED_ORIGINS: '["https://your-domain.example"]'
+
+  # ─── Redis / Queue (names only — REDIS_URL itself is a Secret) ──────────
+  RQ_QUEUE_AI: "ai_queue"
+  RQ_QUEUE_GIS: "gis_queue"
+  RQ_QUEUE_PIPELINE: "pipeline_queue"
+
+  # ─── Messaging & Memory (Bab 22-23, Tahap 3) ─────────────────────────────
+  MESSAGE_BROKER: "redis"
+  MEMORY_BACKEND: "redis"
+  MEMORY_PERSISTENT_BACKEND: "postgres"
+  WORKING_MEMORY_TTL: "3600"
+  TASK_STATE_BACKEND: "redis"
+  TASK_STATE_TTL: "86400"
+
+  # ─── Reflection / Consensus / Confidence / Human Approval (Bab 25-28, 57, 61, Tahap 4) ──
+  REFLECTION_MAX_ITERATIONS: "3"
+  CONFIDENCE_THRESHOLD_DEFAULT: "0.6"
+  CONFIDENCE_THRESHOLD_HIGH_RISK: "0.85"
+  CONSENSUS_DEBATE_ROUNDS: "1"
+  ENABLE_CONSENSUS_VOTING: "true"
+  ENABLE_HUMAN_APPROVAL: "true"
+  APPROVAL_SLA_SECONDS: "3600"
+  # Bab 38 rule 1 — must be "redis" once replicas > 1, or two pods won't see
+  # each other's pending approvals (see ADR-0011).
+  APPROVAL_STATE_BACKEND: "redis"
+
+  # ─── Provider Layer (Bab 16) ──────────────────────────────────────────────
+  PROVIDER_TIMEOUT: "120"
+  PROVIDER_MAX_RETRIES: "2"
+  PROVIDER_RETRY_BACKOFF: "1.0"
+  OPENAI_BASE_URL: "https://api.openai.com/v1"
+  OPENAI_MODEL: "gpt-4o"
+  OPENAI_EMBED_MODEL: "text-embedding-3-small"
+  ANTHROPIC_BASE_URL: "https://api.anthropic.com"
+  ANTHROPIC_VERSION: "2023-06-01"
+  CLAUDE_MODEL: "claude-sonnet-5"
+  GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta"
+  GEMINI_MODEL: "gemini-pro-latest"
+  GEMINI_EMBED_MODEL: "gemini-embedding-001"
+
+  # ─── RAG (Bab 29, Tahap 5) ────────────────────────────────────────────────
+  RAG_EMBEDDING_PROVIDER: "openai"
+  RAG_EMBEDDING_DIM: "1536"
+  VECTOR_BACKEND: "pgvector"
+  RAG_CHUNK_SIZE: "800"
+  RAG_CHUNK_OVERLAP: "100"
+  RAG_TOP_K: "5"
+  RAG_HYBRID_ALPHA: "0.5"
+  RAG_RERANK_ENABLED: "true"
+  RAG_MAX_CONTEXT_CHARS: "4000"
+
+  # ─── Telemetry (Bab 27, 33-35, 56, Tahap 6) ──────────────────────────────
+  TRACE_BACKEND: "redis"
+  COST_BACKEND: "redis"
+  TRACE_MAX_SPANS_PER_TRACE: "200"
+  METRICS_MAX_SAMPLES: "2000"
+  COST_BUDGET_PER_TASK: "5.0"
+  COST_BUDGET_DAILY: "50.0"
+  ALERT_ERROR_RATE_THRESHOLD: "0.2"
+  ALERT_LATENCY_P95_MS: "30000"
+
+  # ─── Security (Bab 30, 31, 58, Tahap 7) ──────────────────────────────────
+  ENABLE_PROMPT_GUARD: "true"
+  PROMPT_GUARD_SUSPICIOUS_THRESHOLD: "0.4"
+  PROMPT_GUARD_BLOCK_THRESHOLD: "0.8"
+  ENABLE_PII_REDACTION: "true"
+  ENABLE_OUTPUT_VALIDATION: "true"
+  AUDIT_LOG_PATH: "/var/log/ai-engine/security_audit.log"
+
+  # ─── Ollama / Gemma ───────────────────────────────────────────────────────
+  # Point this at an in-cluster Ollama Service, or an external host reachable
+  # from the cluster network — not the WSL host IP this repo's dev .env uses.
+  OLLAMA_BASE_URL: "http://ollama.ai-engine.svc.cluster.local:11434"
+  GEMMA_MODEL: "gemma4:e2b"
+  OLLAMA_TIMEOUT: "600"
+  OLLAMA_MAX_RETRIES: "3"
+  OLLAMA_NUM_CTX: "16384"
+
+  # ─── Cache ────────────────────────────────────────────────────────────────
+  AI_CACHE_TTL: "3600"
+  GIS_CACHE_TTL: "86400"
+
+  # ─── Logging ──────────────────────────────────────────────────────────────
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+
+  # ─── Rate Limiting ────────────────────────────────────────────────────────
+  RATE_LIMIT_PER_MINUTE: "60"
+  RATE_LIMIT_BURST: "10"

@@ -1,0 +1,45 @@
+# GIS Worker (RQ, gis_queue) — see worker-ai-deployment.yaml's header for why
+# this is a separate Deployment and why it has no liveness/readiness probe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-engine-worker-gis
+  namespace: ai-engine
+  labels:
+    app.kubernetes.io/name: ai-engine-worker-gis
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-engine-worker-gis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-engine-worker-gis
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-gis
+          image: ai-engine-worker:latest  # replaced by kustomize images: in overlays
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "worker.gis.worker_gis"]
+          envFrom:
+            - configMapRef:
+                name: ai-engine-config
+            - secretRef:
+                name: ai-engine-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: reports
+              mountPath: /app/reports
+      volumes:
+        - name: reports
+          persistentVolumeClaim:
+            claimName: ai-engine-reports

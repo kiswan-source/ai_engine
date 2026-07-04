@@ -1,0 +1,7 @@
+# MASTER_INSTRUCTION.md Bab 38 — Kubernetes Ready (Tahap 8).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-engine
+  labels:
+    app.kubernetes.io/part-of: ai-engine
