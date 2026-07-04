@@ -16,13 +16,23 @@ happens (and ``ENABLE_HUMAN_APPROVAL`` is on), ``run()`` stops at
 ``State.REVIEWING`` and opens a Human Approval request (Bab 61) instead of
 auto-completing — call :meth:`finalize_approval` once a human decides.
 
+Tahap 6: ``self.costs``/``self.metrics``/``self.tracer`` (``telemetry.*``)
+subscribe to this orchestrator's own Event Bus on first ``run()``/``run_single()``
+call — zero coupling, they only observe events Dispatcher/``_transition``
+already publish. If a task's running cost exceeds ``COST_BUDGET_PER_TASK``,
+``run()`` escalates to Human Approval the same way a low-confidence result
+does (Bab 61.2 — cost over budget requires approval too), reason
+``"cost_budget_exceeded"``.
+
 Note: ``workflows`` imports back into this package (every workflow pattern
 takes a ``Dispatcher``), so the ``workflows`` names actually used at runtime
 here are imported lazily inside methods rather than at module level — that's
 what lets either package be the first one imported without tripping a partial-
 init ``ImportError``, matching the lazy-import seam already used in
 ``registry.agent_registry.build_default_agent_registry`` and
-``task_manager._default_store``.
+``task_manager._default_store``. ``telemetry`` has no such cycle (it never
+imports ``orchestrator``/``workflows``), so it's imported normally at module
+level.
 """
 from __future__ import annotations
 
@@ -34,6 +44,9 @@ from core.utils.logger import get_logger
 from messaging import EventBus
 from messaging.events import workflow_event
 from registry.agent_registry import AgentRegistry, build_default_agent_registry
+from telemetry.cost_tracker import CostTracker
+from telemetry.metrics import MetricsCollector
+from telemetry.tracing import Tracer
 
 from .dispatcher import Dispatcher
 from .planner import Planner
@@ -55,6 +68,9 @@ class Orchestrator:
         agent_registry: AgentRegistry | None = None,
         event_bus: EventBus | None = None,
         approval_gate: "HumanApprovalGate | None" = None,
+        cost_tracker: CostTracker | None = None,
+        metrics: MetricsCollector | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         from workflows.approval import HumanApprovalGate  # lazy: see module docstring
 
@@ -65,6 +81,23 @@ class Orchestrator:
         self.planner = Planner()
         self.tasks = TaskManager()
         self.approval = approval_gate or HumanApprovalGate(event_bus=self.events)
+        self.costs = cost_tracker or CostTracker(event_bus=self.events)
+        self.metrics = metrics or MetricsCollector(event_bus=self.events)
+        self.tracer = tracer or Tracer(event_bus=self.events)
+        self._telemetry_started = False
+
+    async def _ensure_telemetry_started(self) -> None:
+        """Subscribe cost/metrics/tracing to this orchestrator's Event Bus (idempotent).
+
+        Deferred out of ``__init__`` because ``EventBus.subscribe`` is a
+        coroutine and ``__init__`` can't be async.
+        """
+        if self._telemetry_started:
+            return
+        await self.costs.start()
+        await self.metrics.start()
+        await self.tracer.start()
+        self._telemetry_started = True
 
     async def _transition(self, trace_id: str, dst: State, error: str | None = None) -> None:
         """Move the workflow state and publish the matching event (Bab 23 prinsip 1)."""
@@ -105,6 +138,7 @@ class Orchestrator:
         if mode in ("voting", "consensus") and not settings.ENABLE_CONSENSUS_VOTING:
             raise ValueError(f"mode {mode!r} is disabled (ENABLE_CONSENSUS_VOTING=false, Bab 57)")
 
+        await self._ensure_telemetry_started()
         trace_id = trace_id or new_id()
         self.tasks.track(trace_id, State.PENDING)
         await self.events.emit(
@@ -132,10 +166,31 @@ class Orchestrator:
         workflow = WORKFLOWS[mode]()
         result = await workflow.run(plan.graph, self.dispatcher)
 
+        # Cost Optimization (Bab 27 rule 4, Bab 61.2): a task over budget needs
+        # Human Approval exactly like a low-confidence result does.
+        #
+        # Correctness note: this reads cost_tracker's ledger immediately after
+        # workflow.run() returns, which is only guaranteed to include every
+        # dispatch's cost when event delivery is synchronous — true today
+        # (MESSAGE_BROKER=memory delivers subscribers inline, Bab 23). If a
+        # deployment switches to MESSAGE_BROKER=redis, RedisBroker delivers via
+        # a background reader task (see messaging/broker.py), so this check
+        # could race against the last agent.completed event still in flight
+        # and under-count the task's true cost. Not hit in this single-process
+        # deployment; worth revisiting before running multi-process with a
+        # Redis message broker.
+        task_cost = await self.costs.cost_for_trace(trace_id)
+        over_budget = task_cost > settings.COST_BUDGET_PER_TASK
+
         # Executing -> Reviewing (needs a human, Bab 61) / Completed / Failed
-        if result.escalate and settings.ENABLE_HUMAN_APPROVAL:
+        if (result.escalate or over_budget) and settings.ENABLE_HUMAN_APPROVAL:
             await self._transition(trace_id, State.REVIEWING)
-            reason = "reflection_exhausted" if mode == "reflection" else "low_confidence"
+            if over_budget:
+                reason = "cost_budget_exceeded"
+            elif mode == "reflection":
+                reason = "reflection_exhausted"
+            else:
+                reason = "low_confidence"
             await self.approval.request(trace_id, reason=reason)
             logger.info("orchestrator.pending_approval", trace_id=trace_id, reason=reason)
         elif result.failed:
@@ -150,6 +205,8 @@ class Orchestrator:
             degraded=result.degraded,
             failed=result.failed,
             escalate=result.escalate,
+            cost_usd=round(task_cost, 6),
+            over_budget=over_budget,
         )
         return result
 
@@ -183,6 +240,7 @@ class Orchestrator:
         trace_id: str | None = None,
     ) -> AgentResult:
         """Dispatch a single task to one agent (no workflow overhead)."""
+        await self._ensure_telemetry_started()
         task = Task(
             role=role,
             prompt=prompt,

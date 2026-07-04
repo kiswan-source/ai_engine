@@ -447,3 +447,53 @@ async def test_orchestrator_rejects_disabled_consensus_voting(monkeypatch):
     orch = Orchestrator(agent_registry=reg)
     with pytest.raises(ValueError):
         await orch.run("p", ["writer"], mode="voting")
+
+
+# ─── Tahap 6: Cost budget escalation + telemetry wiring (Bab 27, 34, 61.2) ────
+
+class ExpensiveAgent(StubAgent):
+    """Reports real-looking token usage so cost tracking has something to price."""
+
+    async def execute(self, task):
+        res = await super().execute(task)
+        import dataclasses
+
+        return dataclasses.replace(
+            res, provider_used="openai", model_used="gpt-4o", prompt_tokens=1_000_000, completion_tokens=500_000
+        )
+
+
+async def test_orchestrator_tracks_cost_and_escalates_over_budget(monkeypatch):
+    monkeypatch.setattr("api.config.settings.COST_BUDGET_PER_TASK", 1.0)
+    reg = registry_with(ExpensiveAgent("writer"))
+    orch = Orchestrator(agent_registry=reg)
+
+    result = await orch.run("tulis laporan", ["writer"], mode="sequential")
+
+    assert not result.escalate  # confidence itself is fine
+    assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
+    assert orch.pending_approvals()[0].reason == "cost_budget_exceeded"
+    cost = await orch.costs.cost_for_trace(result.trace_id)
+    assert cost > 1.0
+
+
+async def test_orchestrator_under_budget_completes_normally():
+    reg = registry_with(StubAgent("writer", output="ok"))
+    orch = Orchestrator(agent_registry=reg)
+
+    result = await orch.run("tulis sesuatu", ["writer"], mode="sequential")
+
+    assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
+    assert await orch.costs.cost_for_trace(result.trace_id) == 0.0
+
+
+async def test_orchestrator_metrics_and_tracer_observe_the_run():
+    reg = registry_with(StubAgent("writer", output="ok"))
+    orch = Orchestrator(agent_registry=reg)
+
+    result = await orch.run("tulis sesuatu", ["writer"], mode="sequential")
+
+    assert orch.metrics.counts["workflow.completed"] == 1
+    timeline = await orch.tracer.timeline(result.trace_id)
+    assert "workflow.completed" in [s.event_type for s in timeline]
+    assert "agent.completed" in [s.event_type for s in timeline]

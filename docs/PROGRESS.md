@@ -13,8 +13,8 @@
 | 3 | Shared Memory + Message Bus (Redis/Postgres) | ✅ SELESAI |
 | 4 | Reflection / Consensus / Confidence / Human Approval | ✅ SELESAI |
 | 5 | RAG penuh (chunker→embed→store→retrieve→hybrid→rerank→context) | ✅ SELESAI |
-| 6 | Observability + Cost | ⏭️ BERIKUTNYA |
-| 7 | Security hardening | belum |
+| 6 | Observability + Cost (tracing, metrics, cost_tracker, dashboards) | ✅ SELESAI |
+| 7 | Security hardening | ⏭️ BERIKUTNYA |
 | 8 | Kubernetes ready | belum |
 
 ## Yang sudah dibangun
@@ -134,43 +134,93 @@
   setelah hybrid+rerank (score 1.0), sementara dokumen tak relevan turun.
   `memory_manager.build_memory_manager()` juga diverifikasi memasang
   `PgVectorKnowledgeStore` + embedder OpenAI otomatis dari `.env`.
-- **Ditemukan, di luar cakupan Tahap 5**: tabel `documents` (dibuat
-  `scripts/init_db.sql` lama dengan `id UUID`) tak cocok dengan
-  `db.models.Document.id` (`String(36)`) — INSERT lewat SQLAlchemy ORM gagal.
-  Bug lama, baru ketahuan saat mencoba index row `Document` sungguhan untuk
-  verifikasi. Belum diperbaiki — di luar lingkup RAG.
+- **Ditemukan, di luar cakupan Tahap 5** (diperbaiki 2026-07-05, lihat
+  catatan susulan di bawah tabel Tahap 5 — commit `67ec6f0`): tabel
+  `documents`/`gis_projects`/`ai_jobs` (dibuat `scripts/init_db.sql` lama
+  dengan tipe/kolom tak sinkron dengan model SQLAlchemy). Sudah diperbaiki.
+
+**Tahap 6 — Observability + Cost (Bab 27, 33-35, 56, 62)** — ADR: `ADR-0009-*.md`
+- `telemetry/` 5 modul Bab 34: `tracing.py` (`Tracer` — subscribe
+  `agent.*`/`workflow.*`/`consensus.decided`, rekonstruksi Execution Timeline
+  penuh per trace_id, reuse `memory.stores.ListStore`), `metrics.py`
+  (`MetricsCollector` — counts, error/success rate per role/provider, latensi
+  p50/p95/p99 per agent + end-to-end per workflow mode), `cost_tracker.py`
+  (`CostTracker` — subscribe `agent.completed`, tabel harga USD/1K token per
+  provider+model, `cost_for_trace`/`cost_by_provider`/`cost_by_role`/
+  `cost_for_day`), `logging.py` (re-export `core.utils.logger`, Bab 11 sudah
+  terpenuhi, bukan config baru), `monitoring.py` (8 dashboard Bab 62 +
+  `check_alerts()` + `check_readiness()` yang kini juga cek tiap provider
+  cloud aktif, dipakai bersama oleh `/health/ready`).
+- **Dispatcher diperkaya, bukan dipasangi tracker** — event `agent.completed`
+  kini membawa `model`/`prompt_tokens`/`completion_tokens`/`confidence`;
+  semua telemetry murni subscriber Event Bus, nol pemanggilan langsung dari
+  Dispatcher/Orchestrator (menepati janji desain Tahap 3).
+- **Cost budget → eskalasi Human Approval** — `Orchestrator.run()` hitung
+  `cost_for_trace()` setelah workflow selesai; melebihi
+  `COST_BUDGET_PER_TASK` pakai jalur `REVIEWING`+`HumanApprovalGate` yang
+  SAMA dengan `result.escalate` (Tahap 4), reason `"cost_budget_exceeded"`
+  (sudah didefinisikan sejak Tahap 4, baru dipakai sekarang).
+- `Orchestrator` punya `self.costs`/`self.metrics`/`self.tracer`, di-subscribe
+  lazy di awal `run()`/`run_single()` (constructor tak bisa `await`).
+- **Diverifikasi live end-to-end**: panggilan Claude sungguhan lewat
+  `Orchestrator()` — cost tercatat benar ($0.000423 untuk 1 kalimat jawaban),
+  metrics snapshot benar, timeline lengkap 7 event. `check_readiness()` live
+  melaporkan DB/Redis/Ollama/OpenAI/Claude/Gemini semua "ok". Cost-budget
+  escalation diverifikasi dengan agent token tinggi buatan → benar berhenti
+  di REVIEWING → `finalize_approval()` → COMPLETED.
+- **Ditemukan & diperbaiki (regresi dari Tahap 5, bukan Tahap 6 sendiri):**
+  container Docker `ai_engine_api` sudah gagal start ~2 jam sejak
+  `pgvector` ditambah ke `requirements.txt` tapi image `api`/`worker_ai`/
+  `worker_gis` tak pernah di-rebuild (Tahap 5 cuma rebuild `postgres`).
+  `uvicorn --reload` bikin container tetap tampak "Up" walau `init_db()`
+  gagal berulang — tak kelihatan dari `docker ps`, baru ketahuan saat
+  `curl /health/ready` dicoba live. Diperbaiki: rebuild + recreate ketiga
+  service; DNS error worker→redis yang ikut ketemu ternyata transient,
+  hilang sendiri setelah recreate.
+- **Gap yang diakui**: Workflow Dashboard tak bisa tampilkan "workflow aktif
+  sekarang" (TaskManager tak punya enumerasi); Provider Dashboard tanpa
+  status Circuit Breaker (Bab 55 belum diimplementasikan sama sekali);
+  Memory Dashboard cuma lapor `vector.count()` (tier lain tak punya metode
+  ukuran). Tak ada route API/frontend untuk dashboard — murni lapisan data.
 
 ## Test
-- **166/166 lulus** (`pytest -q`). Baru Tahap 5: `tests/unit/test_rag.py` (25
-  test — chunker, embeddings dengan fallback, InMemoryKnowledgeStore,
-  retriever + index_document, hybrid_search, rerank + llm_rerank (mocked),
-  context_builder) + 2 test baru di `test_providers.py` (Claude sampling-param
-  retry). Semua CI-safe (hashed-BOW/stub, bukan panggilan live) — backend
-  pgvector/provider nyata diverifikasi live terpisah (lihat di atas), sama
-  seperti PostgresConversationStore/PostgresLongTermStore Tahap 3 tak
-  di-unit-test langsung.
+- **206/206 lulus** (`pytest -q`). Baru Tahap 6: `test_tracing.py` (7),
+  `test_metrics.py` (12), `test_cost_tracker.py` (10), `test_monitoring.py`
+  (8) + 3 test integrasi Orchestrator (cost-budget escalation, under-budget
+  completes normally, metrics+tracer observe a run). Semua CI-safe (event
+  bus terisolasi per test via `InMemoryBroker()` sendiri) —
+  `check_readiness()`/`provider_dashboard()`/`queue_dashboard()` butuh
+  layanan hidup, diverifikasi live terpisah (sama seperti pola
+  Postgres*Store Tahap 3, PgVectorKnowledgeStore Tahap 5).
 
 ## Catatan penting untuk sesi berikutnya
-- Tahap 1-5 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
+- Tahap 1-6 **sudah di-commit** ke `main` (per tahap/topik, lihat `git log`).
 - Cloud API key AKTIF (bukan cuma Ollama lagi) — role apa pun yang dirutekan
-  ke openai/claude/gemini akan benar-benar keluar biaya. Jika perlu murni
+  ke openai/claude/gemini akan benar-benar keluar biaya, dan sekarang
+  benar-benar tercatat lewat `telemetry.cost_tracker`. Jika perlu murni
   offline lagi, kosongkan key di `.env` (Model Registry otomatis fallback ke
   Ollama, Bab 54).
 - `VECTOR_BACKEND=pgvector` aktif di `.env` lokal — Vector Memory & RAG
   korpus keduanya nyata sekarang, bukan in-memory. Default `.env.example`
   tetap `memory` untuk CI/dev baru; produksi eksplisit set `pgvector`.
-- Batas sengaja: `llm_rerank()` ada tapi tak otomatis dipasang (biaya/latensi
-  per query); RAG belum dikaitkan otomatis ke setiap dispatch Orchestrator —
-  pemanggil pakai `Retriever`/`build_context` eksplisit saat butuh (Bab 29
-  rule 4: RAG itu pengaya opsional, bukan wajib). Cost Tracking (Bab 27)
-  masih 0.0 di mana-mana (→ Tahap 6).
+- `TRACE_BACKEND`/`COST_BACKEND` default `memory` di `.env` lokal (belum
+  di-set ke `redis`) — cost/timeline hilang tiap restart proses. Set eksplisit
+  kalau butuh persisten.
+- **Ingat rebuild image Docker setiap kali `requirements.txt` berubah** —
+  ini persis penyebab regresi `ai_engine_api` yang baru diperbaiki;
+  `docker compose build <service>` lalu `up -d <service>`, bukan cuma restart.
+- Batas sengaja: `llm_rerank()` (Tahap 5) ada tapi tak otomatis dipasang;
+  RAG belum dikaitkan otomatis ke setiap dispatch Orchestrator. Circuit
+  Breaker (Bab 55) belum ada sama sekali — kandidat kuat untuk Tahap 7
+  (Security) atau tahap tersendiri.
 
-## Titik mulai Tahap 6
-Bangun Observability + Cost (Bab 27, 33-35): `telemetry/cost_tracker.py`
-(catat biaya token per agent/provider/task — provider layer sudah punya
-`prompt_tokens`/`completion_tokens` di `ProviderResponse`, tinggal dikalikan
-tarif per model), dashboard minimum (Bab 62) di atas event yang sudah mengalir
-sejak Tahap 3 (`agent.*`/`workflow.*`/`consensus.decided`), dan cost budget
-per-task/sesi yang memicu penghentian/eskalasi (bukan berjalan tanpa batas) —
-titik integrasi alami: Dispatcher (sudah emit event tiap percobaan) dan
-Human Approval gate (Bab 61.2 — biaya lampaui budget = wajib approval).
+## Titik mulai Tahap 7
+Bangun Security hardening (Bab 30, 31, 45, 58): `security/prompt_guard.py`
+(deteksi prompt injection sebelum masuk provider), `security/pii_detector.py`
+(redaksi PII di log/memory), `security/output_validator.py` (sinyal keempat
+untuk `ConfidenceScorer` Tahap 4 — sudah ditandai sebagai slot kosong sejak
+ADR-0007), `security/auth.py`/`permissions.py`, audit log append-only
+sungguhan (Bab 30 — `audit.log` saat ini cuma stdout redirect, bukan audit
+trail terstruktur), dan `Secrets Management Lanjutan` (Bab 58) untuk
+`.env`-based key seperti yang sekarang dipakai.
+

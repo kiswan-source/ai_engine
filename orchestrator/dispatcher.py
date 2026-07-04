@@ -13,6 +13,11 @@ A single agent failure never crashes the workflow: exhausted fallbacks yield an
 Tahap 3: agent lifecycle transitions (Bab 48) are published on the Event Bus —
 ``agent.assigned`` → ``agent.running`` → ``agent.completed`` /
 ``agent.retry`` / ``agent.failed`` — best-effort, per Bab 23 prinsip 1.
+
+Tahap 6: ``agent.completed`` carries ``model``/``prompt_tokens``/
+``completion_tokens``/``confidence`` in its payload so ``telemetry.cost_tracker``
+and ``telemetry.metrics`` can observe cost and latency purely by subscribing to
+the Event Bus — no direct coupling from this module to either.
 """
 from __future__ import annotations
 
@@ -72,7 +77,14 @@ class Dispatcher:
                 await self._emit(ev.AGENT_RUNNING, task, agent.agent_id, attempt=attempt)
                 result = await agent.execute(task)
                 await self._emit(
-                    ev.AGENT_COMPLETED, task, agent.agent_id, provider=result.provider_used
+                    ev.AGENT_COMPLETED,
+                    task,
+                    agent.agent_id,
+                    provider=result.provider_used,
+                    model=result.model_used,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    confidence=result.confidence,
                 )
                 return result
             except ProviderError as exc:
@@ -101,6 +113,10 @@ class Dispatcher:
                 task,
                 fallback_agent.agent_id,
                 provider=result.provider_used,
+                model=result.model_used,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                confidence=result.confidence,
                 degraded=True,
             )
             return result

@@ -98,6 +98,25 @@ class Settings(BaseSettings):
     # used elsewhere).
     RAG_MAX_CONTEXT_CHARS: int = 4000
 
+    # ─── Telemetry (MASTER_INSTRUCTION.md Bab 27, 33-35, 56, Tahap 6) ────────
+    # Execution timeline spans / cost usage records: "memory" (dev/CI) or
+    # "redis" (production, survives restarts, shareable across instances).
+    TRACE_BACKEND: str = "memory"
+    COST_BACKEND: str = "memory"
+    TRACE_MAX_SPANS_PER_TRACE: int = 200
+    # In-process latency sample cap per (metric key) — bounds memory, not a
+    # correctness knob (percentiles stay accurate enough over a rolling window).
+    METRICS_MAX_SAMPLES: int = 2000
+    # Cost Optimization (Bab 27 rule 4): budget that, once exceeded, escalates
+    # to Human Approval (Bab 61.2) rather than completing silently.
+    COST_BUDGET_PER_TASK: float = 5.0
+    # Daily budget (Bab 27, 56): exceeding it surfaces as an alert (Bab 35 rule
+    # 2), not an automatic block — no task/session context to escalate against.
+    COST_BUDGET_DAILY: float = 50.0
+    # Alert thresholds (Bab 35 rule 2).
+    ALERT_ERROR_RATE_THRESHOLD: float = 0.2
+    ALERT_LATENCY_P95_MS: int = 30000
+
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     GEMMA_MODEL: str = "gemma4:e2b"
