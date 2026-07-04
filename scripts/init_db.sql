@@ -1,48 +1,21 @@
--- Initialize PostGIS extensions and base schema
+-- Initialize extensions only. Table schemas are owned exclusively by
+-- db/models.py, created via init_db()'s Base.metadata.create_all() on app
+-- startup (CLAUDE.md: "No Alembic migrations ... schema changes require
+-- manual migration or init_db() re-run") — this script must never define a
+-- table, or a fresh volume gets that table from here (verbatim SQL, whatever
+-- types were written by hand) while every other table (conversation_messages,
+-- memory_entries, vector_embeddings, ...) comes from the ORM models, and the
+-- two silently drift apart. That already happened once: this file used to
+-- create gis_projects/ai_jobs/documents with `id UUID`, while db.models
+-- declares `id String(36)` for all tables — create_all()'s CREATE TABLE IF
+-- NOT EXISTS is a no-op when the table already exists, so the mismatch was
+-- permanent until manually fixed (ALTER COLUMN id TYPE VARCHAR(36) on the
+-- running DB, 2026-07-05; gis_projects' unused `geom` PostGIS column +
+-- GIST index were dropped with it — nothing in the codebase reads them, the
+-- ORM model stores geometry as `geojson JSON` instead).
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS postgis_topology;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS vector; -- pgvector (Bab 29, Tahap 5)
-
--- GIS Projects with geometry column
-CREATE TABLE IF NOT EXISTS gis_projects (
-    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name        VARCHAR(256) NOT NULL,
-    location    VARCHAR(512),
-    commodity   VARCHAR(128),
-    area_ha     DOUBLE PRECISION,
-    geom        GEOMETRY(MULTIPOLYGON, 4326),
-    status      VARCHAR(32) DEFAULT 'draft',
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_gis_projects_geom ON gis_projects USING GIST(geom);
-
--- AI Jobs log
-CREATE TABLE IF NOT EXISTS ai_jobs (
-    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    job_type      VARCHAR(64) NOT NULL,
-    status        VARCHAR(32) DEFAULT 'queued',
-    prompt        TEXT,
-    result        TEXT,
-    error         TEXT,
-    model         VARCHAR(64) DEFAULT 'gemma3:27b',
-    duration_ms   INTEGER,
-    created_at    TIMESTAMPTZ DEFAULT NOW(),
-    completed_at  TIMESTAMPTZ
-);
-
--- Documents store
-CREATE TABLE IF NOT EXISTS documents (
-    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    filename      VARCHAR(512) NOT NULL,
-    doc_type      VARCHAR(64),
-    content_text  TEXT,
-    summary       TEXT,
-    entities      JSONB,
-    word_count    INTEGER,
-    created_at    TIMESTAMPTZ DEFAULT NOW()
-);
 
 SELECT PostGIS_Version();
