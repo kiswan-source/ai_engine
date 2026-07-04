@@ -29,6 +29,11 @@ class WorkflowResult:
     step_outputs: dict[str, AgentResult] = field(default_factory=dict)
     degraded: bool = False
     failed: bool = False
+    # Set when the result needs Human Approval before it can complete (Bab 25
+    # rule 3, Bab 61) — e.g. Reflection never reached its confidence threshold,
+    # or Consensus/Voting agreement fell below it. The Orchestrator, not this
+    # dataclass, decides what to do about it.
+    escalate: bool = False
 
 
 class BaseWorkflow(ABC):
@@ -42,7 +47,12 @@ class BaseWorkflow(ABC):
         raise NotImplementedError
 
     @staticmethod
-    def _aggregate(mode: str, trace_id: str, ordered: list[tuple[str, AgentResult]]) -> WorkflowResult:
+    def _aggregate(
+        mode: str,
+        trace_id: str,
+        ordered: list[tuple[str, AgentResult]],
+        escalate: bool = False,
+    ) -> WorkflowResult:
         """Build a :class:`WorkflowResult` from ``(step_id, result)`` pairs."""
         results = [r for _, r in ordered]
         step_outputs = dict(ordered)
@@ -63,4 +73,5 @@ class BaseWorkflow(ABC):
             step_outputs=step_outputs,
             degraded=degraded,
             failed=failed,
+            escalate=escalate,
         )

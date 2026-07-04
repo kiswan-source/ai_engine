@@ -1,9 +1,11 @@
 """Planner — turns a request into an execution plan (MASTER_INSTRUCTION.md Bab 18).
 
 Deterministic/rule-based by design (Bab 18): given a prompt and an ordered list
-of agent roles, it builds an :class:`ExecutionGraph`. Sequential plans chain the
-steps (each depends on the previous); parallel plans leave steps independent.
-An LLM-driven planner (Planner Agent, Bab 17) can replace this later without
+of agent roles, it builds an :class:`ExecutionGraph`. Chained modes
+(``sequential``, ``reflection``) make each step depend on the previous one;
+independent modes (``parallel``, ``voting``, ``consensus``) leave every step
+free of dependencies so its workflow can dispatch them all at once. An
+LLM-driven planner (Planner Agent, Bab 17) can replace this later without
 changing the orchestrator contract.
 """
 from __future__ import annotations
@@ -14,12 +16,17 @@ from agents.base_agent import Task, new_id
 
 from .execution_graph import ExecutionGraph, Step
 
+# Modes whose steps chain (each depends on the previous); all other known
+# modes run their steps independently (Bab 24).
+_CHAINED_MODES = frozenset({"sequential", "reflection"})
+_KNOWN_MODES = _CHAINED_MODES | frozenset({"parallel", "voting", "consensus"})
+
 
 @dataclass
 class Plan:
     """The chosen workflow mode plus the graph of steps to run."""
 
-    mode: str  # "sequential" | "parallel"
+    mode: str  # one of workflows.WORKFLOWS
     graph: ExecutionGraph
     trace_id: str
 
@@ -40,16 +47,20 @@ class Planner:
         """Create a :class:`Plan` for ``roles`` over ``prompt``.
 
         Args:
-            roles: Ordered agent roles participating in the workflow.
-            mode: ``"sequential"`` (chained) or ``"parallel"`` (independent).
+            roles: Ordered agent roles participating in the workflow. For
+                ``voting``/``consensus`` these are the independent candidates
+                (e.g. ``["writer", "analyst", "critic"]``) all answering the
+                same prompt.
+            mode: A key of ``workflows.WORKFLOWS`` (sequential/parallel/
+                reflection/voting/consensus).
 
         Raises:
             ValueError: If ``roles`` is empty or ``mode`` is unknown.
         """
         if not roles:
             raise ValueError("plan requires at least one role")
-        if mode not in ("sequential", "parallel"):
-            raise ValueError(f"unknown workflow mode: {mode!r}")
+        if mode not in _KNOWN_MODES:
+            raise ValueError(f"unknown workflow mode: {mode!r} (have: {sorted(_KNOWN_MODES)})")
 
         trace_id = trace_id or new_id()
         graph = ExecutionGraph()
@@ -65,7 +76,7 @@ class Planner:
                 max_tokens=max_tokens,
                 metadata={"step_index": index},
             )
-            depends = (prev_id,) if (mode == "sequential" and prev_id) else ()
+            depends = (prev_id,) if (mode in _CHAINED_MODES and prev_id) else ()
             graph.add_step(Step(step_id=step_id, task=task, depends_on=depends))
             prev_id = step_id
 

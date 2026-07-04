@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     TASK_STATE_BACKEND: str = "memory"
     TASK_STATE_TTL: int = 86400
 
+    # ─── Reflection / Consensus / Confidence / Human Approval (Bab 25-28, 57, 61, Tahap 4) ──
+    # Reflection Engine (Bab 25): max self-review rounds before escalating.
+    REFLECTION_MAX_ITERATIONS: int = 3
+    # Confidence Scoring (Bab 28): per-domain thresholds — high-risk domains are stricter.
+    CONFIDENCE_THRESHOLD_DEFAULT: float = 0.6
+    CONFIDENCE_THRESHOLD_HIGH_RISK: float = 0.85
+    # Consensus Engine (Bab 26): structured-debate rounds before arbitration.
+    CONSENSUS_DEBATE_ROUNDS: int = 1
+    # Feature flags (Bab 57).
+    ENABLE_CONSENSUS_VOTING: bool = True
+    ENABLE_HUMAN_APPROVAL: bool = True
+    # Human In The Loop (Bab 61.3): SLA before a pending approval counts as overdue.
+    APPROVAL_SLA_SECONDS: int = 3600
+
     # ─── Provider Layer (MASTER_INSTRUCTION.md Bab 16) ───────────────────────
     # Shared timeout (seconds) for cloud provider HTTP calls (Bab 9 — timeout
     # mandatory on every external call).

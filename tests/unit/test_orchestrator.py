@@ -355,3 +355,95 @@ async def test_failed_dispatch_publishes_agent_failed(monkeypatch):
     assert seen[0] == "agent.assigned"
     assert "agent.retry" in seen
     assert seen[-1] == "agent.failed"
+
+
+# ─── Tahap 4: Reflection/Consensus modes + Human Approval gate (Bab 25, 26, 61) ─
+
+async def test_orchestrator_reflection_mode_completes_when_confident():
+    reg = registry_with(StubAgent("writer", output="jawaban bagus"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("tulis sesuatu", ["writer"], mode="reflection")
+
+    assert not result.escalate
+    assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
+
+
+async def test_orchestrator_voting_mode_wires_through():
+    reg = registry_with(
+        StubAgent("writer", output="ya"),
+        StubAgent("analyst", output="ya"),
+        StubAgent("critic", output="ya"),
+    )
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("setuju?", ["writer", "analyst", "critic"], mode="voting")
+
+    assert result.final_output == "ya"
+    assert not result.escalate
+    assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
+
+
+async def test_orchestrator_escalates_to_review_and_finalizes_on_approval():
+    class UnconfidentAgent(StubAgent):
+        async def execute(self, task):
+            res = await super().execute(task)
+            import dataclasses
+
+            return dataclasses.replace(res, confidence=0.01)
+
+    reg = registry_with(UnconfidentAgent("writer", output="jawaban lemah"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("tulis sesuatu", ["writer"], mode="reflection")
+
+    assert result.escalate
+    assert orch.tasks.state_of(result.trace_id) == State.REVIEWING
+    assert orch.pending_approvals()[0].trace_id == result.trace_id
+
+    final_state = await orch.finalize_approval(
+        result.trace_id, approved=True, decided_by="rudy", reason="acceptable for internal use"
+    )
+    assert final_state == State.COMPLETED
+    assert orch.pending_approvals() == []
+
+
+async def test_orchestrator_finalize_approval_rejected_cancels_task():
+    class UnconfidentAgent(StubAgent):
+        async def execute(self, task):
+            res = await super().execute(task)
+            import dataclasses
+
+            return dataclasses.replace(res, confidence=0.01)
+
+    reg = registry_with(UnconfidentAgent("writer", output="jawaban lemah"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("tulis sesuatu", ["writer"], mode="reflection")
+
+    final_state = await orch.finalize_approval(result.trace_id, approved=False, decided_by="rudy")
+    assert final_state == State.CANCELLED
+
+
+async def test_orchestrator_disabled_human_approval_falls_through(monkeypatch):
+    monkeypatch.setattr("api.config.settings.ENABLE_HUMAN_APPROVAL", False)
+
+    class UnconfidentAgent(StubAgent):
+        async def execute(self, task):
+            res = await super().execute(task)
+            import dataclasses
+
+            return dataclasses.replace(res, confidence=0.01)
+
+    reg = registry_with(UnconfidentAgent("writer", output="jawaban lemah"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("tulis sesuatu", ["writer"], mode="reflection")
+
+    assert result.escalate
+    # gate disabled: task must still resolve to a terminal state, not hang in REVIEWING.
+    assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
+    assert orch.pending_approvals() == []
+
+
+async def test_orchestrator_rejects_disabled_consensus_voting(monkeypatch):
+    monkeypatch.setattr("api.config.settings.ENABLE_CONSENSUS_VOTING", False)
+    reg = registry_with(StubAgent("writer", output="x"))
+    orch = Orchestrator(agent_registry=reg)
+    with pytest.raises(ValueError):
+        await orch.run("p", ["writer"], mode="voting")
