@@ -66,6 +66,12 @@ if ui_path.exists():
     async def serve_ui():
         return FileResponse(ui_path)
 
+v3_path = BASE_DIR / "ai_engine_ui_v3.html"
+if v3_path.exists():
+    @app.get("/v3")
+    async def serve_v3():
+        return FileResponse(v3_path)
+
 # ─── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI"])
@@ -96,8 +102,3 @@ async def global_exception_handler(request, exc):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # ── CORS fix + static file serving ──────────────────────────
-
-@app.get("/v3")
-async def serve_v3():
-    from fastapi.responses import FileResponse
-    return FileResponse("/home/rudy/ai_engine/ai_engine_ui_v3.html")

@@ -172,6 +172,13 @@ class ChatEngine:
             "messages": messages,
             "tools": TOOL_SCHEMAS,
             "stream": True,
+            # gemma4:e2b is a "thinking" model: by default Ollama streams all its
+            # reasoning into message.thinking while message.content stays empty.
+            # We only surface content, so that phase looked like the assistant was
+            # frozen ("tidak menjawab") — several silent seconds per turn, repeated
+            # before every tool round on multi-step tasks. Disable it so tokens
+            # (and tool_calls) come immediately. Verified tool-calling still works.
+            "think": False,
             # num_ctx must be set explicitly — Ollama's 4096-token default would
             # truncate the system prompt + injected file content on long turns,
             # which is why the model would otherwise seem to ignore the file.

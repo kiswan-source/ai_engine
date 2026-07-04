@@ -12,11 +12,15 @@ source venv/bin/activate
 # Run API server (dev mode, port 8001)
 uvicorn api.main:app --host 0.0.0.0 --port 8001 --reload
 
-# Run tests
+# Run tests (pytest.ini sets asyncio_mode=auto + testpaths=tests, so bare `pytest` works from root)
+pytest                                   # Full suite (async tests auto-detected)
 pytest tests/unit/ -v                    # Unit tests (no services needed)
 pytest tests/integration/ -v             # Integration tests (mocked)
 pytest tests/unit/test_gis_processor.py  # Single test file
+pytest --cov --cov-report=term-missing   # With coverage (matches CI)
 ```
+
+> CI (`.github/workflows/ci.yml`) runs `pytest --cov` on Python 3.12 for every push/PR to `main`. It installs only `requirements.txt` and does **not** stand up Postgres/Redis/Ollama, so tests must pass without live services (unit + mocked integration only).
 
 ### Docker (production-like, port 8000)
 ```bash
@@ -44,7 +48,8 @@ FastAPI app (`api/main.py`) with routers under `api/routes/`. Only the routers w
 - `/api/v1/docs/*` — upload-and-analyze a document (`api/routes/docs.py`)
 - `/api/dokumen/*` — formal mining-document generation (`api/routes/dokumen.py`, see §6)
 - `/reports/*`, `/upload`, `/uploads` — file serving + uploads (`api/routes/files.py`)
-- `/` — new ChatGPT-style UI (`web/index.html`, static assets under `/web`). `/ui` and `/v3` still serve the legacy HTML UIs.
+- `/health/*` — liveness/readiness probes (e.g. `/health/ready` checks Ollama + Gemma). CI and Docker healthchecks hit these.
+- `/` — new ChatGPT-style UI (`web/index.html`, static assets under `/web`). `/ui` and `/v3` served the legacy HTML UIs; both files were removed, so those routes no longer register.
 
 Configuration lives in `api/config.py` (pydantic-settings, reads from `.env`).
 
