@@ -19,6 +19,7 @@ from api.routes import dokumen as dokumen_router
 from api.routes import files as files_router
 from api.routes import chat as chat_router
 from api.routes import orchestrator as orchestrator_router
+from api.routes import monitoring as monitoring_router
 
 logger = get_logger(__name__)
 
@@ -57,9 +58,14 @@ setup_middleware(app)
 from fastapi.responses import FileResponse
 
 BASE_DIR = Path(__file__).parent.parent
-WEB_DIR = BASE_DIR / "web"
-if WEB_DIR.exists():
-    app.mount("/web", StaticFiles(directory=str(WEB_DIR)), name="web")
+# web/ is now the React app's source (FRONTEND_ARCHITECTURE.md §1) — built via
+# `npm run build` (web/) into web/dist/, which is what's served in production.
+# In dev, run `npm run dev` in web/ separately (Vite dev server, proxying
+# /api and /health back to this app per web/vite.config.ts) instead of hitting
+# this app's "/" directly.
+WEB_DIST_DIR = BASE_DIR / "web" / "dist"
+if (WEB_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(WEB_DIST_DIR / "assets")), name="web-assets")
 
 ui_path = BASE_DIR / "ai_engine_ui.html"
 if ui_path.exists():
@@ -84,18 +90,29 @@ app.include_router(files_router.router, prefix="", tags=["Files"])
 app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"])
 app.include_router(chat_router.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", tags=["Orchestrator"])
+app.include_router(monitoring_router.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
 
-@app.get("/", tags=["Root"], include_in_schema=False)
-async def root():
-    index = WEB_DIR / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return {
-        "app": settings.APP_NAME,
-        "version": "1.0.0",
-        "status": "ok",
-        "links": {"docs": "/docs", "chat": "/", "legacy_ui": "/ui"},
-    }
+if (WEB_DIST_DIR / "index.html").exists():
+    # SPA fallback: React Router (FRONTEND_ARCHITECTURE.md §5) owns client-side
+    # routes like /chat, /workflow, /approval — a hard refresh/direct link on
+    # any of those must still get index.html from the server, not a 404.
+    # Registered last so it never shadows the API routers/mount above it.
+    @app.get("/{full_path:path}", tags=["Root"], include_in_schema=False)
+    async def serve_spa(full_path: str):
+        candidate = WEB_DIST_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(WEB_DIST_DIR / "index.html")
+else:
+
+    @app.get("/", tags=["Root"], include_in_schema=False)
+    async def root():
+        return {
+            "app": settings.APP_NAME,
+            "version": "1.0.0",
+            "status": "ok",
+            "links": {"docs": "/docs", "chat": "/", "legacy_ui": "/ui"},
+        }
 
 
 @app.exception_handler(Exception)

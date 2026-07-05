@@ -1,53 +1,13 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Engine — Asisten File Lokal</title>
-  <link rel="stylesheet" href="/web/style.css">
-</head>
-<body>
-  <div id="app">
-    <aside id="sidebar">
-      <button id="new-chat">＋ Chat Baru</button>
-      <div id="sessions"></div>
-      <div class="sidebar-footer">
-        <label for="model">Model</label>
-        <select id="model"></select>
-        <div class="hint">Lokal via Ollama · Gemma</div>
-      </div>
-    </aside>
-
-    <main>
-      <header>
-        <h1>AI Engine</h1>
-        <span class="sub">Baca &amp; buat file: PDF · DOCX · CSV · Gambar · KML/GeoJSON/SHP</span>
-      </header>
-
-      <div id="messages">
-        <div class="empty-state">
-          <h2>Halo 👋</h2>
-          <p>Unggah file lalu minta saya membaca, meringkas, mengonversi, atau membuat dokumen.</p>
-          <ul>
-            <li>“Ringkas PDF ini jadi DOCX”</li>
-            <li>“Konversi KML ke Shapefile dan hitung luasnya”</li>
-            <li>“Resize gambar ini ke 800px dan ubah ke JPG”</li>
-          </ul>
-        </div>
-      </div>
-
-      <div id="composer">
-        <div id="file-chips"></div>
-        <div class="input-row">
-          <button id="attach" title="Lampirkan file">📎</button>
-          <input type="file" id="file-input" multiple hidden>
-          <textarea id="prompt" rows="1" placeholder="Tulis pesan… (Shift+Enter untuk baris baru)"></textarea>
-          <button id="send" title="Kirim">➤</button>
-        </div>
-        <div class="drop-hint" id="drop-hint">Lepaskan file di sini…</div>
-      </div>
-    </main>
-  </div>
-  <script src="/web/app.js"></script>
-</body>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Engine</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

@@ -1,8 +1,11 @@
 # AI_ENGINE v4 — Catatan Progres & Resume
 
 > Catatan lanjutan pembangunan enterprise multi-agent per `MASTER_INSTRUCTION.md`
-> (tersimpan di `D:\01_Project\AI ENGINE` = `/mnt/d/01_Project/AI ENGINE`).
-> Sumber kebenaran = MASTER_INSTRUCTION.md (67 Bab) + 9 dokumen pendamping.
+> (tersimpan di `D:\01_Project\AI ENGINE` = `/mnt/d/01_Project/AI ENGINE`,
+> **bukan** di `docs/` repo git ini — dua lokasi berbeda).
+> Sumber kebenaran = MASTER_INSTRUCTION.md (v1.3, 68 Bab) + 16 dokumen pendamping
+> (9 backend, 2 product-facing, 5 implementation-facing dari FINAL ARCHITECTURE
+> DECISION 5 Juli 2026).
 
 ## Status per 2026-07-05
 
@@ -19,6 +22,7 @@
 | 9* | Circuit Breaker (Bab 55) — pasca-roadmap, prioritas #1 gap kumulatif | ✅ SELESAI |
 | 10* | RBAC ke `agent/tools/` — pilot 1 tool (`write_pdf`), Bab 30 rule 2 | ✅ SELESAI |
 | 11* | UI Multi-Agent — expose `orchestrator/`+`agents/`+`workflows/` ke web UI | ✅ SELESAI |
+| 12* | Frontend AI Workspace (React) Phase 1 + Monitoring dashboard (Phase 2 parsial) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -379,21 +383,119 @@
   Chat tampil seperti semula, panel Multi-Agent tampil dengan 15 role chip
   ter-load dari API sungguhan.
 
+**Tahap 12 — Frontend AI Workspace (React), Phase 1 penuh + Phase 2 parsial (Monitoring)**
+
+Bukan permintaan langsung dari roadmap backend — dipicu 19 dokumen blueprint
+produk/arsitektur frontend (`MASTER_INSTRUCTION.md` §67, tersimpan di
+`/mnt/d/01_Project/AI ENGINE/docs/`, **bukan** `docs/` repo ini) yang
+menetapkan `AI_ENGINE` sebagai **AI Workspace** (bukan sekadar chat), dengan
+stack final React + TypeScript + Vite + TailwindCSS v4 + shadcn/ui + React
+Router + Zustand + Lucide + ESLint + Prettier + Vitest + RTL
+(`FRONTEND_ARCHITECTURE.md`/`DESIGN_SYSTEM.md`).
+
+- **`API_CONTRACT.md` blueprint sudah basi terhadap kode nyata** saat dibaca —
+  kontrak `chat.py` di dokumen itu (`POST /chat/messages`) beda total dari
+  `chat.py` sungguhan (`/stream` SSE, `/upload`, `/sessions`, `/models`), dan
+  `orchestrator.py` didokumentasikan "Perlu Baru" padahal sudah wired sejak
+  Tahap 11. Seluruh frontend dibangun dari kontrak API **nyata**, diverifikasi
+  langsung dari source, bukan dari blueprint yang basi.
+- **`web/` dibangun ulang dari nol** (FINAL ARCHITECTURE DECISION: no gradual
+  migration) — frontend lama (`app.js`, `index.html`, `style.css`,
+  `orchestrator.js` dari Tahap 11) di-backup ke `backups/web_legacy_20260705/`
+  sebelum dihapus, tidak hilang. Struktur folder persis
+  `FRONTEND_ARCHITECTURE.md` §1: 11 Zustand store (ui/chat/workflow/agent/
+  approval/history/settings/notification/attachment/session/project),
+  `services/{apiClient,chatService,workflowService,fileService,
+  monitoringService,eventStream}.ts`, `types/`, `hooks/`.
+- **Chat, Workflow (Timeline minimal via polling `/run` sinkron), Approval
+  minimal, History, Settings, Files sungguhan jalan** — bukan mock. Files
+  awalnya placeholder Phase 2 lalu diwire sungguhan begitu ketahuan
+  `files.py` (`GET /reports`, `GET /uploads`, `POST /upload`, prefix root)
+  sudah READY. `services/eventStream.ts` ditulis mengikuti `EVENT_CATALOG.md`
+  (event kanonis PascalCase) tapi belum dipakai — endpoint SSE canonical
+  belum ada di backend.
+- **`api/routes/monitoring.py` baru** (bukan folder fondasi): `GET
+  /dashboard` (7 dari 8 dashboard Bab 62 — Agent/Workflow/Provider/Cost/
+  Latency/Health/Queue; Memory Dashboard sengaja dilewati, lihat gap di
+  bawah), `GET /alerts`. Reuse `_orchestrator` singleton dari
+  `api/routes/orchestrator.py`, panggil `_ensure_telemetry_started()` karena
+  telemetry cuma `.start()` lazy dari `Orchestrator.run()`, bukan app
+  startup.
+- **`api/main.py` diubah**: serve `web/dist` (build output) + SPA fallback
+  `/{full_path:path}` untuk client-side routing React Router; mount lama
+  `/web` (raw source) dihapus.
+- **Riset sebelum bangun (Phase 2 Memory/Knowledge)**: dicek dulu apakah
+  `memory/`/`rag/` (Tahap 3/5) siap diekspos — ternyata **belum**: `memory/`
+  6 tier tidak punya method enumerasi sesi/scope di tier manapun, dan
+  `core/chat/engine.py` (fondasi terlindungi) tidak pernah menulis ke
+  `memory/` sama sekali (dua sistem terpisah total); `rag/` nol wiring ke
+  endpoint manapun, tidak ada ingest/list method. Ditanyakan ke Boss —
+  Memory & Knowledge tetap placeholder (alasan diperbarui: gap integrasi
+  backend, bukan "API belum dibangun").
+- **Diverifikasi live end-to-end** (headless Chromium via Playwright — tidak
+  ada `chromium-cli` di lingkungan ini, dipakai REPL driver custom sekali
+  pakai): Chat streaming token Gemma sungguhan, Workflow run role `tool`
+  sungguhan lewat `/run`, Approval poll endpoint asli, History dari sesi
+  chat asli, Settings dari `/models` asli, Files dari `reports/`/`uploads/`
+  asli, dan **Monitoring numbers berubah live** setelah workflow run
+  (latensi 0→16.73s, workflow selesai 0→1) — bukti telemetry pipeline
+  genuinely live. 0 console error di seluruh halaman.
+
 ## Test
-- **308/308 lulus** (`pytest -q`). Baru Tahap 10: 12 test (lihat di atas).
-  Baru Tahap 11: 9 test integrasi `tests/integration/test_orchestrator_api.py`
+- **Backend: 308/308 lulus** (`pytest -q`, tidak berubah dari Tahap 11 —
+  Tahap 12 murni frontend + satu route baru tipis tanpa test Python
+  tambahan; `api/routes/monitoring.py` diverifikasi via curl + browser
+  langsung, bukan pytest). Baru Tahap 10: 12 test (lihat di atas). Baru
+  Tahap 11: 9 test integrasi `tests/integration/test_orchestrator_api.py`
   (roles/modes, tolak roles kosong/mode tak dikenal, sequential selesai,
   eskalasi reflection masuk daftar approval, decide menyelesaikan/menolak,
   404 trace_id tak dikenal, 403 role tak cukup) — agent distub persis pola
   `tests/unit/test_orchestrator.py`, nol panggilan provider sungguhan.
+- **Frontend (`web/`): 5/5 lulus** (`npm test`, Vitest + React Testing
+  Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
+  `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-11, diakui bukan disamarkan)
-- **UI Multi-Agent baru mencakup jalur run+approve** (Tahap 11); belum ada
-  tampilan untuk dashboard observability (cost/latency/provider/memory —
-  gap ini dicatat sejak Tahap 6) atau untuk melihat Execution Timeline
-  (`Tracer`). ChatEngine (`core/chat/`) dan Orchestrator tetap dua sistem
-  terpisah tanpa jembatan — pengguna memilih salah satu lewat tab, tools
-  file (baca/tulis/GIS) tetap hanya ada di jalur Chat.
+## Gap kumulatif (Tahap 1-12, diakui bukan disamarkan)
+- **Dashboard observability kini ADA di web UI (Tahap 12, menutup gap sejak
+  Tahap 6)** — `MonitoringPage.tsx` + `api/routes/monitoring.py`, 7 dari 8
+  dashboard Bab 62. Yang masih gap: **Memory Dashboard** (field ke-5
+  `vector_entries` butuh instance `VectorMemory` yang tak berguna tanpa
+  integrasi ChatEngine↔memory/ — lihat bawah); **Execution Timeline**
+  (`Tracer.timeline(trace_id)`) belum ada di UI sama sekali, dan tak bisa
+  didaftar tanpa `trace_id` diketahui dulu (tak ada method "list semua
+  trace_id").
+- **ChatEngine (`core/chat/`) dan `memory/` (Tahap 3) dua sistem terpisah
+  total** — bukan sekadar "belum ada route API" seperti diasumsikan
+  `IMPLEMENTATION_BLUEPRINT.md`. `core/chat/engine.py` (fondasi terlindungi)
+  tidak pernah menulis ke `memory/` tier manapun; keenam tier `memory/` juga
+  tidak punya method enumerasi sesi/scope di tier manapun (working/
+  conversation/summary/long-term/reflection — semua butuh scope/session_id/
+  namespace diketahui dulu, cuma Vector Memory yang punya `count()`).
+  Frontend `Memory` page tetap placeholder karena diwire sekarang = selalu
+  kosong. Mengisi gap ini butuh (a) integrasi ChatEngine→memory/ (strangler
+  pattern, sentuh fondasi hati-hati) DAN/ATAU (b) tambah method enumerasi ke
+  tiap tier — dua pekerjaan backend terpisah, belum dimulai.
+- **`rag/` (Tahap 5) nol wiring ke endpoint HTTP manapun** — bukan cuma
+  frontend yang kurang. Tidak ada route ingest dokumen, tidak ada route
+  list sumber pengetahuan; `KnowledgeStore` sendiri tidak punya method
+  "list semua namespace/dokumen". Frontend `Knowledge` page tetap
+  placeholder — butuh keputusan desain produk (UX ingest: upload file?
+  paste teks? chunking otomatis?) sebelum jadi tugas coding.
+- **`services/eventStream.ts` (frontend) ditulis tapi belum dipakai** —
+  mengikuti kontrak `EVENT_CATALOG.md` (event kanonis PascalCase:
+  `WorkflowCreated`/`AgentStarted`/dst.), siap pasang begitu ada endpoint
+  SSE canonical sungguhan. Saat ini Timeline (`WorkflowPage.tsx`) masih
+  polling `POST /api/v1/orchestrator/run` yang **sinkron** (blocking sampai
+  workflow selesai, bukan event per-langkah) — real-time granular belum
+  ada.
+- **`api/routes/monitoring.py` tidak dipasangi RBAC** — sama seperti
+  `orchestrator.py` (kecuali endpoint decide approval), rute ini terbuka
+  tanpa autentikasi. Konsisten dengan gap RBAC yang sudah dicatat di bawah,
+  bukan regresi baru.
+- **UI Multi-Agent baru mencakup jalur run+approve** (Tahap 11), kini juga
+  Monitoring (Tahap 12); ChatEngine (`core/chat/`) dan Orchestrator tetap
+  dua sistem terpisah tanpa jembatan — pengguna memilih salah satu lewat
+  tab, tools file (baca/tulis/GIS) tetap hanya ada di jalur Chat.
 - **RBAC ke `agent/tools/` dimulai** (Tahap 10, ADR-0013) tapi baru
   `write_pdf`; `write_docx`/`write_html`/`write_txt`/`write_json`/
   `write_geojson`/`write_shp`/`convert_geo`/`generate_code` masih terbuka
@@ -429,17 +531,25 @@
 
 ## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
-Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), dan UI
-Multi-Agent (Tahap 11, permintaan langsung Boss) semua selesai 2026-07-05.
-Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1)
-lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo` lain satu per satu
-(pola sama seperti ADR-0013, tinggal tambah entri `TOOL_RISK_ACTIONS`);
-(2) dashboard observability di web UI (cost/latency/provider/memory —
-data sudah ada di `telemetry/monitoring.py`, cuma butuh route + panel baru
-seperti pola Tahap 11); (3) Dockerfile multi-stage dengan rebuild+verifikasi
+Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
+Multi-Agent (Tahap 11), dan Frontend AI Workspace + Monitoring (Tahap 12)
+semua selesai 2026-07-05. Kandidat prioritas berikutnya, dari yang paling
+murah dieksekusi: (1) lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo`
+lain satu per satu (pola sama seperti ADR-0013, tinggal tambah entri
+`TOOL_RISK_ACTIONS`); (2) Dockerfile multi-stage dengan rebuild+verifikasi
 live penuh (bukan cuma review kode) mengingat riwayat insiden ADR-0009;
-(4) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (5) Bab 68
+(3) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (4) Bab 68
 Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
 — belum satupun dimulai.
+
+**Untuk lanjutan frontend spesifik (Phase 2 sisa + Phase 3)**: (a) Memory
+page — butuh keputusan scope dulu (integrasi ChatEngine↔`memory/` vs.
+method enumerasi per tier vs. skip); (b) Knowledge page — butuh desain
+UX ingest dokumen dulu sebelum `api/routes/knowledge.py` dibangun; (c)
+Timeline/Approval versi penuh — butuh endpoint SSE canonical baru
+(`EVENT_CATALOG.md`) menggantikan polling `POST /run` sinkron saat ini;
+(d) Phase 3 (Projects/Plugin/Automation/Vision/MCP) — semua masih
+`NOT IMPLEMENTED` di backend, lihat `PROJECT_SPECIFICATION.md` untuk desain
+awal entity Project.
 
