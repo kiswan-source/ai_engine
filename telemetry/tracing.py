@@ -1,7 +1,8 @@
 """Execution Tracing (MASTER_INSTRUCTION.md Bab 34) — reconstruct the Execution Timeline.
 
 Subscribes to the Event Bus (``agent.*``, ``workflow.*``, ``consensus.decided``,
-``security.*`` — every trace_id-carrying domain event, Bab 23 prinsip 1) and
+``security.*``, ``circuit.*`` — every trace_id-carrying domain event, Bab 23
+prinsip 1) and
 records each as a :class:`Span` keyed by trace_id, so any multi-agent task
 can be reconstructed end-to-end: which agent ran, when, with which provider,
 how long, what happened, and any guardrail/audit action taken along the way
@@ -25,7 +26,7 @@ from messaging.schemas import Event
 
 logger = get_logger(__name__)
 
-_PATTERNS = ("agent.*", "workflow.*", "consensus.decided", "security.*")
+_PATTERNS = ("agent.*", "workflow.*", "consensus.decided", "security.*", "circuit.*")
 
 
 @dataclass(frozen=True)

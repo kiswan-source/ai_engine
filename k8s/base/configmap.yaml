@@ -44,6 +44,16 @@ data:
   PROVIDER_TIMEOUT: "120"
   PROVIDER_MAX_RETRIES: "2"
   PROVIDER_RETRY_BACKOFF: "1.0"
+
+  # ─── Circuit Breaker (Bab 55, Tahap 9) ────────────────────────────────────
+  ENABLE_CIRCUIT_BREAKER: "true"
+  CIRCUIT_FAILURE_THRESHOLD: "5"
+  CIRCUIT_RECOVERY_TIMEOUT: "30"
+  CIRCUIT_TRIAL_REQUESTS: "1"
+  CIRCUIT_PROVIDER_OVERRIDES: ""
+  # redis so every API replica sees the same breaker state (Bab 38 rule 1) —
+  # a provider tripped by one pod stays tripped for all of them.
+  CIRCUIT_STATE_BACKEND: "redis"
   OPENAI_BASE_URL: "https://api.openai.com/v1"
   OPENAI_MODEL: "gpt-4o"
   OPENAI_EMBED_MODEL: "text-embedding-3-small"

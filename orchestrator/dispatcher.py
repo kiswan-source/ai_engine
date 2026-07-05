@@ -5,7 +5,13 @@ Implements the tiered Fallback Strategy (MASTER_INSTRUCTION.md Bab 54):
     1. Retry           — same agent/provider with exponential backoff (Bab 9).
     2. Switch Provider — a fallback agent (local Ollama per Model Registry, Bab 20).
     3. Graceful Degrade — fallback result is flagged ``degraded=True`` (Bab 54.3).
-    4. (Escalation / Circuit Breaker land in Tahap 4 / dedicated modules.)
+    4. (Escalation lives in the Orchestrator/HumanApprovalGate, Tahap 4.)
+
+Tahap 9: a Circuit Breaker per provider (Bab 55, ``providers/circuit_breaker``)
+sits in front of tiers 1–2. A provider whose breaker is Open is skipped without
+being called (straight to Switch Provider; both Open → fail fast), and every
+call's outcome feeds the breaker so repeated failures trip it. Disable via
+``ENABLE_CIRCUIT_BREAKER=false``.
 
 A single agent failure never crashes the workflow: exhausted fallbacks yield an
 ``AgentResult`` with ``error`` set, not an exception (Bab 10.4).
@@ -45,11 +51,27 @@ class Dispatcher:
         max_retries: int | None = None,
         backoff_base: float | None = None,
         event_bus: EventBus | None = None,
+        breakers=None,
     ) -> None:
         self._routing = routing_engine
         self._max_retries = settings.PROVIDER_MAX_RETRIES if max_retries is None else max_retries
         self._backoff = settings.PROVIDER_RETRY_BACKOFF if backoff_base is None else backoff_base
         self._events = event_bus or EventBus()
+        if breakers is not None:
+            self._breakers = breakers
+        elif settings.ENABLE_CIRCUIT_BREAKER:
+            from providers.circuit_breaker import breakers as default_breakers
+
+            # Shared default registry — same instance the Provider Dashboard
+            # reads, so skip decisions and dashboard state can't diverge.
+            self._breakers = default_breakers
+        else:
+            self._breakers = None
+
+    def _breaker(self, provider: str | None):
+        if self._breakers is None or not provider:
+            return None
+        return self._breakers.for_provider(provider)
 
     async def _emit(self, event_type: str, task: Task, agent_id: str, **payload) -> None:
         await self._events.emit(
@@ -70,43 +92,75 @@ class Dispatcher:
 
         await self._emit(ev.AGENT_ASSIGNED, task, agent.agent_id)
 
-        # Tier 1: retry on the primary agent/provider.
+        # Tier 1: retry on the primary agent/provider — unless its breaker is
+        # Open (Bab 55: reject without calling the provider at all).
+        breaker = self._breaker(getattr(agent, "default_provider", None))
         last_error: str | None = None
-        for attempt in range(self._max_retries + 1):
-            try:
-                await self._emit(ev.AGENT_RUNNING, task, agent.agent_id, attempt=attempt)
-                result = await agent.execute(task)
-                await self._emit(
-                    ev.AGENT_COMPLETED,
-                    task,
-                    agent.agent_id,
-                    provider=result.provider_used,
-                    model=result.model_used,
-                    prompt_tokens=result.prompt_tokens,
-                    completion_tokens=result.completion_tokens,
-                    confidence=result.confidence,
-                )
-                return result
-            except ProviderError as exc:
-                last_error = str(exc)
-                logger.warning(
-                    "dispatch.retry",
-                    trace_id=task.trace_id,
-                    agent_id=agent.agent_id,
-                    attempt=attempt,
-                    error=last_error,
-                )
-                if attempt < self._max_retries:
-                    await self._emit(ev.AGENT_RETRY, task, agent.agent_id, attempt=attempt)
-                    await asyncio.sleep(self._backoff * (2 ** attempt))
+        if breaker is not None and not await breaker.allow(task.trace_id):
+            last_error = f"circuit open for provider {breaker.provider!r}"
+            logger.warning(
+                "dispatch.circuit_open",
+                trace_id=task.trace_id,
+                agent_id=agent.agent_id,
+                provider=breaker.provider,
+            )
+            await self._emit(ev.AGENT_RETRY, task, agent.agent_id, tier="circuit_open")
+        else:
+            for attempt in range(self._max_retries + 1):
+                try:
+                    await self._emit(ev.AGENT_RUNNING, task, agent.agent_id, attempt=attempt)
+                    result = await agent.execute(task)
+                    if breaker is not None:
+                        await breaker.record_success(task.trace_id)
+                    await self._emit(
+                        ev.AGENT_COMPLETED,
+                        task,
+                        agent.agent_id,
+                        provider=result.provider_used,
+                        model=result.model_used,
+                        prompt_tokens=result.prompt_tokens,
+                        completion_tokens=result.completion_tokens,
+                        confidence=result.confidence,
+                    )
+                    return result
+                except ProviderError as exc:
+                    last_error = str(exc)
+                    if breaker is not None:
+                        await breaker.record_failure(task.trace_id)
+                    logger.warning(
+                        "dispatch.retry",
+                        trace_id=task.trace_id,
+                        agent_id=agent.agent_id,
+                        attempt=attempt,
+                        error=last_error,
+                    )
+                    if attempt < self._max_retries:
+                        # A trip mid-retry ends the loop early — the remaining
+                        # attempts would be exactly the waste Bab 55 forbids.
+                        if breaker is not None and not await breaker.allow(task.trace_id):
+                            break
+                        await self._emit(ev.AGENT_RETRY, task, agent.agent_id, attempt=attempt)
+                        await asyncio.sleep(self._backoff * (2 ** attempt))
 
         # Tier 2/3: switch to the role's fallback provider and degrade gracefully.
         logger.warning("dispatch.switch_provider", trace_id=task.trace_id, role=agent.role)
         await self._emit(ev.AGENT_RETRY, task, agent.agent_id, tier="switch_provider")
+        fb_breaker = None
         try:
             fallback_agent = GenericLLMAgent(agent.role, prefer_fallback=True)
+            fb_breaker = self._breaker(getattr(fallback_agent, "default_provider", None))
+            if fb_breaker is not None and fb_breaker.provider != getattr(agent, "default_provider", None):
+                if not await fb_breaker.allow(task.trace_id):
+                    message = f"{last_error} | circuit open for fallback provider {fb_breaker.provider!r}"
+                    logger.error("dispatch.fallback_circuit_open", trace_id=task.trace_id, error=message)
+                    await self._emit(ev.AGENT_FAILED, task, fallback_agent.agent_id, error=message)
+                    return self._failed(task, f"primary+fallback failed: {message}")
+            else:
+                fb_breaker = None  # same provider as primary — already counted above
             await self._emit(ev.AGENT_RUNNING, task, fallback_agent.agent_id, fallback=True)
             result = await fallback_agent.execute(task)
+            if fb_breaker is not None:
+                await fb_breaker.record_success(task.trace_id)
             # execute() already stamps degraded=True for a fallback agent.
             await self._emit(
                 ev.AGENT_COMPLETED,
@@ -121,6 +175,8 @@ class Dispatcher:
             )
             return result
         except ProviderError as exc:
+            if fb_breaker is not None:
+                await fb_breaker.record_failure(task.trace_id)
             logger.error("dispatch.fallback_failed", trace_id=task.trace_id, error=str(exc))
             await self._emit(
                 ev.AGENT_FAILED, task, agent.agent_id, error=f"{last_error} | {exc}"

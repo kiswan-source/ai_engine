@@ -16,6 +16,7 @@
 | 6 | Observability + Cost (tracing, metrics, cost_tracker, dashboards) | ✅ SELESAI |
 | 7 | Security hardening (guardrails, output validation, audit log, RBAC) | ✅ SELESAI |
 | 8 | Kubernetes ready (manifest siap + diverifikasi live di kind) | ✅ SELESAI |
+| 9* | Circuit Breaker (Bab 55) — pasca-roadmap, prioritas #1 gap kumulatif | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -283,15 +284,45 @@
   `standard` bawaan kind cuma RWO); Postgres/Redis single-instance, bukan HA;
   CI belum build/push image container.
 
-## Test
-- **271/271 lulus** (`pytest -q`). Baru Tahap 8: 4 test
-  `test_approval.py` (default backend memory/redis, dua gate berbagi state
-  via `RedisHashStore` — simulasi dua pod, pending mengecualikan yang sudah
-  diputuskan).
+**Tahap 9 (pasca-roadmap) — Circuit Breaker (Bab 55)** — ADR: `ADR-0012-*.md`
+- `providers/circuit_breaker.py`: `CircuitBreaker` state machine persis Bab
+  55.2 (Closed→Open→Half-Open; `failure_threshold`/`recovery_timeout`/
+  `trial_requests` per Bab 55.3), state di `HashStore` pluggable
+  (`CIRCUIT_STATE_BACKEND=memory|redis` — pola Tahap 3/8, Bab 38 rule 1:
+  trip di satu pod terlihat semua pod; timestamp wall-clock). Parameter per
+  provider via `CIRCUIT_PROVIDER_OVERRIDES="openai:3/60/1,…"` (aturan
+  penutup Bab 55 — tidak disamaratakan); entri malformed → ValueError keras.
+- **Integrasi satu titik di `Dispatcher`**: breaker primer Open → langsung
+  switch-provider tanpa menyentuh provider; setiap hasil panggilan mengumpan
+  breaker; trip di tengah retry menghentikan sisa retry; breaker fallback
+  ikut dicek (keduanya Open → fail fast via `AgentResult.error`, Bab 10.4).
+  `ENABLE_CIRCUIT_BREAKER=false` = perilaku lama persis.
+- Satu registry default (`providers.circuit_breaker.breakers`) dipakai
+  bersama Dispatcher + Provider Dashboard (`monitoring.provider_dashboard`
+  kini menampilkan status breaker — **menutup gap Provider Dashboard yang
+  dicatat sejak Tahap 6**). Event `circuit.opened/half_open/closed` di Event
+  Bus; `Tracer` subscribe `circuit.*`. Config di `api/config.py` +
+  `.env.example` + `k8s/base/configmap.yaml` (redis).
+- `tests/conftest.py`: fixture autouse baru mereset registry breaker default
+  per test (Dispatcher tanpa registry eksplisit memakai singleton modul).
+- **Diverifikasi live end-to-end**: `ANTHROPIC_BASE_URL` → port mati → 2
+  kegagalan nyata membuka breaker (dispatch pertama ~17 dtk); dispatch
+  berikutnya dilayani fallback Ollama ~1 dtk tanpa menyentuh Claude;
+  dashboard `claude: open`; setelah recovery timeout panggilan Claude
+  sungguhan (jawab "PULIH") menutup breaker. Dua registry di atas
+  `RedisHashStore` yang sama saling melihat OPEN — simulasi dua pod.
 
-## Gap kumulatif (Tahap 1-8, diakui bukan disamarkan)
-- **Circuit Breaker (Bab 55)** — belum diimplementasikan sama sekali;
-  Dispatcher cuma retry+fallback (Bab 54). Dicatat sejak ADR-0009.
+## Test
+- **287/287 lulus** (`pytest -q`). Baru Tahap 9: 16 test
+  `test_circuit_breaker.py` (seluruh transisi state dengan fake clock,
+  parsing override per provider, 5 skenario integrasi Dispatcher).
+
+## Gap kumulatif (Tahap 1-9, diakui bukan disamarkan)
+- **Circuit Breaker SELESAI untuk provider** (Tahap 9, ADR-0012); sasaran
+  kedua Bab 55 (`tools/tool_executor.py`) belum ada foldernya di repo —
+  saat `tools/` dibangun, pakai registry yang sama dengan key nama tool.
+  Counter breaker read-modify-write (bukan HINCRBY atomik) — race kecil
+  antar pod diterima, dicatat di ADR-0012.
 - **RBAC (Bab 30 rule 2)** — dibangun lengkap (`security/auth.py`/
   `permissions.py`) tapi cuma dipasang di satu titik
   (`Orchestrator.finalize_approval`); belum menyentuh `agent/tools/`
@@ -319,14 +350,14 @@
   build/push image container atau apply manifest K8s.
 
 ## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
-Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` sudah selesai
-seluruhnya, termasuk verifikasi live K8s di kind. Kandidat prioritas untuk
-sesi berikutnya, dari yang paling murah dieksekusi: (1) Circuit Breaker
-(Bab 55) — pola state machine yang sudah familiar (mirip `TaskManager`),
-terintegrasi ke `Dispatcher`; (2) RBAC nyata ke `agent/tools/` via strangler
-pattern (Bab 45.1) mulai dari SATU tool berisiko tinggi dulu, bukan semua
-sekaligus; (3) Dockerfile multi-stage dengan rebuild+verifikasi live penuh
-(bukan cuma review kode) mengingat riwayat insiden ADR-0009; (4) solusi
-storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage) kalau
-memang butuh API >1 replika di produksi.
+Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
+Circuit Breaker (prioritas #1 pasca-roadmap) selesai 2026-07-05 (ADR-0012).
+Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1) RBAC
+nyata ke `agent/tools/` via strangler pattern (Bab 45.1) mulai dari SATU
+tool berisiko tinggi dulu, bukan semua sekaligus; (2) Dockerfile multi-stage
+dengan rebuild+verifikasi live penuh (bukan cuma review kode) mengingat
+riwayat insiden ADR-0009; (3) solusi storage RWX (StorageClass NFS/Longhorn
+atau pindah ke object storage) kalau memang butuh API >1 replika di
+produksi; (4) Bab 68 Enterprise Architecture Backlog (20 prioritas di
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai.
 

@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     PROVIDER_MAX_RETRIES: int = 2
     PROVIDER_RETRY_BACKOFF: float = 1.0  # base seconds for exponential backoff
 
+    # ─── Circuit Breaker (Bab 55, Tahap 9) ───────────────────────────────────
+    ENABLE_CIRCUIT_BREAKER: bool = True
+    # Defaults for providers without a per-provider override below.
+    CIRCUIT_FAILURE_THRESHOLD: int = 5  # consecutive failures before Open
+    CIRCUIT_RECOVERY_TIMEOUT: float = 30.0  # seconds Open before Half-Open
+    CIRCUIT_TRIAL_REQUESTS: int = 1  # probes allowed in Half-Open
+    # Per-provider tuning (Bab 55's rule: params must not be one-size-fits-all):
+    # "openai:3/60/1,gemini:5/30/2" = threshold/recovery_seconds/trials.
+    CIRCUIT_PROVIDER_OVERRIDES: str = ""
+    # Breaker state: "memory" (per-process, dev/CI) or "redis" (shared across
+    # replicas — Bab 38 rule 1, same pattern as APPROVAL_STATE_BACKEND).
+    CIRCUIT_STATE_BACKEND: str = "memory"
+
     # OpenAI (ChatGPT) — orchestration, planning, review, QA.
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"

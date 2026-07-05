@@ -38,6 +38,11 @@ WORKFLOW_ROLLBACK = "workflow.rollback"
 CONSENSUS_DECIDED = "consensus.decided"  # Bab 26 — wired in Tahap 4
 MEMORY_WRITTEN = "memory.written"  # Bab 22 — optional observability hook
 
+# ── Circuit Breaker (Bab 55) — mirrors the Bab 55.2 state diagram ───────────
+CIRCUIT_OPENED = "circuit.opened"
+CIRCUIT_HALF_OPEN = "circuit.half_open"
+CIRCUIT_CLOSED = "circuit.closed"
+
 
 def agent_event(state: str) -> str:
     """Event name for an agent lifecycle state, e.g. ``running`` → ``agent.running``."""

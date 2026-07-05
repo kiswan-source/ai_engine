@@ -123,14 +123,19 @@ def workflow_dashboard(metrics: MetricsCollector) -> dict:
     }
 
 
-async def provider_dashboard(metrics: MetricsCollector) -> dict:
-    """Bab 62 Provider Dashboard: health, error rate, latency per provider.
+async def provider_dashboard(metrics: MetricsCollector, breakers=None) -> dict:
+    """Bab 62 Provider Dashboard: health, error rate, latency, breaker state.
 
-    Circuit Breaker status (Bab 55) isn't included — that pattern isn't
-    implemented in this codebase yet (Dispatcher does retry + fallback, Bab
-    54, but no breaker state machine); a gap for a future session, not
-    silently faked here.
+    Circuit Breaker status (Bab 55, Tahap 9) reads the same default registry
+    the Dispatcher trips (``providers.circuit_breaker.breakers``) unless a
+    registry is injected — one source of truth, per Bab 62's closing rule.
+    Only providers the Dispatcher has actually touched appear (breakers are
+    created lazily on first use).
     """
+    if breakers is None:
+        from providers.circuit_breaker import breakers as default_breakers
+
+        breakers = default_breakers
     readiness = await check_readiness()
     provider_health = {k: v for k, v in readiness["checks"].items() if k not in ("database", "redis")}
     error_rates = metrics.error_rate_by_provider()
@@ -141,6 +146,7 @@ async def provider_dashboard(metrics: MetricsCollector) -> dict:
             provider: metrics.agent_latency_percentiles(f"provider:{provider}")
             for provider in error_rates
         },
+        "circuit_breaker": await breakers.snapshot(),
     }
 
 
