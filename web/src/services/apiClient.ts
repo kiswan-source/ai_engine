@@ -83,6 +83,11 @@ export const apiClient = {
       method: 'POST',
       body: body instanceof FormData ? body : JSON.stringify(body ?? {}),
     }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: 'PATCH',
+      body: body instanceof FormData ? body : JSON.stringify(body ?? {}),
+    }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   /** Raw fetch for endpoints the caller needs to read as a stream (SSE) rather than JSON. */
   raw: (path: string, init: RequestInit = {}) =>

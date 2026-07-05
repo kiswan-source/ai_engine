@@ -22,7 +22,8 @@
 | 9* | Circuit Breaker (Bab 55) — pasca-roadmap, prioritas #1 gap kumulatif | ✅ SELESAI |
 | 10* | RBAC ke `agent/tools/` — pilot 1 tool (`write_pdf`), Bab 30 rule 2 | ✅ SELESAI |
 | 11* | UI Multi-Agent — expose `orchestrator/`+`agents/`+`workflows/` ke web UI | ✅ SELESAI |
-| 12* | Frontend AI Workspace (React) Phase 1 + Monitoring dashboard (Phase 2 parsial) | ✅ SELESAI |
+| 12* | Frontend AI Workspace (React) Phase 1 + Monitoring/Memory/Knowledge (Phase 2) | ✅ SELESAI |
+| 13* | Projects — entity Phase 3 pertama (PROJECT_SPECIFICATION.md) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -486,9 +487,55 @@ Knowledge diwire dengan ingest teks tempel (bukan upload file).
   tabel `documents` yang dibuat (`VectorEmbedding` pakai tipe kolom
   `pgvector` yang gagal di-`create_all()` di SQLite kalau ikut disertakan).
 
+**Tahap 13 — Projects, entity Phase 3 pertama**
+
+Boss minta "Phase selanjutnya" lagi setelah Tahap 12. Dicek dulu (bukan
+diasumsikan dari blueprint) status riil kelima area Phase 3
+(Projects/Plugin/Automation/Vision/MCP): **nol kode di kelimanya** — tak
+ada tabel `Project`, tak ada folder `plugins/`/`scheduler/`, tak ada
+apa-apa terkait MCP di manapun; "Vision" cuma nama role yang lewat satu
+implementasi generik (`agents/generic_agent.py`), `/run` sama sekali tak
+menerima upload gambar. Beda jauh dari Tahap 12 yang tinggal expose modul
+yang sudah ada. Ditanya ke Boss lewat `AskUserQuestion`, dipilih **Projects
+duluan** — paling siap secara desain (`PROJECT_SPECIFICATION.md` sudah
+punya skema).
+
+- **`db.models.Project`/`ProjectMember` baru** — skema diadaptasi dari
+  `PROJECT_SPECIFICATION.md` §3, dengan satu penyesuaian sadar: spek
+  menyebut `owner_id (FK → User)`, tapi **tidak ada tabel `User` di
+  manapun di sistem ini** — identitas nyata yang ada cuma string API key
+  (`security.auth.Principal`). `owner_key`/`ProjectMember.principal_key`
+  jadi string API key, bukan FK ke user yang tak eksis. §6 spek sengaja
+  membiarkan soft-delete vs hard-delete belum diputuskan — dipilih
+  **soft-delete** (`status="archived"`), selaras prinsip Preserve Existing
+  Code (Bab 3) diterapkan ke data pengguna.
+- **`api/routes/projects.py` baru**: `GET/POST /projects`, `GET/PATCH/DELETE
+  /projects/{id}` (DELETE = arsipkan, bukan hapus baris), `POST/DELETE
+  /projects/{id}/members[/{principal_key}]`. RBAC per-resource sungguhan
+  (bukan cuma per-endpoint seperti rute lain) — `owner`/`editor`/`viewer`
+  dicek dari `ProjectMember` atau `owner_key`, bukan cuma
+  `get_current_principal`'s role global. Saat `API_KEYS` kosong (default
+  dev), semua principal punya `api_key=""` — jadi semua proyek "dimiliki"
+  identitas yang sama, konsisten dengan bagaimana rute lain berperilaku
+  saat auth dimatikan, bukan bug baru.
+- **Scope sengaja sempit**: `ConversationMessage`/`Document` (files/RAG)
+  tidak disentuh sama sekali — Project murni wadah berdiri sendiri untuk
+  saat ini, belum terhubung ke chat/file sungguhan (§2/§6 spek memang
+  menyisakan ini untuk keputusan lanjutan, bukan kelalaian).
+  `ProjectsPage.tsx`: daftar + buat proyek, halaman detail (`/projects/:id`)
+  dengan kelola anggota (tambah/hapus, badge role), tombol arsipkan
+  (owner-only). Diverifikasi live: buat proyek sungguhan lewat form →
+  masuk detail → tambah anggota sungguhan → badge role & tombol hapus
+  muncul benar, 0 console error.
+
 ## Test
-- **Backend: 318/318 lulus** (`pytest -q`) — naik dari 308 lewat 10 test
-  integrasi baru: `tests/integration/test_memory_api.py` (5 — baca/hapus
+- **Backend: 328/328 lulus** (`pytest -q`) — naik dari 318 lewat 10 test
+  integrasi baru `tests/integration/test_projects_api.py` (CRUD + role
+  owner/editor/viewer, akses ditolak untuk stranger, viewer tak bisa PATCH,
+  arsip bukan hard-delete, sama pola SQLite in-memory seperti
+  `test_knowledge_api.py`, identitas caller disimulasikan lewat
+  `API_KEYS`+header `X-API-Key` per test). Sebelumnya naik dari 308 lewat
+  10 test: `tests/integration/test_memory_api.py` (5 — baca/hapus
   tiap tier lewat `MemoryManager` yang di-monkeypatch persis pola
   `_orchestrator`), `tests/integration/test_knowledge_api.py` (5 —
   ingest+list+search+delete+404, dengan `_retriever` route di-monkeypatch
@@ -504,7 +551,21 @@ Knowledge diwire dengan ingest teks tempel (bukan upload file).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-12, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-13, diakui bukan disamarkan)
+- **`Project` (Tahap 13) berdiri sendiri** — belum ada FK dari
+  `ConversationMessage`/`Document` ke `Project.id`, jadi membuka Chat/Files
+  dari dalam sebuah Project (atau melihat "semua percakapan proyek ini")
+  belum mungkin — itu keputusan lanjutan yang sengaja ditunda
+  (`PROJECT_SPECIFICATION.md` §2/§6), bukan lupa. Tidak ada `User` table di
+  sistem ini — `owner_key`/`principal_key` adalah string API key mentah,
+  bukan ID user; ganti API key = "identitas" berbeda, tidak ada
+  penyatuan/migrasi kepemilikan otomatis kalau key berubah. RBAC per-proyek
+  di `api/routes/projects.py` sungguhan (owner/editor/viewer dicek dari
+  `ProjectMember`), tapi endpoint-nya sendiri tetap bisa diakses siapa pun
+  yang punya API key valid manapun (atau tanpa key sama sekali saat
+  `API_KEYS` kosong) — tak ada gerbang "siapa boleh membuat Project baru".
+  Plugin/Automation/Vision/MCP (4 dari 5 area Phase 3) masih nol kode sama
+  sekali, belum disentuh.
 - **Dashboard observability kini ADA di web UI (Tahap 12, menutup gap sejak
   Tahap 6)** — `MonitoringPage.tsx` + `api/routes/monitoring.py`, 7 dari 8
   dashboard Bab 62. Yang masih gap: **Memory Dashboard** (field ke-5
@@ -585,28 +646,30 @@ Knowledge diwire dengan ingest teks tempel (bukan upload file).
 ## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
 Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
-Multi-Agent (Tahap 11), dan Frontend AI Workspace + Monitoring (Tahap 12)
-semua selesai 2026-07-05. Kandidat prioritas berikutnya, dari yang paling
-murah dieksekusi: (1) lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo`
-lain satu per satu (pola sama seperti ADR-0013, tinggal tambah entri
-`TOOL_RISK_ACTIONS`); (2) Dockerfile multi-stage dengan rebuild+verifikasi
-live penuh (bukan cuma review kode) mengingat riwayat insiden ADR-0009;
-(3) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (4) Bab 68
-Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
-— belum satupun dimulai.
+Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
+(Tahap 12), dan Projects (Tahap 13) semua selesai 2026-07-05. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) lanjutkan
+migrasi RBAC ke tool `write_*`/`convert_geo` lain satu per satu (pola sama
+seperti ADR-0013, tinggal tambah entri `TOOL_RISK_ACTIONS`); (2) Dockerfile
+multi-stage dengan rebuild+verifikasi live penuh (bukan cuma review kode)
+mengingat riwayat insiden ADR-0009; (3) solusi storage RWX (StorageClass
+NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
+replika di produksi; (4) Bab 68 Enterprise Architecture Backlog (20
+prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai.
 
-**Untuk lanjutan frontend spesifik (Phase 2 sisa + Phase 3)**: (a) Memory
-page kini terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan
-(strangler pattern ke `core/chat/engine.py`) — pekerjaan backend belum
-dimulai; (b) Knowledge page kini bisa ingest+cari tapi cuma teks tempel —
-upload file/OCR, embedder sungguhan (ganti `hashed_bow_embedder` offline),
-dan delete-by-dokumen di `KnowledgeStore` semua masih terbuka; (c)
+**Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
+terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
+pattern ke `core/chat/engine.py`) — pekerjaan backend belum dimulai; (b)
+Knowledge page kini bisa ingest+cari tapi cuma teks tempel — upload
+file/OCR, embedder sungguhan (ganti `hashed_bow_embedder` offline), dan
+delete-by-dokumen di `KnowledgeStore` semua masih terbuka; (c)
 Timeline/Approval versi penuh — butuh endpoint SSE canonical baru
-(`EVENT_CATALOG.md`) menggantikan polling `POST /run` sinkron saat ini;
-(d) RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py` — `memory.py`
-khususnya berisiko (baca/hapus data sesi tanpa otorisasi apa pun); (e)
-Phase 3 (Projects/Plugin/Automation/Vision/MCP) — semua masih
-`NOT IMPLEMENTED` di backend, lihat `PROJECT_SPECIFICATION.md` untuk desain
-awal entity Project.
+(`EVENT_CATALOG.md`) menggantikan polling `POST /run` sinkron saat ini; (d)
+RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py`/`projects.py`
+(endpoint-level; `projects.py` sudah punya RBAC per-resource internal,
+tapi endpoint-nya sendiri masih terbuka) — `memory.py` khususnya berisiko
+(baca/hapus data sesi tanpa otorisasi apa pun); (e) Project belum
+terhubung ke Conversation/File sungguhan (Tahap 13, keputusan lanjutan
+yang sengaja ditunda); (f) Plugin/Automation/Vision/MCP — 4 dari 5 area
+Phase 3, semua masih nol kode sama sekali.
 

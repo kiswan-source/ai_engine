@@ -101,3 +101,45 @@ class VectorEmbedding(Base):
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.RAG_EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Project(Base):
+    """Phase 3 entity (PROJECT_SPECIFICATION.md) — a long-lived grouping of
+    work (Conversation/Workflow/File), not a replacement for either.
+
+    ``owner_key``/``ProjectMember.principal_key`` hold the API key string
+    from ``security.auth.Principal`` rather than a ``user_id`` FK —
+    PROJECT_SPECIFICATION.md §3 speaks of ``owner_id (FK → User)``, but
+    there is no ``User`` table anywhere in this system today (identity is
+    just an API key mapped to a role, `security/auth.py`). Adapted to the
+    actual identity primitive that exists, not a literal reading of the
+    spec's placeholder schema.
+
+    §6 left soft-delete vs. hard-delete undecided; this picks soft-delete
+    (``status="archived"``) — reversible, consistent with Bab 3 "Preserve
+    Existing Code" applied to user data, not just code.
+    """
+
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_key: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")  # active | archived
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ProjectMember(Base):
+    """One (project, principal) membership row (PROJECT_SPECIFICATION.md §3)."""
+
+    __tablename__ = "project_members"
+    __table_args__ = (UniqueConstraint("project_id", "principal_key", name="uq_project_member"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    principal_key: Mapped[str] = mapped_column(String(128))
+    role: Mapped[str] = mapped_column(String(32), default="viewer")  # owner | editor | viewer
+    added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

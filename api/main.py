@@ -22,6 +22,7 @@ from api.routes import orchestrator as orchestrator_router
 from api.routes import monitoring as monitoring_router
 from api.routes import memory as memory_router
 from api.routes import knowledge as knowledge_router
+from api.routes import projects as projects_router
 
 logger = get_logger(__name__)
 
@@ -95,6 +96,7 @@ app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", ta
 app.include_router(monitoring_router.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
 app.include_router(memory_router.router, prefix="/api/v1/memory", tags=["Memory"])
 app.include_router(knowledge_router.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
+app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["Projects"])
 
 if (WEB_DIST_DIR / "index.html").exists():
     # SPA fallback: React Router (FRONTEND_ARCHITECTURE.md §5) owns client-side
