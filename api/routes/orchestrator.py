@@ -36,6 +36,20 @@ class WorkflowRunRequest(BaseModel):
     system: str = ""
     temperature: float = 0.7
     max_tokens: int = 2048
+    # Vision (Bab 17.1 role): data: URI strings, exactly what a browser's
+    # FileReader.readAsDataURL() produces — no extra encoding step needed on
+    # the frontend. Parsed into {"data", "mime_type"} dicts before reaching
+    # the Orchestrator, which knows nothing about the wire format.
+    images: list[str] = []
+
+
+def _parse_data_uri(uri: str) -> dict[str, str]:
+    """``data:image/png;base64,AAAA...`` -> ``{"mime_type": "image/png", "data": "AAAA..."}``."""
+    if not uri.startswith("data:") or ";base64," not in uri:
+        raise HTTPException(status_code=400, detail="images must be data: URIs with base64 encoding")
+    header, data = uri.split(",", 1)
+    mime_type = header[len("data:") : -len(";base64")]
+    return {"mime_type": mime_type, "data": data}
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -62,6 +76,7 @@ async def list_modes():
 async def run_workflow(req: WorkflowRunRequest):
     if not req.roles:
         raise HTTPException(status_code=400, detail="roles must not be empty")
+    images = [_parse_data_uri(uri) for uri in req.images]
     try:
         result = await _orchestrator.run(
             prompt=req.prompt,
@@ -70,6 +85,7 @@ async def run_workflow(req: WorkflowRunRequest):
             system=req.system,
             temperature=req.temperature,
             max_tokens=req.max_tokens,
+            images=images or None,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

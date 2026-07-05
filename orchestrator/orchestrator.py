@@ -116,6 +116,7 @@ class Orchestrator:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         trace_id: str | None = None,
+        images: list[dict] | None = None,
     ) -> WorkflowResult:
         """Plan and execute a multi-agent workflow for ``prompt``.
 
@@ -124,6 +125,8 @@ class Orchestrator:
             mode: A key of ``workflows.WORKFLOWS`` — ``"sequential"``,
                 ``"parallel"``, ``"reflection"``, ``"voting"``, or
                 ``"consensus"`` (Bab 24).
+            images: Optional ``{"data": ..., "mime_type": ...}`` dicts (Bab
+                17.1 Vision role), forwarded to every step's Task.
 
         Returns:
             WorkflowResult: Aggregated result across all steps.
@@ -159,6 +162,7 @@ class Orchestrator:
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
+            images=images,
         )
 
         # Planning -> Executing

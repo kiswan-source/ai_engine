@@ -53,8 +53,14 @@ class GeminiProvider(BaseProvider):
         }
         if params.stop:
             gen_config["stopSequences"] = list(params.stop)
+        # Vision (Bab 17.1 role): image parts sit alongside the text part in
+        # the same "parts" array — Gemini's multimodal contract, not a
+        # separate message.
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        for image in params.images:
+            parts.append({"inline_data": {"mime_type": image.mime_type, "data": image.data}})
         payload: dict[str, Any] = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": gen_config,
         }
         if params.system:

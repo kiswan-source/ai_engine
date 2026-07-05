@@ -56,13 +56,25 @@ class ClaudeProvider(BaseProvider):
             "Content-Type": "application/json",
         }
 
+    def _content(self, prompt: str, params: GenerationParams) -> str | list[dict[str, Any]]:
+        if not params.images:
+            return prompt
+        # Vision (Bab 17.1 role): Claude's convention puts image blocks before
+        # the text block in the same content array.
+        blocks: list[dict[str, Any]] = [
+            {"type": "image", "source": {"type": "base64", "media_type": image.mime_type, "data": image.data}}
+            for image in params.images
+        ]
+        blocks.append({"type": "text", "text": prompt})
+        return blocks
+
     def _payload(
         self, prompt: str, params: GenerationParams, stream: bool, *, sampling: bool = True
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": params.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": self._content(prompt, params)}],
             "stream": stream,
         }
         if sampling:

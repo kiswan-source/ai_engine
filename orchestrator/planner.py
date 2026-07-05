@@ -43,6 +43,7 @@ class Planner:
         system: str = "",
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        images: list[dict] | None = None,
     ) -> Plan:
         """Create a :class:`Plan` for ``roles`` over ``prompt``.
 
@@ -53,6 +54,11 @@ class Planner:
                 same prompt.
             mode: A key of ``workflows.WORKFLOWS`` (sequential/parallel/
                 reflection/voting/consensus).
+            images: Optional ``{"data": ..., "mime_type": ...}`` dicts (Bab
+                17.1 Vision role) — attached to every step's ``Task.payload``,
+                not just a "vision" step, since roles are provider-agnostic
+                by design (Bab 17) and any role's resolved provider might
+                support vision.
 
         Raises:
             ValueError: If ``roles`` is empty or ``mode`` is unknown.
@@ -74,6 +80,7 @@ class Planner:
                 system=system,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                payload={"images": images} if images else {},
                 metadata={"step_index": index},
             )
             depends = (prev_id,) if (mode in _CHAINED_MODES and prev_id) else ()

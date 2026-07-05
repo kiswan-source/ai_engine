@@ -17,9 +17,11 @@ class StubProvider:
         self._text = text
         self._finish_reason = finish_reason
         self.last_prompt: str | None = None
+        self.last_params = None
 
     async def generate(self, prompt, params):
         self.last_prompt = prompt
+        self.last_params = params
         return ProviderResponse(
             text=self._text,
             provider=self.name,
@@ -132,3 +134,29 @@ async def test_output_validation_disabled_via_settings(monkeypatch):
     result = await agent.execute(Task(role="writer", prompt="halo"))
 
     assert result.guardrail_score is None
+
+
+async def test_task_payload_images_reach_generation_params():
+    """Vision (Bab 17.1 role) — Task.payload["images"] -> GenerationParams.images."""
+    provider = StubProvider()
+    agent = GenericLLMAgent("vision", provider=provider)
+    task = Task(
+        role="vision",
+        prompt="Apa isi gambar ini?",
+        payload={"images": [{"data": "AAAA", "mime_type": "image/png"}]},
+    )
+
+    await agent.execute(task)
+
+    assert len(provider.last_params.images) == 1
+    assert provider.last_params.images[0].data == "AAAA"
+    assert provider.last_params.images[0].mime_type == "image/png"
+
+
+async def test_task_without_images_has_empty_generation_params_images():
+    provider = StubProvider()
+    agent = GenericLLMAgent("writer", provider=provider)
+
+    await agent.execute(Task(role="writer", prompt="halo"))
+
+    assert provider.last_params.images == ()

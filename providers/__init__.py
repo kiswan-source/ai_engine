@@ -3,7 +3,7 @@
 Public surface — import providers via the factory, never instantiate concrete
 provider classes directly in business logic (Bab 16.2, Bab 45.5).
 """
-from .base_provider import BaseProvider, Chunk, GenerationParams, ProviderResponse
+from .base_provider import BaseProvider, Chunk, GenerationParams, ImageInput, ProviderResponse
 from .circuit_breaker import BreakerConfig, CircuitBreaker, CircuitBreakerRegistry, CircuitState
 from .claude_provider import ClaudeProvider
 from .exceptions import (
@@ -31,6 +31,7 @@ __all__ = [
     "ClaudeProvider",
     "GeminiProvider",
     "GenerationParams",
+    "ImageInput",
     "OllamaProvider",
     "OpenAIProvider",
     "ProviderCapabilityError",

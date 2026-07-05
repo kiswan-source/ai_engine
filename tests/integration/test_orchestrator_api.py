@@ -22,8 +22,10 @@ class StubAgent(BaseAgent):
         self.default_provider = provider
         self._output = output
         self._provider = provider
+        self.last_task: Task | None = None
 
     async def execute(self, task: Task) -> AgentResult:
+        self.last_task = task
         return AgentResult(
             output=self._output, confidence=0.8, trace_id=task.trace_id,
             provider_used=self._provider, model_used="stub-m", role=self.role, agent_id=self.agent_id,
@@ -107,6 +109,34 @@ async def test_run_sequential_completes(client, stub_orchestrator):
     assert data["state"] == "completed"
     assert data["final_output"] == "hasil"
     assert data["results"][0]["role"] == "writer"
+
+
+async def test_run_with_images_reaches_task_payload(client, stub_orchestrator):
+    """Vision (Bab 17.1 role) — data: URI parsed and attached to the Task the agent actually receives."""
+    agent = StubAgent("vision", output="ada kucing")
+    stub_orchestrator(agent)
+    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    res = await client.post(
+        "/api/v1/orchestrator/run",
+        json={
+            "prompt": "apa isi gambar ini?",
+            "roles": ["vision"],
+            "mode": "sequential",
+            "images": [f"data:image/png;base64,{tiny_png_b64}"],
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["final_output"] == "ada kucing"
+    assert agent.last_task.payload["images"] == [{"mime_type": "image/png", "data": tiny_png_b64}]
+
+
+async def test_run_rejects_malformed_image_uri(client, stub_orchestrator):
+    stub_orchestrator(StubAgent("vision"))
+    res = await client.post(
+        "/api/v1/orchestrator/run",
+        json={"prompt": "x", "roles": ["vision"], "images": ["not-a-data-uri"]},
+    )
+    assert res.status_code == 400
 
 
 async def test_run_escalates_and_appears_in_pending_approvals(client, stub_orchestrator):

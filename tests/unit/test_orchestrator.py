@@ -131,6 +131,19 @@ def test_planner_rejects_empty_roles():
         Planner().plan("x", [], mode="sequential")
 
 
+def test_planner_attaches_images_to_every_step_payload():
+    """Vision (Bab 17.1 role) — images ride Task.payload, every step gets them (roles are provider-agnostic)."""
+    images = [{"data": "AAAA", "mime_type": "image/png"}]
+    plan = Planner().plan("apa isi gambar ini?", ["research", "writer"], mode="sequential", images=images)
+    for step in plan.graph.steps.values():
+        assert step.task.payload["images"] == images
+
+
+def test_planner_omits_images_key_when_none():
+    plan = Planner().plan("do it", ["writer"], mode="sequential")
+    assert plan.graph.steps["s0-writer"].task.payload == {}
+
+
 # ─── Routing Engine (Bab 53) ──────────────────────────────────────────────────
 
 def test_routing_uses_explicit_role():

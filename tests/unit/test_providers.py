@@ -9,6 +9,7 @@ from providers import (
     ClaudeProvider,
     GeminiProvider,
     GenerationParams,
+    ImageInput,
     OllamaProvider,
     OpenAIProvider,
     ProviderNotConfiguredError,
@@ -28,6 +29,7 @@ def test_generation_params_defaults():
     assert p.max_tokens == 2048
     assert p.system == ""
     assert p.use_cache is True
+    assert p.images == ()
 
 
 def test_provider_response_total_tokens():
@@ -53,7 +55,7 @@ def test_exception_hierarchy():
 async def test_ollama_generate_maps_response(monkeypatch):
     prov = OllamaProvider(model="gemma4:e2b")
 
-    async def fake_generate(prompt, system, temperature, max_tokens, use_cache):
+    async def fake_generate(prompt, system, temperature, max_tokens, use_cache, images=None):
         return "hasil lokal"
 
     monkeypatch.setattr(prov._client, "generate", fake_generate)
@@ -254,6 +256,83 @@ async def test_gemini_generate_success(monkeypatch):
     resp = await prov.generate("hi")
     assert resp.text == "riset"
     assert resp.prompt_tokens == 5
+
+
+# ─── Vision (Bab 17.1 role) — image payload shape per provider ────────────────
+
+_PNG_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+def test_gemini_payload_includes_inline_image_part():
+    prov = GeminiProvider(model="gemini-1.5-pro", api_key="g-key")
+    params = GenerationParams(images=(ImageInput(data=_PNG_PIXEL, mime_type="image/png"),))
+    payload = prov._payload("apa ini?", params)
+    parts = payload["contents"][0]["parts"]
+    assert parts[0] == {"text": "apa ini?"}
+    assert parts[1] == {"inline_data": {"mime_type": "image/png", "data": _PNG_PIXEL}}
+
+
+def test_openai_messages_use_content_parts_when_images_present():
+    prov = OpenAIProvider(model="gpt-4o", api_key="k")
+    params = GenerationParams(images=(ImageInput(data=_PNG_PIXEL, mime_type="image/png"),))
+    messages = prov._messages("apa ini?", params)
+    user_msg = messages[-1]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"][0] == {"type": "text", "text": "apa ini?"}
+    assert user_msg["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{_PNG_PIXEL}"},
+    }
+
+
+def test_openai_messages_stay_plain_string_without_images():
+    prov = OpenAIProvider(model="gpt-4o", api_key="k")
+    messages = prov._messages("apa ini?", GenerationParams())
+    assert messages[-1] == {"role": "user", "content": "apa ini?"}
+
+
+def test_claude_content_puts_image_blocks_before_text():
+    prov = ClaudeProvider(model="claude-sonnet-5", api_key="k")
+    params = GenerationParams(images=(ImageInput(data=_PNG_PIXEL, mime_type="image/png"),))
+    content = prov._content("apa ini?", params)
+    assert content[0] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": _PNG_PIXEL},
+    }
+    assert content[1] == {"type": "text", "text": "apa ini?"}
+
+
+def test_claude_content_stays_plain_string_without_images():
+    prov = ClaudeProvider(model="claude-sonnet-5", api_key="k")
+    assert prov._content("apa ini?", GenerationParams()) == "apa ini?"
+
+
+async def test_ollama_generate_forwards_images_to_client(monkeypatch):
+    prov = OllamaProvider(model="gemma4:e2b")
+    captured = {}
+
+    async def fake_generate(prompt, system, temperature, max_tokens, use_cache, images=None):
+        captured["images"] = images
+        return "ini gambar apa"
+
+    monkeypatch.setattr(prov._client, "generate", fake_generate)
+    params = GenerationParams(images=(ImageInput(data=_PNG_PIXEL, mime_type="image/png"),))
+    resp = await prov.generate("apa ini?", params)
+    assert resp.text == "ini gambar apa"
+    assert captured["images"] == [_PNG_PIXEL]
+
+
+async def test_ollama_generate_passes_none_images_when_absent(monkeypatch):
+    prov = OllamaProvider(model="gemma4:e2b")
+    captured = {}
+
+    async def fake_generate(prompt, system, temperature, max_tokens, use_cache, images=None):
+        captured["images"] = images
+        return "ok"
+
+    monkeypatch.setattr(prov._client, "generate", fake_generate)
+    await prov.generate("halo", GenerationParams())
+    assert captured["images"] is None
 
 
 # ─── Factory ──────────────────────────────────────────────────────────────────

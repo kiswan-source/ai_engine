@@ -3,8 +3,8 @@
  * synchronous `/api/v1/orchestrator/run` rather than the not-yet-built SSE
  * stream (see `useWorkflow.ts`/`eventStream.ts` docstrings).
  */
-import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { Loader2, ImagePlus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StepIndicator } from '@/components/timeline/StepIndicator'
 import { ExpandableLog } from '@/components/timeline/ExpandableLog'
@@ -12,6 +12,7 @@ import { useWorkflow } from '@/hooks/useWorkflow'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import { workflowService } from '@/services/workflowService'
 import { WORKFLOW_STATE_LABEL } from '@/types/workflow'
+import { fileToDataUri } from '@/lib/utils'
 
 export default function WorkflowPage() {
   const [roles, setRoles] = useState<string[]>([])
@@ -19,6 +20,8 @@ export default function WorkflowPage() {
   const [selectedRoles, setSelectedRoles] = useState<string[]>([])
   const [mode, setMode] = useState('sequential')
   const [prompt, setPrompt] = useState('')
+  const [images, setImages] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { run, isRunning, error } = useWorkflow()
   const steps = useWorkflowStore((s) => s.steps)
@@ -40,7 +43,18 @@ export default function WorkflowPage() {
 
   function onRun() {
     if (!prompt.trim() || selectedRoles.length === 0) return
-    void run({ prompt, roles: selectedRoles, mode })
+    void run({ prompt, roles: selectedRoles, mode, images: images.length > 0 ? images : undefined })
+  }
+
+  async function onFilesChosen(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    const dataUris = await Promise.all(files.map(fileToDataUri))
+    setImages((prev) => [...prev, ...dataUris])
+  }
+
+  function removeImage(index: number) {
+    setImages((prev) => prev.filter((_, i) => i !== index))
   }
 
   return (
@@ -97,6 +111,47 @@ export default function WorkflowPage() {
         placeholder="Apa yang perlu dikerjakan?"
         className="resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
       />
+
+      <div className="flex flex-col gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={onFilesChosen}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-fit"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImagePlus size={16} className="mr-2" />
+          Lampirkan Gambar
+        </Button>
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {images.map((uri, i) => (
+              <div key={i} className="relative">
+                <img
+                  src={uri}
+                  alt={`Lampiran ${i + 1}`}
+                  className="h-16 w-16 rounded-md border border-border object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(i)}
+                  aria-label={`Hapus lampiran ${i + 1}`}
+                  className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <Button
         onClick={onRun}

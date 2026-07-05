@@ -46,11 +46,22 @@ class OpenAIProvider(BaseProvider):
             raise ProviderNotConfiguredError("OPENAI_API_KEY is not set", provider=self.name)
         return self._api_key
 
-    def _messages(self, prompt: str, params: GenerationParams) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
+    def _messages(self, prompt: str, params: GenerationParams) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         if params.system:
             messages.append({"role": "system", "content": params.system})
-        messages.append({"role": "user", "content": prompt})
+        if params.images:
+            # Vision (Bab 17.1 role): GPT-4o's multimodal contract needs
+            # `content` as a part array, not a plain string, the moment any
+            # image is attached.
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            for image in params.images:
+                content.append(
+                    {"type": "image_url", "image_url": {"url": f"data:{image.mime_type};base64,{image.data}"}}
+                )
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": prompt})
         return messages
 
     def _payload(self, prompt: str, params: GenerationParams, stream: bool) -> dict[str, Any]:

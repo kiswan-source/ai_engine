@@ -37,3 +37,13 @@ export function formatMs(value: number): string {
 export function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`
 }
+
+/** Vision (Bab 17.1 role) — reads a File as a `data:<mime>;base64,<data>` URI, matching `api/routes/orchestrator.py`'s `_parse_data_uri`. */
+export function fileToDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}

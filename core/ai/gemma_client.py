@@ -63,8 +63,19 @@ class GemmaClient:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         use_cache: bool = True,
+        images: list[str] | None = None,
     ) -> str:
-        """Single-shot generation with optional cache."""
+        """Single-shot generation with optional cache.
+
+        Args:
+            images: Base64-encoded image payloads, no ``data:`` URI prefix —
+                same field Ollama's ``/api/chat`` already accepts for
+                ``core/chat/engine.py``'s vision uploads. Caching is skipped
+                whenever images are attached: they aren't folded into the
+                cache key, and vision calls are rarely a cache-hit case
+                worth the extra key-hashing cost.
+        """
+        use_cache = use_cache and not images
         cache_key = self._cache_key(prompt, system, temperature=temperature)
 
         if use_cache:
@@ -83,6 +94,8 @@ class GemmaClient:
                 "num_predict": max_tokens,
             },
         }
+        if images:
+            payload["images"] = images
 
         client = self._get_client()
         response = await client.post("/api/generate", json=payload)

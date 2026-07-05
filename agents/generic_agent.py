@@ -19,7 +19,7 @@ provider isn't Ollama (local, never leaves the system).
 from __future__ import annotations
 
 from core.utils.logger import get_logger
-from providers import GenerationParams, create_for_role
+from providers import GenerationParams, ImageInput, create_for_role
 from providers.base_provider import BaseProvider
 
 from .base_agent import AgentResult, BaseAgent, Task
@@ -98,10 +98,16 @@ class GenericLLMAgent(BaseAgent):
         if settings.ENABLE_PII_REDACTION and self._provider.name != "ollama":
             prompt = redact_pii(prompt)
 
+        # Vision (Bab 17.1 role): images travel via Task.payload rather than a
+        # named Task field — it's already documented as the "arbitrary
+        # structured input" extension point (base_agent.py), so this role
+        # stays as provider-agnostic as every other one.
+        images = tuple(ImageInput(**img) for img in task.payload.get("images", ()))
         params = GenerationParams(
             system=task.system,
             temperature=task.temperature,
             max_tokens=task.max_tokens,
+            images=images,
         )
         resp = await self._provider.generate(prompt, params)
         confidence = _estimate_confidence(resp.text, resp.finish_reason)

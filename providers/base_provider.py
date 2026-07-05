@@ -21,6 +21,20 @@ from .exceptions import ProviderCapabilityError
 
 
 @dataclass(frozen=True)
+class ImageInput:
+    """One base64-encoded image attached to a generation call (Bab 17 Vision role).
+
+    ``data`` is the raw base64 payload with no ``data:`` URI prefix — callers
+    at the API boundary (e.g. ``api/routes/orchestrator.py``) strip that off
+    before this reaches a provider, so every provider's ``_payload()`` can
+    assume the same shape regardless of what the frontend sent.
+    """
+
+    data: str
+    mime_type: str = "image/png"
+
+
+@dataclass(frozen=True)
 class GenerationParams:
     """Immutable value object holding generation parameters (Bab 7).
 
@@ -34,6 +48,7 @@ class GenerationParams:
     top_p: float = 1.0
     stop: tuple[str, ...] = ()
     use_cache: bool = True
+    images: tuple[ImageInput, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
 

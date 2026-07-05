@@ -43,6 +43,7 @@ class OllamaProvider(BaseProvider):
                 temperature=params.temperature,
                 max_tokens=params.max_tokens,
                 use_cache=params.use_cache,
+                images=[image.data for image in params.images] or None,
             )
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(str(exc), provider=self.name) from exc

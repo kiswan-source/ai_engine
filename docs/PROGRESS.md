@@ -24,6 +24,7 @@
 | 11* | UI Multi-Agent — expose `orchestrator/`+`agents/`+`workflows/` ke web UI | ✅ SELESAI |
 | 12* | Frontend AI Workspace (React) Phase 1 + Monitoring/Memory/Knowledge (Phase 2) | ✅ SELESAI |
 | 13* | Projects — entity Phase 3 pertama (PROJECT_SPECIFICATION.md) | ✅ SELESAI |
+| 14* | Vision — gambar sungguhan lewat Orchestrator (Bab 17.1 role), extend `BaseProvider` | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -528,9 +529,62 @@ punya skema).
   masuk detail → tambah anggota sungguhan → badge role & tombol hapus
   muncul benar, 0 console error.
 
+**Tahap 14 — Vision, area Phase 3 kedua**
+
+Ditanya lagi ke Boss lewat `AskUserQuestion` (4 area tersisa: Plugin/
+Automation/Vision/MCP, semuanya nol kode) — dipilih **Vision**, paling bisa
+dibuktikan hidup end-to-end dibanding Automation (butuh desain trigger
+dulu), MCP (butuh server eksternal buat verifikasi live), atau Plugin
+(murni arsitektur tanpa use-case nyata).
+
+- **`providers.base_provider.GenerationParams` dapat field baru
+  `images: tuple[ImageInput, ...] = ()`** (`ImageInput = {data, mime_type}`,
+  base64 mentah tanpa prefix `data:`). Field baru dengan default kosong —
+  signature `generate()`/`stream()` semua 4 provider **tidak berubah sama
+  sekali**, konsisten dengan alasan `GenerationParams` sendiri ada (Bab 7 —
+  "single typed object keeps signature stable as new knobs are added").
+- **Keempat provider diberi payload gambar sesuai kontrak vendor
+  masing-masing** (beda-beda formatnya, semua diverifikasi lewat unit
+  test langsung ke method pembangun payload, bukan cuma mock HTTP): Gemini
+  → `inline_data` part sejajar `text` part; OpenAI → `content` jadi array
+  `[{type:text},{type:image_url}]` (kontrak GPT-4o); Claude → `content`
+  array dengan blok `image` SEBELUM blok `text` (konvensi Anthropic);
+  Ollama → field `images` (base64 list) diteruskan ke
+  `core/ai/gemma_client.py`'s `/api/generate` (pola sama yang sudah dipakai
+  `core/chat/engine.py` untuk upload vision-nya sendiri, ditiru bukan
+  diduplikasi ulang) — **cache di-skip otomatis saat ada gambar** (gambar
+  tak ikut masuk cache key, dan vision jarang jadi cache-hit case yang
+  berharga).
+- **Jalur gambar dari HTTP sampai provider**: `WorkflowRunRequest.images:
+  list[str]` (data: URI, persis output `FileReader.readAsDataURL()` biar
+  frontend tak perlu proses ekstra) → `_parse_data_uri()` di route →
+  `Orchestrator.run(images=...)` → `Planner.plan(images=...)` **menempel
+  ke SEMUA langkah**, bukan cuma role "vision" (semua role provider-agnostic
+  by design, Bab 17) → `Task.payload["images"]` (extension point yang
+  sudah ada, bukan field baru di `Task`) → `agents/generic_agent.py`
+  membongkarnya jadi `GenerationParams.images`.
+- **13 test baru** mencakup seluruh rantai: 7 unit test payload per
+  provider (`test_providers.py`), 2 unit test agent (Task.payload → params,
+  `test_generic_agent.py`), 2 unit test planner (`test_orchestrator.py`),
+  2 test integrasi endpoint penuh termasuk parsing data URI rusak
+  (`test_orchestrator_api.py`) — satu regresi kena di test provider Ollama
+  lama (stub `fake_generate` belum terima kwarg `images` baru), diperbaiki
+  di tempat.
+- **Diverifikasi live lewat browser** — sengaja pakai role `tool` (Ollama
+  lokal, GRATIS) bukan role `vision` (default Gemini, cloud, berbayar) untuk
+  pembuktian end-to-end, karena bentuk payload tiap provider cloud sudah
+  dibuktikan benar lewat unit test di atas — tak perlu keluar biaya nyata
+  cuma untuk mengulang pembuktian yang sama. Upload PNG 1×1 piksel hitam
+  sungguhan lewat UI (driver Playwright dapat command `upload` baru) →
+  jalankan → **model lokal `gemma4:e2b` benar-benar menjawab "Warna
+  dominan pada gambar terlampir adalah hitam"** — bukti pemahaman semantik
+  gambar sungguhan, bukan cuma pipa yang jalan tanpa error. 0 console error.
+
 ## Test
-- **Backend: 328/328 lulus** (`pytest -q`) — naik dari 318 lewat 10 test
-  integrasi baru `tests/integration/test_projects_api.py` (CRUD + role
+- **Backend: 341/341 lulus** (`pytest -q`) — naik dari 328 lewat 13 test
+  Vision (Tahap 14, lihat detail di atas): 7 unit provider payload, 2 unit
+  agent, 2 unit planner, 2 integrasi endpoint. Sebelumnya naik dari 318
+  lewat 10 test integrasi `tests/integration/test_projects_api.py` (CRUD + role
   owner/editor/viewer, akses ditolak untuk stranger, viewer tak bisa PATCH,
   arsip bukan hard-delete, sama pola SQLite in-memory seperti
   `test_knowledge_api.py`, identitas caller disimulasikan lewat
@@ -551,7 +605,19 @@ punya skema).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-13, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-14, diakui bukan disamarkan)
+- **Vision (Tahap 14) diverifikasi dengan model lokal gratis (`tool`/Ollama),
+  bukan role `vision` sungguhan (default Gemini, cloud)** — payload gambar
+  tiap provider cloud (Gemini/OpenAI/Claude) sudah benar secara *bentuk*
+  (unit test langsung ke method pembangun payload), tapi belum pernah
+  diverifikasi *live* menembak API cloud sungguhan dengan gambar nyata
+  (beda dari teks yang sudah pernah, per catatan Tahap sebelumnya). Chat UI
+  (`core/chat/`) sendiri sudah lama punya vision lewat Ollama — Tahap 14
+  cuma membuka jalur yang sama di sisi Orchestrator/multi-agent, dua jalur
+  ini tetap tidak terhubung satu sama lain (gap lama, dicatat sejak Tahap
+  11). `WorkflowRunRequest.images` juga tidak ada batas ukuran/jumlah
+  eksplisit — payload besar (banyak gambar resolusi tinggi) bisa saja bikin
+  request tersendat, belum ada validasi/limit.
 - **`Project` (Tahap 13) berdiri sendiri** — belum ada FK dari
   `ConversationMessage`/`Document` ke `Project.id`, jadi membuka Chat/Files
   dari dalam sebuah Project (atau melihat "semua percakapan proyek ini")
@@ -647,15 +713,16 @@ punya skema).
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
 Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
 Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
-(Tahap 12), dan Projects (Tahap 13) semua selesai 2026-07-05. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) lanjutkan
-migrasi RBAC ke tool `write_*`/`convert_geo` lain satu per satu (pola sama
-seperti ADR-0013, tinggal tambah entri `TOOL_RISK_ACTIONS`); (2) Dockerfile
-multi-stage dengan rebuild+verifikasi live penuh (bukan cuma review kode)
-mengingat riwayat insiden ADR-0009; (3) solusi storage RWX (StorageClass
-NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
-replika di produksi; (4) Bab 68 Enterprise Architecture Backlog (20
-prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai.
+(Tahap 12), Projects (Tahap 13), dan Vision (Tahap 14) semua selesai
+2026-07-05. Kandidat prioritas berikutnya, dari yang paling murah
+dieksekusi: (1) lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo` lain
+satu per satu (pola sama seperti ADR-0013, tinggal tambah entri
+`TOOL_RISK_ACTIONS`); (2) Dockerfile multi-stage dengan rebuild+verifikasi
+live penuh (bukan cuma review kode) mengingat riwayat insiden ADR-0009;
+(3) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (4) Bab 68
+Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
+— belum satupun dimulai.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
@@ -670,6 +737,8 @@ RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py`/`projects.py`
 tapi endpoint-nya sendiri masih terbuka) — `memory.py` khususnya berisiko
 (baca/hapus data sesi tanpa otorisasi apa pun); (e) Project belum
 terhubung ke Conversation/File sungguhan (Tahap 13, keputusan lanjutan
-yang sengaja ditunda); (f) Plugin/Automation/Vision/MCP — 4 dari 5 area
+yang sengaja ditunda); (f) Vision (Tahap 14) belum diverifikasi live ke
+provider cloud sungguhan (Gemini/OpenAI/Claude) dengan gambar nyata — baru
+bentuk payload yang teruji; (g) Plugin/Automation/MCP — 3 dari 5 area
 Phase 3, semua masih nol kode sama sekali.
 

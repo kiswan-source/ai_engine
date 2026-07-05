@@ -107,4 +107,6 @@ export interface WorkflowRunRequest {
   system?: string
   temperature?: number
   max_tokens?: number
+  /** Vision (Bab 17.1 role) — data: URIs, exactly what FileReader.readAsDataURL() produces. */
+  images?: string[]
 }
