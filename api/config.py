@@ -154,6 +154,18 @@ class Settings(BaseSettings):
     # requiring auth today, Bab 45 no-big-rewrite).
     API_KEYS: str = ""
 
+    # Automation / Scheduler (Bab 68 Prioritas 5) — in-process tick loop, not
+    # a separate worker process; disable for tests/environments that don't
+    # want background workflow runs firing on their own.
+    ENABLE_SCHEDULER: bool = True
+    SCHEDULER_TICK_SECONDS: int = 30
+
+    # MCP — Model Context Protocol client (Bab 60, Bab 57.1 standard flag).
+    # Gates `mcp_list_tools`/`mcp_call_tool` (agent/tools/registry.py) at
+    # call time — the tools stay registered either way, they just refuse to
+    # run when this is off (same pattern as the Bab 59 plugin toggle).
+    ENABLE_MCP: bool = True
+
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     GEMMA_MODEL: str = "gemma4:e2b"

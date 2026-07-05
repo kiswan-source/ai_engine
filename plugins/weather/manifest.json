@@ -1,0 +1,7 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "Cuaca saat ini (suhu, curah hujan, kecepatan angin) untuk lokasi manapun — mendukung perencanaan operasi lapangan/tambang/GIS (Bab 59.2, kategori Weather).",
+  "capabilities": ["current_weather"],
+  "permission_action": "plugin:weather"
+}

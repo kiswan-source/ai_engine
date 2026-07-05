@@ -105,3 +105,44 @@ def test_check_tool_permission_allows_operator_for_write_pdf():
 
 def test_check_tool_permission_allows_admin_for_write_pdf():
     check_tool_permission("admin", "write_pdf")  # must not raise
+
+
+# ─── plugin:weather (Bab 59) ───────────────────────────────────────────────
+
+def test_check_tool_permission_denies_user_for_plugin_weather():
+    with pytest.raises(PermissionError):
+        check_tool_permission("user", "plugin_weather")
+
+
+def test_check_tool_permission_allows_operator_for_plugin_weather():
+    check_tool_permission("operator", "plugin_weather")  # must not raise
+
+
+async def test_require_role_manage_plugins_allows_admin():
+    checker = require_role("manage_plugins")
+    principal = Principal(api_key="k", role="admin")
+    result = await checker(principal=principal)
+    assert result is principal
+
+
+async def test_require_role_manage_plugins_rejects_operator():
+    checker = require_role("manage_plugins")
+    principal = Principal(api_key="k", role="operator")
+    with pytest.raises(HTTPException) as exc_info:
+        await checker(principal=principal)
+    assert exc_info.value.status_code == 403
+
+
+# ─── mcp:call (Bab 60) ─────────────────────────────────────────────────────
+
+def test_check_tool_permission_denies_user_for_mcp_call_tool():
+    with pytest.raises(PermissionError):
+        check_tool_permission("user", "mcp_call_tool")
+
+
+def test_check_tool_permission_allows_operator_for_mcp_call_tool():
+    check_tool_permission("operator", "mcp_call_tool")  # must not raise
+
+
+def test_check_tool_permission_noop_for_mcp_list_tools():
+    check_tool_permission("user", "mcp_list_tools")  # not gated — discovery only

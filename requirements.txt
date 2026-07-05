@@ -4,8 +4,11 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.12
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-pydantic==2.10.3
+pydantic==2.13.4        # bumped from 2.10.3 — mcp==1.28.1 requires pydantic>=2.11
 pydantic-settings==2.6.1
+starlette==0.41.3       # pinned explicitly — mcp pulls starlette with no upper
+                        # bound and would otherwise resolve to a version FastAPI
+                        # 0.115.5 (<0.42) rejects
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 sqlalchemy==2.0.36
@@ -41,6 +44,11 @@ pytesseract==0.3.13   # optional OCR; needs `tesseract` binary on the host
 shapely==2.0.6
 pyproj==3.7.0
 fiona==1.10.1
+
+# ─── MCP (Model Context Protocol, Bab 60) ────────────────────────────────────
+mcp==1.28.1   # official SDK — hand-rolling the JSON-RPC handshake/session lifecycle
+              # ourselves (Bab 45.3) would duplicate a protocol implementation
+              # for no benefit; this is the reference client library
 
 # ─── Testing ──────────────────────────────────────────────────────────────────
 pytest==8.3.4

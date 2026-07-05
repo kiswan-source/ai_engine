@@ -13,6 +13,22 @@ the pilot high-risk tool (Bab 30 rule 2's "write filesystem" category).
 ``TOOL_RISK_ACTIONS`` is deliberately a single entry for now — the plan is
 to migrate the rest of the ``write_*``/``convert_geo`` tools one at a time
 in later sessions, not all at once.
+
+Tahap 16 (Plugin, Bab 59) adds ``plugin:weather`` the same way — gated via
+``TOOL_RISK_ACTIONS`` when a caller passes a role (only ``/api/v1/agent/run``
+does today; ``core/chat/`` still doesn't pass a role at all, same
+long-standing gap ``write_pdf`` already has). ``manage_plugins`` gates the
+Settings-area enable/disable toggle (``api/routes/plugins.py``) via
+``require_role`` — the first real caller of that dependency factory.
+
+Tahap 17 (MCP, Bab 60) adds ``mcp:call`` — Bab 60.1: "Setiap tool yang
+diekspos via MCP tunduk pada validasi ``security/permissions.py`` yang sama
+seperti tool internal... MCP tidak memiliki jalur pintas keamanan." One
+action covers every MCP server/tool a caller might reach through
+``mcp_call_tool`` — fine-grained per-server-per-tool permissions would be
+premature for a client that talks to exactly one configured (demo) server
+today. ``mcp_list_tools`` (read-only discovery) stays ungated, same
+posture as ``ToolRegistry.list_tools()`` for internal tools.
 """
 from __future__ import annotations
 
@@ -20,17 +36,19 @@ from __future__ import annotations
 # doesn't need repeating per role).
 _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": frozenset({"*"}),
-    "operator": frozenset({"tool:write_pdf", "view_dashboard"}),
+    "operator": frozenset({"tool:write_pdf", "view_dashboard", "plugin:weather", "mcp:call"}),
     "approver": frozenset({"approve_workflow", "view_dashboard"}),
     "user": frozenset({"view_dashboard"}),
 }
 
 # tool name -> permission action, for tools gated via ToolRegistry.execute()
 # (agent/tools/registry.py). A tool absent from this mapping is unaffected
-# regardless of role — this is a pilot for ONE high-risk tool, not a blanket
-# policy over every tool in the registry.
+# regardless of role — this is a pilot for a couple of high-risk tools, not a
+# blanket policy over every tool in the registry.
 TOOL_RISK_ACTIONS: dict[str, str] = {
     "write_pdf": "tool:write_pdf",
+    "plugin_weather": "plugin:weather",
+    "mcp_call_tool": "mcp:call",
 }
 
 

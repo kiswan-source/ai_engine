@@ -89,6 +89,17 @@ TOOL_SCHEMAS = [
     _fn("images_to_pdf", "Gabungkan beberapa gambar menjadi satu PDF.",
         {"file_paths": {"type": "array", "items": _STR}, "filename": _STR},
         ["file_paths"]),
+
+    # ── Plugins (Bab 59) ──
+    _fn("plugin_weather", "Cuaca saat ini (suhu/curah hujan/angin) untuk sebuah lokasi.",
+        {"latitude": _NUM, "longitude": _NUM}, ["latitude", "longitude"]),
+
+    # ── MCP (Bab 60) ──
+    _fn("mcp_list_tools", "Daftar tool yang tersedia di sebuah MCP server terkonfigurasi.",
+        {"server": _STR}, ["server"]),
+    _fn("mcp_call_tool", "Panggil satu tool di MCP server (pakai mcp_list_tools dulu untuk lihat nama & argumennya).",
+        {"server": _STR, "tool_name": _STR, "arguments": {"type": "object"}},
+        ["server", "tool_name"]),
 ]
 
 # Quick lookup of which tools we expose to the model.

@@ -143,3 +143,41 @@ class ProjectMember(Base):
     principal_key: Mapped[str] = mapped_column(String(128))
     role: Mapped[str] = mapped_column(String(32), default="viewer")  # owner | editor | viewer
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ScheduledJob(Base):
+    """Automation entity (Bab 68 Prioritas 5) — a workflow run on a recurring
+    interval, not a one-off request.
+
+    Deliberately simple trigger model for this first pass: a plain
+    ``interval_seconds`` ("every N seconds"), not full cron syntax — cron
+    parsing/timezone handling is a separate scope decision for later, and an
+    interval is enough to prove the whole mechanism (schedule -> fires on
+    its own -> records a result) actually works.
+
+    ``owner_key`` mirrors ``Project.owner_key`` — the API key string is the
+    only real identity primitive in this system (see that model's
+    docstring), not a literal ``user_id`` FK.
+
+    Deletion here is a real hard delete, unlike ``Project``'s soft-delete:
+    a schedule definition is closer to a setting than to organizational
+    data worth preserving, and ``enabled=False`` already covers "stop this
+    without losing the definition" — recreating a deleted one is trivial.
+    """
+
+    __tablename__ = "scheduled_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(256))
+    prompt: Mapped[str] = mapped_column(Text)
+    roles: Mapped[list] = mapped_column(JSON)
+    mode: Mapped[str] = mapped_column(String(32), default="sequential")
+    interval_seconds: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    owner_key: Mapped[str] = mapped_column(String(128), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # success | failed
+    last_result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

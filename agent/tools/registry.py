@@ -128,4 +128,45 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("generate_code", generate_code,
         "Generate kode program. Input: {language: html|js|python|sql|css, requirement: str, context: str}")
 
+    # Plugins (Bab 59) — one tool per plugin, toggled via registry/plugin_registry.py.
+    def plugin_weather(latitude: float, longitude: float):
+        from registry.plugin_registry import get as get_plugin
+        plugin = get_plugin("weather")
+        if plugin is None:
+            return {"success": False, "error": "Plugin 'weather' dinonaktifkan atau tidak ditemukan."}
+        return plugin.execute(latitude=latitude, longitude=longitude)
+
+    registry.register("plugin_weather", plugin_weather,
+        "Cuaca saat ini (suhu/curah hujan/angin) untuk lokasi tambang/lapangan. Input: {latitude, longitude}")
+
+    # MCP (Bab 60) — bridge to Model Context Protocol servers via mcp_client/.
+    def mcp_list_tools(server: str):
+        from api.config import settings
+        if not settings.ENABLE_MCP:
+            return {"success": False, "error": "MCP dinonaktifkan (ENABLE_MCP=False)."}
+        from mcp_client.config import MCP_SERVERS
+        from mcp_client.client import MCPClient
+        command = MCP_SERVERS.get(server)
+        if command is None:
+            return {"success": False, "error": f"MCP server '{server}' tidak dikonfigurasi."}
+        import asyncio
+        return asyncio.run(MCPClient(command).list_tools())
+
+    def mcp_call_tool(server: str, tool_name: str, arguments: dict = None):
+        from api.config import settings
+        if not settings.ENABLE_MCP:
+            return {"success": False, "error": "MCP dinonaktifkan (ENABLE_MCP=False)."}
+        from mcp_client.config import MCP_SERVERS
+        from mcp_client.client import MCPClient
+        command = MCP_SERVERS.get(server)
+        if command is None:
+            return {"success": False, "error": f"MCP server '{server}' tidak dikonfigurasi."}
+        import asyncio
+        return asyncio.run(MCPClient(command).call_tool(tool_name, arguments or {}))
+
+    registry.register("mcp_list_tools", mcp_list_tools,
+        "Daftar tool yang tersedia di sebuah MCP server. Input: {server}")
+    registry.register("mcp_call_tool", mcp_call_tool,
+        "Panggil satu tool di MCP server. Input: {server, tool_name, arguments}")
+
     return registry

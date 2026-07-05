@@ -25,6 +25,9 @@
 | 12* | Frontend AI Workspace (React) Phase 1 + Monitoring/Memory/Knowledge (Phase 2) | ✅ SELESAI |
 | 13* | Projects — entity Phase 3 pertama (PROJECT_SPECIFICATION.md) | ✅ SELESAI |
 | 14* | Vision — gambar sungguhan lewat Orchestrator (Bab 17.1 role), extend `BaseProvider` | ✅ SELESAI |
+| 15* | Automation — scheduler in-process untuk workflow terjadwal (Bab 68 Prioritas 5) | ✅ SELESAI |
+| 16* | Plugin — `PluginInterface` + plugin Weather nyata via Chat tool-calling (Bab 59) | ✅ SELESAI |
+| 17* | MCP Client — konsumsi MCP server nyata via SDK resmi, bridge ke Chat tool-calling (Bab 60) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -580,8 +583,269 @@ dulu), MCP (butuh server eksternal buat verifikasi live), atau Plugin
   dominan pada gambar terlampir adalah hitam"** — bukti pemahaman semantik
   gambar sungguhan, bukan cuma pipa yang jalan tanpa error. 0 console error.
 
+**Tahap 15 — Automation, area Phase 3 ketiga**
+
+Ditanya lagi ke Boss lewat `AskUserQuestion` (3 area tersisa: Plugin/
+Automation/MCP) — dipilih **Automation**, karena setelah Vision-nya
+Tahap 14 selesai, Automation jadi yang paling murah dibuktikan hidup
+end-to-end lewat browser dibanding MCP (butuh server eksternal) atau
+Plugin (arsitektur murni tanpa use-case nyata).
+
+- **Entity baru `db.models.ScheduledJob`** — workflow yang dijalankan
+  berulang tiap `interval_seconds`, bukan sekali jalan. Trigger sengaja
+  interval polos ("tiap N detik"), **bukan sintaks cron** — keputusan
+  skop yang didokumentasikan langsung di docstring model, konsisten
+  dengan pola "keputusan sadar, bukan keterbatasan" yang sudah dipakai
+  di Tahap-tahap sebelumnya. Hard-delete (bukan soft-delete seperti
+  `Project`) — alasannya: ini lebih dekat ke "pengaturan" ketimbang data
+  organisasi, dan `enabled=False` sudah menutupi kebutuhan "hentikan
+  tanpa menghapus".
+- **`scheduler/scheduler.py`: `Scheduler` — tick loop in-process**,
+  dijalankan langsung lewat `Orchestrator.run()` yang sama dipakai
+  `api/routes/orchestrator.py`, **bukan lewat `messaging.TaskQueue`**
+  (Bab 23) — keputusan skop, karena belum ada yang mengonsumsi
+  `TaskQueue` sama sekali (dikonfirmasi lewat docstring
+  `telemetry/monitoring.py`'s `queue_dashboard`: "nothing has started
+  publishing to it yet"). `tick()` query `ScheduledJob` yang
+  `enabled AND (next_run_at IS NULL OR next_run_at <= now)`, jalankan
+  tiap satu lewat `_run_job` (exception di satu job tak menghentikan
+  job lain yang due), `run_now(job_id)` untuk trigger manual yang
+  **mengabaikan** `next_run_at` (dibuktikan live — lihat di bawah).
+  Clock injektabel (`clock: Callable[[], datetime] = datetime.utcnow`),
+  pola sama dengan `providers/circuit_breaker.py`.
+- **`api/routes/automation.py`** — `_scheduler = Scheduler(_orchestrator)`
+  singleton modul, dipasang di `api/main.py` lifespan (`start()`/`stop()`
+  mengikuti `ENABLE_SCHEDULER`+`SCHEDULER_TICK_SECONDS` di
+  `api/config.py`). CRUD `GET/POST/PATCH/DELETE /api/v1/automation/jobs`
+  + `POST .../run-now`, semua discope ke `principal.api_key` sebagai
+  `owner_key` (sistem ini tak punya tabel `User` — identitas cuma
+  string API key, pola yang sama dipakai `Project.owner_key` di Tahap
+  13). `interval_seconds` divalidasi Pydantic `ge=30` (menolak jadwal
+  di bawah 30 detik).
+- **UI: tab "Terjadwal" di dalam `WorkflowPage.tsx` yang sudah ada**,
+  bukan item sidebar baru — `AI_WORKSPACE_ARCHITECTURE.md` §8 eksplisit
+  bilang kapabilitas backend baru harus masuk ke salah satu dari 11 area
+  tetap, tak boleh menumbuhkan nav baru tiap ada fitur baru. Form jadwal
+  memakai peran/pola/prompt yang sama dari tab "Jalankan Sekarang" (state
+  dibagi lewat props, bukan store baru). `ScheduledJobList.tsx` murni
+  presentational (semua aksi lewat callback), `automationService.ts`
+  bicara ke endpoint di atas.
+- **15 test baru** (356/356 total): 7 unit `test_scheduler.py`
+  (tick jalankan job due, skip job belum due, skip job nonaktif, catat
+  gagal tanpa menghentikan job lain, run_now abaikan next_run_at, 404
+  job tak dikenal, start/stop idempoten — pakai `FakeClock` + SQLite
+  in-memory dengan `AsyncSessionFactory` di-monkeypatch langsung karena
+  `Scheduler` tak lewat dependency FastAPI), 8 integrasi
+  `test_automation_api.py` (CRUD penuh, job tak terlihat orang lain,
+  update menonaktifkan, delete beneran hard-delete, run-now eksekusi
+  langsung dan catat hasil, run-now ditolak untuk bukan pemilik, tolak
+  interval di bawah minimum).
+- **Diverifikasi live lewat browser** (driver Playwright, role `tool`/
+  Ollama lokal gratis) — dibuat jadwal "Cek Gamping Otomatis" interval 1
+  menit. Log `audit.log` (destinasi stdout/stderr systemd unit ini,
+  bukan journalctl) membuktikan **scheduler menjalankan job tiga kali
+  tanpa diminta**: sekali otomatis ~20 detik setelah dibuat (tick
+  pertama menangkap `next_run_at IS NULL`), sekali lewat klik manual
+  "Jalankan Sekarang" (yang terbukti mengabaikan `next_run_at` yang
+  belum jatuh tempo — bukti nyata bukan cuma baca kode), dan sekali lagi
+  otomatis ~80 detik kemudian tanpa interaksi apa pun — bukti loop
+  background benar-benar berjalan sendiri, bukan cuma trigger manual
+  yang jalan. Toggle nonaktif/aktif dan hapus job juga diverifikasi,
+  semua lewat UI sungguhan dengan Postgres nyata (bukan mock), **0
+  console error** di seluruh alur. Job uji dihapus setelah verifikasi
+  supaya tidak terus berjalan di server live.
+
+**Tahap 16 — Plugin, area Phase 3 keempat**
+
+Ditanya lagi ke Boss lewat `AskUserQuestion` (2 area tersisa: Plugin/MCP,
+keduanya nol kode) — dipilih **Plugin**, karena bisa dibuktikan hidup
+end-to-end tanpa dependency Python baru maupun sistem eksternal, sementara
+MCP butuh `tools/adapters/mcp.py`+`tool_router.py` yang keduanya belum ada
+foldernya sama sekali, dan idealnya butuh MCP server sungguhan untuk
+pembuktian live (lebih besar & lebih berisiko untuk pass pertama).
+
+- **Ditemukan lewat riset dulu (bukan diasumsikan)**: dua jalur agent di
+  sistem ini berbeda total soal tool-calling. Jalur `orchestrator/`+
+  `agents/generic_agent.py` (dipakai Workflow/Vision/Automation) murni LLM
+  generation per role — **tidak pernah** mengeksekusi fungsi apa pun,
+  "role tool" cuma nama role lewat Model Registry, kebetulan sama namanya
+  dengan konsep "tool". Satu-satunya jalur yang benar-benar mengeksekusi
+  fungsi selama percakapan LLM adalah **ChatEngine** (`core/chat/`) via
+  native tool-calling Ollama, lewat `agent/tools/registry.py` +
+  `core/chat/tool_schemas.py`. Jadi Plugin diintegrasikan ke jalur itu —
+  ini juga persis pola yang sudah didokumentasikan CLAUDE.md untuk "cara
+  menambah tool baru", bukan jalur baru yang diciptakan sendiri.
+- **`plugins/base.py`: `PluginInterface`** (Bab 59.1) — kontrak abstrak
+  (`execute()`, `manifest()`) yang dilihat Orchestrator/tool registry;
+  tak pernah tahu kelas plugin konkret (Dependency Inversion, Bab 4.3).
+  **`plugins/weather/`** — plugin nyata pertama, kategori "Weather" (Bab
+  59.2: "Data cuaca untuk perencanaan operasi lapangan/tambang/GIS" — cocok
+  dengan domain mining/GIS proyek ini): `plugin.py` (WeatherPlugin, panggil
+  Open-Meteo — gratis, tanpa API key, jadi Secrets Management Bab 58 tak
+  relevan), `config.py` (base URL), `manifest.json` (metadata: nama, versi,
+  kapabilitas, `permission_action` — persis struktur Bab 59.3). Panggilan
+  HTTP sinkron lewat `urllib` stdlib (bukan `httpx`/`requests` baru) —
+  meniru gaya `agent/tools/analyzers.py` di folder yang sama, nol
+  dependency baru (Bab 45.3).
+- **`registry/plugin_registry.py`** — katalog plugin eksplisit (dict
+  statis `{"weather": WeatherPlugin()}`), **bukan** filesystem auto-scan
+  (Bab 45.3 — dict eksplisit sama mudahnya ditambah, jauh lebih auditable).
+  Status enabled/disabled **in-memory saja** untuk pass pertama ini (pola
+  sama dengan HashStore-pluggable-default-in-memory sebelum Tahap 9
+  mengaitkan Redis untuk Circuit Breaker) — restart proses mengembalikan
+  semua plugin ke enabled, gap yang diakui bukan disembunyikan.
+- **Tool baru `plugin_weather`** didaftarkan di `agent/tools/registry.py`
+  (strangler pattern, satu baris registrasi tambahan — pola sama dengan
+  RBAC pilot Tahap 10) + skema JSON-nya di `core/chat/tool_schemas.py`
+  (nama harus cocok, persis aturan yang sudah tertulis di CLAUDE.md).
+  Fungsi tool-nya sendiri cek `plugin_registry.get("weather")` dulu — kalau
+  dinonaktifkan lewat Settings, tool mengembalikan pesan error alih-alih
+  memanggil API, TANPA perlu mengubah `core/chat/engine.py` (fondasi
+  terlindungi) sama sekali.
+- **`security/permissions.py`** dapat entri baru `TOOL_RISK_ACTIONS["plugin_weather"]
+  = "plugin:weather"` (persis pola `write_pdf`, gap yang sama pula: RBAC ini
+  cuma aktif kalau caller mengirim role — `/api/v1/agent/run` mengirim,
+  `core/chat/` tidak, jadi gate ini inert untuk panggilan dari Chat, sama
+  seperti `write_pdf` sejak Tahap 10). Role `operator` diberi izin
+  `plugin:weather`. **`manage_plugins`** (dipakai `api/routes/plugins.py`
+  untuk gerbang toggle Settings) jadi **pemakai pertama** `require_role()`
+  — fungsi dependency FastAPI yang sudah ada sejak Tahap 7 tapi belum
+  pernah benar-benar dipasang ke rute manapun.
+- **`api/routes/plugins.py`** — `GET /api/v1/plugins` (list, terbuka —
+  sama seperti `monitoring.py`/`knowledge.py`), `PATCH /api/v1/plugins/{name}`
+  (toggle, digerbang `require_role("manage_plugins")` — hanya role `admin`
+  yang punya akses lewat wildcard `"*"`). Tidak ada tabel DB — state
+  in-memory di `plugin_registry` cukup untuk pilot pertama ini.
+- **UI: section "Plugin" DI DALAM `SettingsPage.tsx` yang sudah ada**,
+  bukan area sidebar baru — `AI_WORKSPACE_ARCHITECTURE.md` §8 eksplisit:
+  "Area Settings harus memiliki ruang untuk mengaktifkan/menonaktifkan
+  kapabilitas tambahan (integrasi baru) tanpa perubahan navigasi inti."
+  Card per plugin (nama, badge Aktif/Nonaktif, deskripsi, tombol
+  Aktifkan/Nonaktifkan) — pola tombol yang sama dengan `ScheduledJobList`
+  Tahap 15, bukan komponen switch baru.
+- **16 test baru** (372/372 total): 5 unit `test_plugin_registry.py`
+  (list/get/set_enabled/plugin tak dikenal), 3 unit `test_weather_plugin.py`
+  (manifest, sukses, gagal jaringan — `_fetch` di-monkeypatch, bukan
+  memanggil Open-Meteo sungguhan di CI), 4 unit baru di
+  `test_auth_permissions.py` (izin `plugin:weather` per role +
+  `require_role("manage_plugins")`), 4 integrasi `test_plugins_api.py`
+  (list, toggle ditolak non-admin, toggle diterima admin, 404 plugin tak
+  dikenal — tanpa DB sama sekali, murni ASGI client + state in-memory).
+- **Diverifikasi live lewat browser DAN panggilan langsung Python** —
+  panggilan langsung `WeatherPlugin().execute(latitude=-6.2, longitude=106.8)`
+  mengembalikan data cuaca Jakarta sungguhan (25.6°C, 0.0mm hujan,
+  2.9 km/jam angin) dari Open-Meteo hidup. **Settings page**: toggle
+  Aktifkan/Nonaktifkan plugin weather live, badge berubah benar. **Chat**:
+  dikirim "Gunakan tool yang tersedia untuk cek cuaca... lintang -6.2 bujur
+  106.8" → model `gemma4:e2b` benar-benar memanggil tool `plugin_weather`
+  lewat native tool-calling Ollama → jawaban akhir memuat **angka yang
+  identik persis** dengan panggilan Python langsung di atas (25.6°C, 0.0mm,
+  2.9 km/jam, kode cuaca 0, sumber open-meteo.com) — bukti tool call
+  sungguhan memanggil API eksternal nyata, bukan halusinasi model. 0
+  console error di seluruh alur (Settings toggle + Chat tool-call).
+  **Gotcha driver Playwright (terulang)**: `type` lalu `press Enter` yang
+  dikirim terlalu cepat berturut-turut menyebabkan Enter ter-submit di
+  tengah pengetikan (readline driver tidak menunggu promise `type` selesai
+  sebelum memproses baris berikutnya) — pesan pertama terpotong jadi
+  "Gunakan tool yang tersedia untuk cek cuaca" tanpa koordinat; perbaikan:
+  beri jeda ~3 detik antara `type` dan `press Enter` untuk string panjang.
+
+**Tahap 17 — MCP Client, area Phase 3 kelima (terakhir)**
+
+Ditanya lagi ke Boss lewat `AskUserQuestion` — satu-satunya area Phase 3
+tersisa. Ditanya juga soal scope: **Client saja** (Recommended, dipilih)
+vs **Client + Server**. Client dipilih karena itu use-case utama per Bab 60
+sendiri ("client" ditulis duluan, "server" ditulis sebagai "berpotensi"),
+dan scope-nya jauh lebih kecil/lebih cepat dibuktikan hidup.
+
+- **Dependency baru: `mcp==1.28.1`** (SDK resmi) — dengan alasan eksplisit
+  (Bab 45.3 mengizinkan kalau beralasan): hand-roll protokol JSON-RPC MCP
+  dari nol (handshake, session lifecycle, Tool Discovery) berisiko tinggi
+  salah dan tak ada manfaatnya dibanding pakai implementasi referensi.
+  **Konflik dependency nyata ditemukan+diperbaiki**: `mcp` butuh
+  `pydantic>=2.11` (requirements.txt sebelumnya mengunci `2.10.3`) dan
+  tidak membatasi versi atas `starlette` (resolver pip menarik starlette
+  1.3.1 yang melanggar batas atas FastAPI `<0.42`). Diperbaiki dengan
+  menaikkan `pydantic` ke `2.13.4` dan mengunci eksplisit `starlette==0.41.3`
+  di requirements.txt — **372 test lama tetap lulus semua** setelah bump,
+  dan service live di-restart+dicek `/health/ready` untuk memastikan
+  FastAPI/SQLAlchemy/dsb tidak diam-diam rusak oleh transitive upgrade ini.
+- **Ditemukan lewat riset dulu (sama seperti Tahap 16)**: karena MCP tools
+  cuma bisa benar-benar dieksekusi lewat jalur ChatEngine (bukan
+  Orchestrator, lihat temuan Tahap 16), MCP Client dipasang di jalur yang
+  sama persis dengan Plugin.
+- **`mcp_client/client.py`: `MCPClient`** — pembungkus tipis di atas SDK
+  resmi (`stdio_client`+`ClientSession`): `list_tools()` (Tool Discovery,
+  Bab 60.1), `call_tool(name, arguments)` (eksekusi, hasil dinormalisasi ke
+  dict polos — Bab 60.2: "Hasil dinormalisasi ke ToolResult"). Session
+  Management sengaja simpel untuk pass pertama ini: **satu koneksi
+  berumur pendek per panggilan** (spawn subprocess → initialize → satu
+  aksi → tutup), bukan sesi persisten yang dipertahankan lintas panggilan
+  — lebih aman untuk pilot, tapi berarti tiap panggilan membayar biaya
+  spawn subprocess baru, gap yang diakui bukan disembunyikan.
+- **`mcp_client/config.py`: `MCP_SERVERS`** — dict eksplisit nama server →
+  command line yang menjalankannya (bentuk yang sama dengan kebanyakan MCP
+  server nyata: `npx @modelcontextprotocol/server-*`, `python -m
+  some_server`, dst). Satu entri terkonfigurasi: `"demo"`.
+- **`mcp_client/demo_server.py`** — server MCP minimal (`FastMCP`, 2 tool:
+  `add`, `reverse_text`) **khusus untuk membuktikan Client bekerja**,
+  ditandai eksplisit di docstring sebagai fixture dev/test, BUKAN
+  kapabilitas AI_ENGINE yang dikirim ke produksi — dijalankan sebagai
+  subprocess lokal (`python -m mcp_client.demo_server`), bukan layanan
+  eksternal sungguhan (jadi aman & deterministik dijalankan di CI, sekelas
+  dengan test subprocess CLI tool biasa, bukan "live service" yang
+  dilarang Bab 12.3).
+- **Tool baru `mcp_list_tools`/`mcp_call_tool`** didaftarkan di
+  `agent/tools/registry.py` (strangler, pola sama Plugin) + skema di
+  `core/chat/tool_schemas.py`. Digerbang **`ENABLE_MCP`** (Bab 57.1 — flag
+  standar yang sudah disebut namanya di dokumen sejak awal, baru sekarang
+  benar-benar ada kodenya) dicek di dalam fungsi tool saat dipanggil, bukan
+  saat registrasi — pola sama dengan cek enabled Plugin.
+- **`security/permissions.py`**: `TOOL_RISK_ACTIONS["mcp_call_tool"] =
+  "mcp:call"` — Bab 60.1 eksplisit: "Setiap tool yang diekspos via MCP
+  tunduk pada validasi... MCP tidak memiliki jalur pintas keamanan." Satu
+  action generik menutupi semua server/tool yang mungkin dijangkau lewat
+  `mcp_call_tool` — permission granular per-server-per-tool akan prematur
+  untuk client yang baru bicara ke satu server (demo) hari ini.
+  `mcp_list_tools` (baca-saja, discovery) sengaja tidak digerbang, sama
+  seperti `ToolRegistry.list_tools()` internal. Role `operator` diberi
+  `mcp:call`.
+- **Tidak ada perubahan UI sama sekali** — `AI_WORKSPACE_ARCHITECTURE.md`
+  §8 eksplisit: "Kapabilitas baru yang masuk lewat MCP harus tampil
+  melalui mekanisme event dan tool generik yang sama (Bab 5), bukan jalur
+  UI khusus." MCP muncul secara alami lewat chip tool-call generik Chat
+  yang sudah ada, sama seperti tool lain — beda dari Plugin (Tahap 16)
+  yang memang butuh toggle di Settings.
+- **12 test baru** (384/384 total): 4 unit `test_mcp_client.py` (list
+  tools dari demo server sungguhan, call `add`/`reverse_text` dapat hasil
+  benar, tool tak dikenal → error), 5 unit `test_mcp_tools_registry.py`
+  (round-trip lewat `build_registry()` sungguhan, server tak dikonfigurasi
+  → error, `ENABLE_MCP=False` memblokir baik list maupun call), 3 unit baru
+  di `test_auth_permissions.py` (izin `mcp:call` per role, `mcp_list_tools`
+  tak digerbang).
+- **Diverifikasi live lewat Chat sungguhan** — dikirim "Panggil tool add
+  di MCP server bernama demo untuk menjumlahkan 42 dan 58" → model
+  `gemma4:e2b` benar-benar memanggil `mcp_call_tool(server="demo",
+  tool_name="add", arguments={"a":42,"b":58})` lewat native tool-calling →
+  Client MCP genuinely melakukan handshake protokol (spawn subprocess,
+  `initialize`, `tools/call`) ke server demo → jawaban akhir: **"Hasil
+  penjumlahan dari 42 dan 58 adalah 100.0"** — 42+58=100, angka yang
+  BENAR secara matematis dan TIDAK mungkin dihasilkan model kecil ini
+  sendiri secara andal tanpa benar-benar memanggil tool (model kecil lokal
+  terkenal tidak reliable untuk aritmatika) — bukti kuat bahwa protokol
+  MCP sungguhan dieksekusi ujung-ke-ujung, bukan halusinasi. 0 console
+  error. Service live di-restart dan `/health/ready` dicek dulu sebelum
+  verifikasi ini untuk memastikan bump dependency `pydantic`/`starlette`
+  di atas tidak diam-diam merusak API yang sedang berjalan.
+
 ## Test
-- **Backend: 341/341 lulus** (`pytest -q`) — naik dari 328 lewat 13 test
+- **Backend: 384/384 lulus** (`pytest -q`) — naik dari 372 lewat 12 test
+  MCP Client (Tahap 17, lihat detail di atas): 4 unit MCPClient, 5 unit
+  registry bridge, 3 unit permission. Sebelumnya naik dari 356 lewat 16 test
+  Plugin (Tahap 16, lihat detail di atas): 5 unit registry, 3 unit
+  WeatherPlugin, 4 unit permission, 4 integrasi API. Sebelumnya naik dari 341 lewat 15 test
+  Automation (Tahap 15, lihat detail di atas): 7 unit `test_scheduler.py`,
+  8 integrasi `test_automation_api.py`. Sebelumnya naik dari 328 lewat 13 test
   Vision (Tahap 14, lihat detail di atas): 7 unit provider payload, 2 unit
   agent, 2 unit planner, 2 integrasi endpoint. Sebelumnya naik dari 318
   lewat 10 test integrasi `tests/integration/test_projects_api.py` (CRUD + role
@@ -605,7 +869,62 @@ dulu), MCP (butuh server eksternal buat verifikasi live), atau Plugin
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-14, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-17, diakui bukan disamarkan)
+- **MCP Client (Tahap 17) cuma Client, bukan Server** — keputusan skop
+  sadar (dipilih Boss lewat `AskUserQuestion`); AI_ENGINE tidak bisa
+  dikonsumsi client MCP eksternal (mis. Claude Desktop) sampai sisi Server
+  dibangun terpisah. **Baru satu server terkonfigurasi** (`demo`, fixture
+  dev murni untuk pembuktian) — belum tersambung ke MCP server pihak
+  ketiga sungguhan manapun; nambah server nyata baru tinggal satu baris
+  di `MCP_SERVERS` tapi belum ada yang dipilih/diverifikasi. **Session
+  Management minimal** — satu koneksi baru per panggilan (bukan
+  persisten/pooled), jadi tiap panggilan bayar biaya spawn subprocess;
+  untuk pemakaian intensif ini perlu ditinjau ulang. **RBAC `mcp:call`
+  inert dari Chat** (`core/chat/` tak mengirim role) — gap yang sama
+  persis dengan `write_pdf`/`plugin_weather`, bukan regresi baru. Tidak
+  ada rate-limit/timeout eksplisit di `MCPClient` di luar default SDK.
+  **Dependency `mcp` menaikkan `pydantic` (2.10.3→2.13.4) dan mengunci
+  `starlette==0.41.3`** — sudah diverifikasi 384 test lama tetap lulus dan
+  service live tetap sehat setelah bump, tapi ini transitive-dependency
+  footprint baru yang perlu diingat saat upgrade FastAPI/pydantic
+  berikutnya.
+
+- **Plugin (Tahap 16) enabled/disabled state in-memory saja** — restart
+  proses API mengembalikan semua plugin ke enabled (default manifest),
+  belum persisten ke Postgres. Baru **satu plugin nyata** (`weather`);
+  kategori lain Bab 59.2 (ERP/SAP/Mining/Email/GIS Eksternal) semua masih
+  nol kode — nambah plugin baru sudah punya polanya (folder
+  `plugins/<nama>/` + satu baris di `_AVAILABLE` dict), tapi belum
+  dilakukan untuk kategori lain. **RBAC `plugin:weather` inert dari Chat**
+  (`core/chat/` tak pernah mengirim role ke `ToolRegistry.execute()`) —
+  gap yang sama persis dengan `write_pdf` sejak Tahap 10, bukan regresi
+  baru. Tidak ada Tool Discovery/Capability Discovery dinamis (Bab 59
+  cuma menyebutnya untuk MCP, bukan Plugin — jadi bukan gap yang relevan
+  di sini, tapi dicatat untuk kejelasan cakupan). Plugin belum bisa
+  dipanggil dari jalur Orchestrator/Workflow — hanya dari Chat, karena
+  jalur Orchestrator memang tidak punya tool-calling apa pun sama sekali
+  (gap arsitektural yang jauh lebih besar dari Plugin itu sendiri, lihat
+  temuan riset Tahap 16 di atas).
+
+- **Automation (Tahap 15) tanpa sintaks cron** — cuma interval polos
+  ("tiap N detik"), keputusan skop sadar (lihat docstring
+  `db.models.ScheduledJob`), bukan keterbatasan; kalau nanti butuh "tiap
+  Senin jam 9 pagi", perlu desain ulang trigger. **Scheduler jalan
+  in-process** lewat `asyncio.create_task`, bukan proses worker
+  terpisah — job sedang berjalan akan hilang kalau proses API
+  restart di tengah jalan (diterima untuk pass pertama, dicatat di
+  docstring `scheduler/scheduler.py`, sama semangat dengan penerimaan
+  gap serupa di Tahap-tahap sebelumnya). **Tidak ada RBAC di atas
+  ownership-setelah-dibuat** — siapa pun yang punya API key valid manapun
+  (atau tanpa key sama sekali saat `API_KEYS` kosong) boleh membuat
+  `ScheduledJob` baru; begitu dibuat baru dia scoped ke `owner_key`-nya.
+  `messaging.TaskQueue` (Bab 23) makin lama makin tak terpakai — sekarang
+  tiga fitur (Orchestrator, Vision, Automation) semua jalan langsung
+  in-process, belum ada satu pun yang benar-benar konsumsi antrean itu.
+  Counter/jam scheduler pakai `datetime.utcnow()` server, bukan per-user
+  timezone — `interval_seconds` tak peduli zona waktu (memang tak relevan
+  untuk interval polos, tapi akan jadi relevan kalau nanti cron
+  ditambahkan).
 - **Vision (Tahap 14) diverifikasi dengan model lokal gratis (`tool`/Ollama),
   bukan role `vision` sungguhan (default Gemini, cloud)** — payload gambar
   tiap provider cloud (Gemini/OpenAI/Claude) sudah benar secara *bentuk*
@@ -713,8 +1032,11 @@ dulu), MCP (butuh server eksternal buat verifikasi live), atau Plugin
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
 Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
 Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
-(Tahap 12), Projects (Tahap 13), dan Vision (Tahap 14) semua selesai
-2026-07-05. Kandidat prioritas berikutnya, dari yang paling murah
+(Tahap 12), Projects (Tahap 13), Vision (Tahap 14), Automation (Tahap 15),
+Plugin (Tahap 16), dan MCP Client (Tahap 17) semua selesai 2026-07-05/06.
+**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
+nyata** — MCP baru sisi Client (bukan Server, keputusan skop sadar).
+Kandidat prioritas berikutnya, dari yang paling murah
 dieksekusi: (1) lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo` lain
 satu per satu (pola sama seperti ADR-0013, tinggal tambah entri
 `TOOL_RISK_ACTIONS`); (2) Dockerfile multi-stage dengan rebuild+verifikasi
@@ -739,6 +1061,18 @@ tapi endpoint-nya sendiri masih terbuka) — `memory.py` khususnya berisiko
 terhubung ke Conversation/File sungguhan (Tahap 13, keputusan lanjutan
 yang sengaja ditunda); (f) Vision (Tahap 14) belum diverifikasi live ke
 provider cloud sungguhan (Gemini/OpenAI/Claude) dengan gambar nyata — baru
-bentuk payload yang teruji; (g) Plugin/Automation/MCP — 3 dari 5 area
-Phase 3, semua masih nol kode sama sekali.
+bentuk payload yang teruji; (g) Automation (Tahap 15) SELESAI dan
+diverifikasi live termasuk auto-fire background tanpa interaksi manual —
+gap tersisa cuma RBAC-di-atas-ownership dan ketiadaan sintaks cron (lihat
+"Gap kumulatif" di atas); (h) Plugin (Tahap 16) SELESAI — satu plugin nyata
+(`weather`) diverifikasi live lewat Chat tool-calling + Settings toggle;
+gap tersisa cuma state in-memory (bukan persisten) dan baru satu kategori
+plugin dari yang dicontohkan Bab 59.2; (i) MCP Client (Tahap 17) SELESAI —
+diverifikasi live lewat Chat memanggil tool `add` di server demo sungguhan
+(protokol MCP asli via SDK resmi, bukan mock); gap tersisa: baru sisi
+Client (bukan Server, keputusan skop sadar), baru satu server
+terkonfigurasi (fixture dev, belum tersambung ke MCP server pihak ketiga
+sungguhan), dan sesi tak persisten (satu koneksi baru per panggilan).
+**Seluruh 5 area Phase 3 kini punya kode nyata**, tak ada lagi yang nol
+kode sama sekali.
 

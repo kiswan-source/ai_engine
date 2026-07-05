@@ -38,6 +38,13 @@ export function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
+/** Automation (Bab 68 Prioritas 5) — "tiap 30 detik" / "tiap 2 jam" from a raw interval_seconds. */
+export function formatInterval(seconds: number): string {
+  if (seconds < 60) return `tiap ${seconds} detik`
+  if (seconds < 3600) return `tiap ${Math.round(seconds / 60)} menit`
+  return `tiap ${Math.round(seconds / 3600)} jam`
+}
+
 /** Vision (Bab 17.1 role) — reads a File as a `data:<mime>;base64,<data>` URI, matching `api/routes/orchestrator.py`'s `_parse_data_uri`. */
 export function fileToDataUri(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

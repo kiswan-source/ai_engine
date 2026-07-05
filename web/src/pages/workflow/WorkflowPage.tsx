@@ -2,16 +2,26 @@
  * Timeline minimal (READY_FOR_IMPLEMENTATION.md §3 step 5) — polls the real
  * synchronous `/api/v1/orchestrator/run` rather than the not-yet-built SSE
  * stream (see `useWorkflow.ts`/`eventStream.ts` docstrings).
+ *
+ * Automation (Bab 68 Prioritas 5) lives inside this page as a second tab
+ * rather than its own sidebar area — AI_WORKSPACE_ARCHITECTURE.md §8 says
+ * scheduled work should distinguish itself *within* Workflow, not grow a
+ * new top-level nav item for every new backend capability.
  */
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Loader2, ImagePlus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { StepIndicator } from '@/components/timeline/StepIndicator'
 import { ExpandableLog } from '@/components/timeline/ExpandableLog'
+import { ScheduledJobList } from '@/components/automation/ScheduledJobList'
 import { useWorkflow } from '@/hooks/useWorkflow'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import { workflowService } from '@/services/workflowService'
+import { automationService } from '@/services/automationService'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { WORKFLOW_STATE_LABEL } from '@/types/workflow'
+import type { ScheduledJob } from '@/types/automation'
 import { fileToDataUri } from '@/lib/utils'
 
 export default function WorkflowPage() {
@@ -66,114 +76,251 @@ export default function WorkflowPage() {
         </p>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <label className="text-sm font-medium">Peran yang dilibatkan</label>
-        <div className="flex flex-wrap gap-2">
-          {roles.map((role) => (
-            <button
-              key={role}
-              type="button"
-              onClick={() => toggleRole(role)}
-              className={`rounded-full border px-3 py-1 text-xs ${
-                selectedRoles.includes(role)
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border text-muted-foreground'
-              }`}
-            >
-              {role}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Tabs defaultValue="manual">
+        <TabsList>
+          <TabsTrigger value="manual">Jalankan Sekarang</TabsTrigger>
+          <TabsTrigger value="scheduled">Terjadwal</TabsTrigger>
+        </TabsList>
 
-      <div className="flex flex-col gap-2">
-        <label className="text-sm font-medium" htmlFor="mode-select">
-          Pola eksekusi
-        </label>
-        <select
-          id="mode-select"
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          className="w-fit rounded-md border border-input bg-transparent px-3 py-1.5 text-sm"
-        >
-          {modes.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        rows={3}
-        placeholder="Apa yang perlu dikerjakan?"
-        className="resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-      />
-
-      <div className="flex flex-col gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={onFilesChosen}
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-fit"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <ImagePlus size={16} className="mr-2" />
-          Lampirkan Gambar
-        </Button>
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {images.map((uri, i) => (
-              <div key={i} className="relative">
-                <img
-                  src={uri}
-                  alt={`Lampiran ${i + 1}`}
-                  className="h-16 w-16 rounded-md border border-border object-cover"
-                />
+        <TabsContent value="manual" className="flex flex-col gap-6">
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium">Peran yang dilibatkan</label>
+            <div className="flex flex-wrap gap-2">
+              {roles.map((role) => (
                 <button
+                  key={role}
                   type="button"
-                  onClick={() => removeImage(i)}
-                  aria-label={`Hapus lampiran ${i + 1}`}
-                  className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground"
+                  onClick={() => toggleRole(role)}
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    selectedRoles.includes(role)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground'
+                  }`}
                 >
-                  <X size={12} />
+                  {role}
                 </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        )}
+
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium" htmlFor="mode-select">
+              Pola eksekusi
+            </label>
+            <select
+              id="mode-select"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              className="w-fit rounded-md border border-input bg-transparent px-3 py-1.5 text-sm"
+            >
+              {modes.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={3}
+            placeholder="Apa yang perlu dikerjakan?"
+            className="resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+
+          <div className="flex flex-col gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={onFilesChosen}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <ImagePlus size={16} className="mr-2" />
+              Lampirkan Gambar
+            </Button>
+            {images.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {images.map((uri, i) => (
+                  <div key={i} className="relative">
+                    <img
+                      src={uri}
+                      alt={`Lampiran ${i + 1}`}
+                      className="h-16 w-16 rounded-md border border-border object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(i)}
+                      aria-label={`Hapus lampiran ${i + 1}`}
+                      className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Button
+            onClick={onRun}
+            disabled={isRunning || !prompt.trim() || selectedRoles.length === 0}
+            className="w-fit"
+          >
+            {isRunning && <Loader2 size={16} className="mr-2 animate-spin" />}
+            Jalankan Workflow
+          </Button>
+
+          {error && <p className="text-sm text-destructive">{error}</p>}
+
+          {steps.length > 0 && (
+            <div className="rounded-lg border border-border p-4">
+              <p className="mb-2 text-sm font-medium">
+                Status: {status !== 'idle' ? WORKFLOW_STATE_LABEL[status] : '—'}
+              </p>
+              {steps.map((step) => (
+                <StepIndicator key={step.stepId} step={step} />
+              ))}
+              <ExpandableLog steps={steps} />
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="scheduled">
+          <ScheduledPanel prompt={prompt} selectedRoles={selectedRoles} mode={mode} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function ScheduledPanel({
+  prompt,
+  selectedRoles,
+  mode,
+}: {
+  prompt: string
+  selectedRoles: string[]
+  mode: string
+}) {
+  const [jobs, setJobs] = useState<ScheduledJob[]>([])
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('')
+  const [intervalMinutes, setIntervalMinutes] = useState(60)
+  const [creating, setCreating] = useState(false)
+  const [runningId, setRunningId] = useState<string | null>(null)
+  const pushNotification = useNotificationStore((s) => s.push)
+
+  const fetchJobs = useCallback(() => automationService.list(), [])
+
+  useEffect(() => {
+    fetchJobs()
+      .then((res) => setJobs(res.jobs))
+      .finally(() => setLoading(false))
+  }, [fetchJobs])
+
+  async function onSchedule() {
+    if (!name.trim() || !prompt.trim() || selectedRoles.length === 0) return
+    setCreating(true)
+    try {
+      await automationService.create({
+        name,
+        prompt,
+        roles: selectedRoles,
+        mode,
+        interval_seconds: intervalMinutes * 60,
+      })
+      setName('')
+      const res = await fetchJobs()
+      setJobs(res.jobs)
+      pushNotification({ variant: 'success', message: 'Workflow dijadwalkan.' })
+    } catch (e) {
+      pushNotification({
+        variant: 'destructive',
+        message: e instanceof Error ? e.message : 'Gagal menjadwalkan workflow',
+      })
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function onToggleEnabled(job: ScheduledJob) {
+    await automationService.setEnabled(job.id, !job.enabled)
+    const res = await fetchJobs()
+    setJobs(res.jobs)
+  }
+
+  async function onRunNow(job: ScheduledJob) {
+    setRunningId(job.id)
+    try {
+      await automationService.runNow(job.id)
+      const res = await fetchJobs()
+      setJobs(res.jobs)
+    } finally {
+      setRunningId(null)
+    }
+  }
+
+  async function onDelete(job: ScheduledJob) {
+    await automationService.remove(job.id)
+    const res = await fetchJobs()
+    setJobs(res.jobs)
+  }
+
+  return (
+    <div className="flex flex-col gap-6 pt-4">
+      <div className="flex flex-col gap-2 rounded-lg border border-border p-4">
+        <p className="text-sm font-medium">Jadwalkan pekerjaan di atas</p>
+        <p className="text-xs text-muted-foreground">
+          Memakai peran, pola eksekusi, dan prompt yang sudah diisi di tab &quot;Jalankan
+          Sekarang&quot;.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nama jadwal…"
+            className="flex-1 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm"
+          />
+          <div className="flex items-center gap-1 text-sm text-muted-foreground">
+            tiap
+            <input
+              type="number"
+              min={1}
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value)))}
+              className="w-16 rounded-md border border-input bg-transparent px-2 py-1.5 text-center text-sm"
+            />
+            menit
+          </div>
+          <Button
+            size="sm"
+            onClick={onSchedule}
+            disabled={creating || !name.trim() || !prompt.trim() || selectedRoles.length === 0}
+          >
+            {creating ? 'Menjadwalkan…' : 'Jadwalkan'}
+          </Button>
+        </div>
       </div>
 
-      <Button
-        onClick={onRun}
-        disabled={isRunning || !prompt.trim() || selectedRoles.length === 0}
-        className="w-fit"
-      >
-        {isRunning && <Loader2 size={16} className="mr-2 animate-spin" />}
-        Jalankan Workflow
-      </Button>
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
-      {steps.length > 0 && (
-        <div className="rounded-lg border border-border p-4">
-          <p className="mb-2 text-sm font-medium">
-            Status: {status !== 'idle' ? WORKFLOW_STATE_LABEL[status] : '—'}
-          </p>
-          {steps.map((step) => (
-            <StepIndicator key={step.stepId} step={step} />
-          ))}
-          <ExpandableLog steps={steps} />
-        </div>
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Memuat…</p>
+      ) : (
+        <ScheduledJobList
+          jobs={jobs}
+          runningId={runningId}
+          onToggleEnabled={onToggleEnabled}
+          onRunNow={onRunNow}
+          onDelete={onDelete}
+        />
       )}
     </div>
   )
