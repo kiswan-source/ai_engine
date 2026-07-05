@@ -20,6 +20,8 @@ from api.routes import files as files_router
 from api.routes import chat as chat_router
 from api.routes import orchestrator as orchestrator_router
 from api.routes import monitoring as monitoring_router
+from api.routes import memory as memory_router
+from api.routes import knowledge as knowledge_router
 
 logger = get_logger(__name__)
 
@@ -91,6 +93,8 @@ app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"
 app.include_router(chat_router.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", tags=["Orchestrator"])
 app.include_router(monitoring_router.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
+app.include_router(memory_router.router, prefix="/api/v1/memory", tags=["Memory"])
+app.include_router(knowledge_router.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
 
 if (WEB_DIST_DIR / "index.html").exists():
     # SPA fallback: React Router (FRONTEND_ARCHITECTURE.md §5) owns client-side

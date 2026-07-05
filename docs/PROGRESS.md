@@ -441,12 +441,61 @@ Router + Zustand + Lucide + ESLint + Prettier + Vitest + RTL
   (latensi 0→16.73s, workflow selesai 0→1) — bukti telemetry pipeline
   genuinely live. 0 console error di seluruh halaman.
 
+**Tahap 12 lanjutan — Memory & Knowledge diwire sungguhan (bukan lagi placeholder)**
+
+Boss diberi pilihan eksplisit lewat `AskUserQuestion` untuk kedua area ini
+(karena masing-masing punya beberapa pendekatan dengan trade-off beda), dan
+memilih: Memory diwire apa adanya (bukan integrasi ChatEngine dulu),
+Knowledge diwire dengan ingest teks tempel (bukan upload file).
+
+- **`api/routes/memory.py` baru**: `GET /{session_id}` (agregasi
+  `working.get_all`/`conversation.get_history`/`summary.get_summary`/
+  `long_term.recall_all`, keempatnya scoped ke `session_id`), `DELETE
+  /{session_id}/working/{key}`, `DELETE /{session_id}/long-term/{key}`,
+  `DELETE /{session_id}/conversation`, `DELETE /{session_id}/summary`.
+  Reflection memory (scoped per **role** agent, bukan sesi — mekanisme
+  self-improvement internal) dan Vector memory (search-only, tak ada
+  listing polos) sengaja dikecualikan, alasan sama seperti Memory Dashboard
+  di `telemetry/monitoring.py`. `MemoryPage.tsx` menampilkan keempat tier +
+  banner kuning eksplisit ("gap backend yang diketahui, bukan halaman yang
+  rusak") karena `core/chat/engine.py` memang belum menulis ke sini —
+  diverifikasi live: input session_id apa pun menampilkan keempat section
+  kosong dengan benar, 0 console error.
+- **`api/routes/knowledge.py` baru** — pemakaian HTTP pertama untuk `rag/`
+  (Tahap 5) sama sekali. Reuse tabel `db.models.Document` yang sudah ada
+  tapi sebelumnya tak pernah ditulis siapa pun, sebagai manifest ("closest
+  fit", bukan mengambil-alih fitur `dokumen.py` yang tak berkaitan). `POST
+  /documents` (`Retriever.index_document()`), `GET /documents`, `DELETE
+  /documents/{id}` (hapus baris manifest saja — `KnowledgeStore` tak punya
+  delete-by-dokumen, chunk tetap ada di vector store, dicatat sebagai
+  keterbatasan bukan disembunyikan), `GET /search`. **Bug nyata ketemu di
+  test, bukan di pemakaian manual**: rute awalnya bikin `Retriever(...)`
+  baru di setiap request — tak masalah di dev lokal ini (pgvector +
+  Postgres sungguhan, persisten lepas dari objek Python mana pun yang
+  menyentuhnya) tapi berarti backend in-memory (default, dan yang dipakai
+  CI tanpa `.env`) melupakan segalanya antar-request. Diperbaiki jadi satu
+  `_retriever` singleton level-modul (pola sama seperti `_orchestrator`/
+  `_memory`). `KnowledgePage.tsx`: form ingest teks, pencarian semantik,
+  daftar sumber — diverifikasi live lewat browser (ingest form sungguhan →
+  toast sukses → tampil di daftar → dicari lewat kata kunci tak-persis →
+  hasil paling relevan skor tertinggi benar), 0 console error.
+- **`aiosqlite` ditambahkan ke `requirements.txt`** (dependency test-only) —
+  `api/routes/knowledge.py` adalah rute pertama yang sungguhan memakai
+  `db.connection.get_session()`; test-nya butuh DB tanpa Postgres nyata
+  (Bab 12.3, CI tak punya live service). SQLite in-memory, hanya
+  tabel `documents` yang dibuat (`VectorEmbedding` pakai tipe kolom
+  `pgvector` yang gagal di-`create_all()` di SQLite kalau ikut disertakan).
+
 ## Test
-- **Backend: 308/308 lulus** (`pytest -q`, tidak berubah dari Tahap 11 —
-  Tahap 12 murni frontend + satu route baru tipis tanpa test Python
-  tambahan; `api/routes/monitoring.py` diverifikasi via curl + browser
-  langsung, bukan pytest). Baru Tahap 10: 12 test (lihat di atas). Baru
-  Tahap 11: 9 test integrasi `tests/integration/test_orchestrator_api.py`
+- **Backend: 318/318 lulus** (`pytest -q`) — naik dari 308 lewat 10 test
+  integrasi baru: `tests/integration/test_memory_api.py` (5 — baca/hapus
+  tiap tier lewat `MemoryManager` yang di-monkeypatch persis pola
+  `_orchestrator`), `tests/integration/test_knowledge_api.py` (5 —
+  ingest+list+search+delete+404, dengan `_retriever` route di-monkeypatch
+  ke `InMemoryKnowledgeStore` eksplisit dan sesi DB SQLite in-memory via
+  `dependency_overrides`, supaya tak bergantung pada `VECTOR_BACKEND=pgvector`
+  yang kebetulan aktif di lingkungan dev ini). Baru Tahap 10: 12 test.
+  Baru Tahap 11: 9 test integrasi `tests/integration/test_orchestrator_api.py`
   (roles/modes, tolak roles kosong/mode tak dikenal, sequential selesai,
   eskalasi reflection masuk daftar approval, decide menyelesaikan/menolak,
   404 trace_id tak dikenal, 403 role tak cukup) — agent distub persis pola
@@ -464,23 +513,25 @@ Router + Zustand + Lucide + ESLint + Prettier + Vitest + RTL
   (`Tracer.timeline(trace_id)`) belum ada di UI sama sekali, dan tak bisa
   didaftar tanpa `trace_id` diketahui dulu (tak ada method "list semua
   trace_id").
-- **ChatEngine (`core/chat/`) dan `memory/` (Tahap 3) dua sistem terpisah
-  total** — bukan sekadar "belum ada route API" seperti diasumsikan
-  `IMPLEMENTATION_BLUEPRINT.md`. `core/chat/engine.py` (fondasi terlindungi)
-  tidak pernah menulis ke `memory/` tier manapun; keenam tier `memory/` juga
-  tidak punya method enumerasi sesi/scope di tier manapun (working/
-  conversation/summary/long-term/reflection — semua butuh scope/session_id/
-  namespace diketahui dulu, cuma Vector Memory yang punya `count()`).
-  Frontend `Memory` page tetap placeholder karena diwire sekarang = selalu
-  kosong. Mengisi gap ini butuh (a) integrasi ChatEngine→memory/ (strangler
-  pattern, sentuh fondasi hati-hati) DAN/ATAU (b) tambah method enumerasi ke
-  tiap tier — dua pekerjaan backend terpisah, belum dimulai.
-- **`rag/` (Tahap 5) nol wiring ke endpoint HTTP manapun** — bukan cuma
-  frontend yang kurang. Tidak ada route ingest dokumen, tidak ada route
-  list sumber pengetahuan; `KnowledgeStore` sendiri tidak punya method
-  "list semua namespace/dokumen". Frontend `Knowledge` page tetap
-  placeholder — butuh keputusan desain produk (UX ingest: upload file?
-  paste teks? chunking otomatis?) sebelum jadi tugas coding.
+- **`api/routes/memory.py` kini ADA (Tahap 12 lanjutan)**, tapi **ChatEngine
+  (`core/chat/`) dan `memory/` (Tahap 3) tetap dua sistem terpisah total** —
+  gap ini bukan gap API lagi, melainkan gap *data*. `core/chat/engine.py`
+  (fondasi terlindungi) tidak pernah menulis ke `memory/` tier manapun,
+  jadi `GET /api/v1/memory/{session_id}` benar secara kontrak tapi kosong
+  untuk sesi chat nyata mana pun — dikonfirmasi sebagai pilihan sadar Boss
+  (via `AskUserQuestion`), bukan diam-diam. Mengisi gap ini butuh integrasi
+  ChatEngine→memory/ (strangler pattern, sentuh fondasi hati-hati) — belum
+  dimulai. Reflection memory & Vector memory sengaja tidak diekspos di rute
+  ini (lihat catatan Tahap 12 di atas).
+- **`api/routes/knowledge.py` kini ADA (Tahap 12 lanjutan)** — wiring HTTP
+  pertama untuk `rag/` (Tahap 5), ingest teks tempel + list + search +
+  delete, dipakai `db.models.Document` sebagai manifest. Gap yang tersisa:
+  ingest masih teks-tempel saja (bukan upload file/OCR — keputusan sadar
+  Boss, bukan keterbatasan teknis); `KnowledgeStore` masih tak punya
+  delete-by-dokumen (hapus manifest tak menghapus chunk vector-nya);
+  `RAG_EMBEDDING_PROVIDER` default ke `hashed_bow_embedder` offline (bukan
+  embedding model sungguhan) kecuali dikonfigurasi eksplisit — relevansi
+  hasil pencarian akan lebih baik dengan embedder asli.
 - **`services/eventStream.ts` (frontend) ditulis tapi belum dipakai** —
   mengikuti kontrak `EVENT_CATALOG.md` (event kanonis PascalCase:
   `WorkflowCreated`/`AgentStarted`/dst.), siap pasang begitu ada endpoint
@@ -488,10 +539,12 @@ Router + Zustand + Lucide + ESLint + Prettier + Vitest + RTL
   polling `POST /api/v1/orchestrator/run` yang **sinkron** (blocking sampai
   workflow selesai, bukan event per-langkah) — real-time granular belum
   ada.
-- **`api/routes/monitoring.py` tidak dipasangi RBAC** — sama seperti
-  `orchestrator.py` (kecuali endpoint decide approval), rute ini terbuka
-  tanpa autentikasi. Konsisten dengan gap RBAC yang sudah dicatat di bawah,
-  bukan regresi baru.
+- **`api/routes/monitoring.py`/`memory.py`/`knowledge.py` tidak dipasangi
+  RBAC** — sama seperti `orchestrator.py` (kecuali endpoint decide
+  approval), ketiganya terbuka tanpa autentikasi. Konsisten dengan gap RBAC
+  yang sudah dicatat di bawah, bukan regresi baru — tapi `memory.py`
+  patut disorot: siapa pun yang tahu `session_id` orang lain bisa membaca/
+  menghapus memori sesi itu tanpa otorisasi sama sekali.
 - **UI Multi-Agent baru mencakup jalur run+approve** (Tahap 11), kini juga
   Monitoring (Tahap 12); ChatEngine (`core/chat/`) dan Orchestrator tetap
   dua sistem terpisah tanpa jembatan — pengguna memilih salah satu lewat
@@ -544,12 +597,16 @@ Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
 — belum satupun dimulai.
 
 **Untuk lanjutan frontend spesifik (Phase 2 sisa + Phase 3)**: (a) Memory
-page — butuh keputusan scope dulu (integrasi ChatEngine↔`memory/` vs.
-method enumerasi per tier vs. skip); (b) Knowledge page — butuh desain
-UX ingest dokumen dulu sebelum `api/routes/knowledge.py` dibangun; (c)
+page kini terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan
+(strangler pattern ke `core/chat/engine.py`) — pekerjaan backend belum
+dimulai; (b) Knowledge page kini bisa ingest+cari tapi cuma teks tempel —
+upload file/OCR, embedder sungguhan (ganti `hashed_bow_embedder` offline),
+dan delete-by-dokumen di `KnowledgeStore` semua masih terbuka; (c)
 Timeline/Approval versi penuh — butuh endpoint SSE canonical baru
 (`EVENT_CATALOG.md`) menggantikan polling `POST /run` sinkron saat ini;
-(d) Phase 3 (Projects/Plugin/Automation/Vision/MCP) — semua masih
+(d) RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py` — `memory.py`
+khususnya berisiko (baca/hapus data sesi tanpa otorisasi apa pun); (e)
+Phase 3 (Projects/Plugin/Automation/Vision/MCP) — semua masih
 `NOT IMPLEMENTED` di backend, lihat `PROJECT_SPECIFICATION.md` untuk desain
 awal entity Project.
 

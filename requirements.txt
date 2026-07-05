@@ -48,3 +48,4 @@ pytest-asyncio==0.24.0
 pytest-cov==6.0.0
 httpx==0.28.1
 openpyxl==3.1.5
+aiosqlite==0.20.0       # in-memory async DB for api/routes/knowledge.py tests — no real Postgres in CI
