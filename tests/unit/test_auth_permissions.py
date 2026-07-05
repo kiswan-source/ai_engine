@@ -3,7 +3,7 @@ import pytest
 from fastapi import HTTPException
 
 from security.auth import Principal, get_current_principal, verify_api_key
-from security.permissions import has_permission, require_permission, require_role
+from security.permissions import check_tool_permission, has_permission, require_permission, require_role
 
 
 # ─── auth.py ──────────────────────────────────────────────────────────────
@@ -86,3 +86,22 @@ async def test_require_role_dependency_rejects_denied_principal():
     with pytest.raises(HTTPException) as exc_info:
         await checker(principal=principal)
     assert exc_info.value.status_code == 403
+
+
+# ─── check_tool_permission (Bab 30 rule 2 pilot, ADR-0013) ────────────────
+
+def test_check_tool_permission_noop_for_unmapped_tool():
+    check_tool_permission("user", "read_txt")  # not in TOOL_RISK_ACTIONS, must not raise
+
+
+def test_check_tool_permission_denies_user_for_write_pdf():
+    with pytest.raises(PermissionError):
+        check_tool_permission("user", "write_pdf")
+
+
+def test_check_tool_permission_allows_operator_for_write_pdf():
+    check_tool_permission("operator", "write_pdf")  # must not raise
+
+
+def test_check_tool_permission_allows_admin_for_write_pdf():
+    check_tool_permission("admin", "write_pdf")  # must not raise

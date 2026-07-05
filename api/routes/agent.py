@@ -1,10 +1,11 @@
 """Agent API v2 — integrated with Universal Agent tools."""
 import uuid
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List
 from agent.core import AIAgent
 from core.utils.logger import get_logger
+from security.auth import Principal, get_current_principal
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -22,10 +23,10 @@ class AgentRequest(BaseModel):
 
 
 @router.post("/run")
-async def run_agent(req: AgentRequest):
+async def run_agent(req: AgentRequest, principal: Principal = Depends(get_current_principal)):
     session_id = req.session_id or str(uuid.uuid4())[:8]
-    logger.info("Agent v2 run", task=req.task[:80], session=session_id)
-    agent = AIAgent()
+    logger.info("Agent v2 run", task=req.task[:80], session=session_id, role=principal.role)
+    agent = AIAgent(role=principal.role)
     ctx = req.context or {}
     if req.files:
         ctx["uploaded_files"] = req.files

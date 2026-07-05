@@ -30,10 +30,12 @@ TOOLS:
 
 class AIAgent:
     def __init__(self, ollama_url: str = "http://172.29.239.93:11434",
-                 model: str = "gemma4:e2b", max_steps: int = MAX_STEPS):
+                 model: str = "gemma4:e2b", max_steps: int = MAX_STEPS,
+                 role: Optional[str] = None):
         self.ollama_url = ollama_url
         self.model = model
         self.max_steps = max_steps
+        self.role = role
         from agent.tools.registry import build_registry
         self.registry = build_registry(ollama_url=ollama_url, model=model)
         self.tools_schema = self.registry.schema_for_planner()
@@ -87,7 +89,7 @@ class AIAgent:
                 break
 
             # Execute
-            result = self._execute(tool_call, step_num)
+            result = await self._execute(tool_call, step_num)
             memory.add(result)
             steps.append({
                 "step": step_num,
@@ -311,12 +313,12 @@ Step {step_num} — what tool next? JSON only:"""
 
         return ToolCall(tool="DONE")
 
-    def _execute(self, tool_call: ToolCall, step_num: int) -> StepResult:
+    async def _execute(self, tool_call: ToolCall, step_num: int) -> StepResult:
         if not self.registry.has(tool_call.tool):
             return StepResult(step=step_num, tool=tool_call.tool, input=tool_call.input,
                 output=None, success=False, error=f"Tool '{tool_call.tool}' not in registry")
         try:
-            output = self.registry.execute(tool_call.tool, tool_call.input)
+            output = self.registry.execute(tool_call.tool, tool_call.input, role=self.role)
             if isinstance(output, dict) and output.get("success") is False:
                 success = False
             elif isinstance(output, dict) and "error" in output and "success" not in output:
@@ -329,6 +331,13 @@ Step {step_num} — what tool next? JSON only:"""
                 logger.info("Tool success", tool=tool_call.tool, has_file="file" in (output or {}))
             return StepResult(step=step_num, tool=tool_call.tool, input=tool_call.input,
                 output=output, success=success, error=str(output.get("error","")) if not success and isinstance(output,dict) else None)
+        except PermissionError as e:
+            logger.warning("Tool access denied", tool=tool_call.tool, role=self.role, error=str(e))
+            from security import audit_log
+            await audit_log.record("tool_access.denied", actor=self.role or "anonymous",
+                                    detail={"tool": tool_call.tool})
+            return StepResult(step=step_num, tool=tool_call.tool, input=tool_call.input,
+                output=None, success=False, error=str(e))
         except Exception as e:
             logger.error("Tool exception", tool=tool_call.tool, error=str(e))
             return StepResult(step=step_num, tool=tool_call.tool, input=tool_call.input,

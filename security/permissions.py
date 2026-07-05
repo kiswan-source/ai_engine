@@ -1,14 +1,18 @@
 """RBAC — Role-Based Access Control (MASTER_INSTRUCTION.md Bab 30 rule 2).
 
 A static role -> permission matrix, deliberately simple (Bab 45.3 — no policy-
-engine dependency). Bab 30 rule 2 specifically calls for gating high-risk
-tool calls (filesystem write, code execution, email/calendar access) through
-this — those tools live in ``agent/tools/``, a protected folder (Bab 45.1)
-this session doesn't touch. The one live integration point is
+engine dependency). The one long-standing integration point is
 ``Orchestrator.finalize_approval()`` (Bab 61.3's human-approval decision),
 checked only when a caller supplies a role; callers that don't keep the
 pre-Tahap-7 behavior exactly (no role given = no check, same as before this
 module existed).
+
+Tahap 10 (ADR-0013) adds the first real tool-call gate into ``agent/tools/``
+(a protected folder, Bab 45.1) via the strangler pattern: ``write_pdf`` is
+the pilot high-risk tool (Bab 30 rule 2's "write filesystem" category).
+``TOOL_RISK_ACTIONS`` is deliberately a single entry for now — the plan is
+to migrate the rest of the ``write_*``/``convert_geo`` tools one at a time
+in later sessions, not all at once.
 """
 from __future__ import annotations
 
@@ -16,8 +20,17 @@ from __future__ import annotations
 # doesn't need repeating per role).
 _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": frozenset({"*"}),
+    "operator": frozenset({"tool:write_pdf", "view_dashboard"}),
     "approver": frozenset({"approve_workflow", "view_dashboard"}),
     "user": frozenset({"view_dashboard"}),
+}
+
+# tool name -> permission action, for tools gated via ToolRegistry.execute()
+# (agent/tools/registry.py). A tool absent from this mapping is unaffected
+# regardless of role — this is a pilot for ONE high-risk tool, not a blanket
+# policy over every tool in the registry.
+TOOL_RISK_ACTIONS: dict[str, str] = {
+    "write_pdf": "tool:write_pdf",
 }
 
 
@@ -31,6 +44,18 @@ def require_permission(role: str, action: str) -> None:
     """Raise :class:`PermissionError` if ``role`` may not perform ``action``."""
     if not has_permission(role, action):
         raise PermissionError(f"role {role!r} lacks permission {action!r}")
+
+
+def check_tool_permission(role: str, tool_name: str) -> None:
+    """Raise :class:`PermissionError` if ``role`` may not call ``tool_name``.
+
+    A no-op for any tool not listed in :data:`TOOL_RISK_ACTIONS` — only the
+    pilot tool is gated today.
+    """
+    action = TOOL_RISK_ACTIONS.get(tool_name)
+    if action is None:
+        return
+    require_permission(role, action)
 
 
 def require_role(action: str):

@@ -25,9 +25,15 @@ class ToolRegistry:
     def schema_for_planner(self) -> str:
         return "\n".join(f"- {n}: {d}" for n, d in self._descriptions.items())
 
-    def execute(self, name: str, input_data: Any) -> Any:
+    def execute(self, name: str, input_data: Any, role: Optional[str] = None) -> Any:
         if name not in self._tools:
             raise ValueError(f"Tool '{name}' not in registry. Available: {list(self._tools.keys())}")
+        if role is not None:
+            # RBAC pilot (Bab 30 rule 2, ADR-0013) — no-op for callers that
+            # don't pass a role (e.g. core/chat/, unchanged) and for tools
+            # outside TOOL_RISK_ACTIONS (everything but write_pdf, for now).
+            from security.permissions import check_tool_permission
+            check_tool_permission(role, name)
         fn = self._tools[name]
         if input_data is None: return fn()
         elif isinstance(input_data, dict): return fn(**input_data)

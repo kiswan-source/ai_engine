@@ -18,6 +18,7 @@ from api.routes import agent as agent_router
 from api.routes import dokumen as dokumen_router
 from api.routes import files as files_router
 from api.routes import chat as chat_router
+from api.routes import orchestrator as orchestrator_router
 
 logger = get_logger(__name__)
 
@@ -82,6 +83,7 @@ app.include_router(agent_router.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(files_router.router, prefix="", tags=["Files"])
 app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"])
 app.include_router(chat_router.router, prefix="/api/v1/chat", tags=["Chat"])
+app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", tags=["Orchestrator"])
 
 @app.get("/", tags=["Root"], include_in_schema=False)
 async def root():

@@ -17,6 +17,8 @@
 | 7 | Security hardening (guardrails, output validation, audit log, RBAC) | ✅ SELESAI |
 | 8 | Kubernetes ready (manifest siap + diverifikasi live di kind) | ✅ SELESAI |
 | 9* | Circuit Breaker (Bab 55) — pasca-roadmap, prioritas #1 gap kumulatif | ✅ SELESAI |
+| 10* | RBAC ke `agent/tools/` — pilot 1 tool (`write_pdf`), Bab 30 rule 2 | ✅ SELESAI |
+| 11* | UI Multi-Agent — expose `orchestrator/`+`agents/`+`workflows/` ke web UI | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -312,22 +314,98 @@
   sungguhan (jawab "PULIH") menutup breaker. Dua registry di atas
   `RedisHashStore` yang sama saling melihat OPEN — simulasi dua pod.
 
-## Test
-- **287/287 lulus** (`pytest -q`). Baru Tahap 9: 16 test
-  `test_circuit_breaker.py` (seluruh transisi state dengan fake clock,
-  parsing override per provider, 5 skenario integrasi Dispatcher).
+**Tahap 10 (pasca-roadmap) — RBAC ke `agent/tools/`, pilot `write_pdf` (Bab 30 rule 2)** — ADR: `ADR-0013-*.md`
+- `security/permissions.py`: `TOOL_RISK_ACTIONS = {"write_pdf": "tool:write_pdf"}`
+  (sengaja satu entri — pilot, bukan migrasi penuh) + `check_tool_permission(role, tool_name)`
+  (no-op untuk tool di luar peta ini). Role baru `operator` (`tool:write_pdf`, `view_dashboard`).
+- **Gerbang aditif di choke point yang sudah ada**: `ToolRegistry.execute()`
+  (`agent/tools/registry.py`, folder fondasi Bab 45.1) dapat parameter
+  opsional `role: str | None = None` — `None` (default) = perilaku identik
+  sebelum ADR ini, strangler pattern murni tanpa hapus/tulis-ulang baris lama.
+  `core/chat/engine.py` (folder fondasi lain) tidak disentuh dan tidak
+  pernah mengirim `role`, jadi tidak terpengaruh sama sekali.
+- `agent/core.py` (bukan folder fondasi): `AIAgent(role=...)` diteruskan ke
+  `registry.execute(..., role=self.role)`; `_execute()` jadi `async def`
+  (pola breaking-change yang sama seperti Tahap 5/8) supaya bisa
+  `await audit_log.record("tool_access.denied", ...)` saat `PermissionError`
+  tertangkap.
+- **Route API pertama yang benar-benar memasang RBAC**: `/api/v1/agent/run`
+  (`api/routes/agent.py`) dapat `Depends(get_current_principal)` →
+  `AIAgent(role=principal.role)`. `API_KEYS` kosong (default dev) tetap
+  `role="admin"` → nol perubahan perilaku untuk siapa pun yang belum
+  mengonfigurasi API key.
+- **Diverifikasi live end-to-end**: panggilan langsung ke `AIAgent(role=...)
+  ._execute()` dengan tool `write_pdf` SUNGGUHAN — `role="user"` ditolak +
+  entri `tool_access.denied` nyata di `security_audit.log`;
+  `role="operator"`/`"admin"`/`None` menghasilkan PDF sungguhan di `reports/`.
+  Lapisan HTTP diverifikasi terpisah via `TestClient` + `API_KEYS` live
+  (`userkey:user,opkey:operator`): key valid diterima 200, key tak dikenal
+  ditolak 401.
 
-## Gap kumulatif (Tahap 1-9, diakui bukan disamarkan)
+**Tahap 11 (pasca-roadmap) — UI Multi-Agent, expose `orchestrator/` ke web** (permintaan Boss: "sesuaikan UI-nya agar terintegrasi dengan sistem yang sudah dikembangkan sekarang")
+- **Gap yang ditutup**: sejak Tahap 1-10, `orchestrator/`+`agents/`+`workflows/`
+  (planner, routing, dispatcher+circuit breaker, 5 mode workflow, RAG,
+  telemetry, RBAC approval) 100% backend — nol route API, nol UI. `web/`
+  cuma bicara ke `core/chat/engine.py` (single-agent tool-calling sederhana,
+  sistem yang berbeda). Ditanya eksplisit ke Boss dulu (pakai
+  `AskUserQuestion`) sebelum memilih cakupan: dashboard observability vs.
+  chat beralih ke Orchestrator vs. form RBAC — Boss pilih **chat UI beralih
+  ke Orchestrator multi-agent**.
+- **Router baru `api/routes/orchestrator.py`** (bukan folder fondasi —
+  tidak perlu strangler pattern): `GET /roles` (15 peran Bab 17.1),
+  `GET /modes` (5 `WORKFLOWS`), `POST /run` (`Orchestrator.run()`,
+  `dataclasses.asdict(WorkflowResult)` + `state` dari `TaskManager`),
+  `GET /approvals` (`pending_approvals()`), `POST /approvals/{trace_id}/decide`
+  (`finalize_approval(role=principal.role)` — RBAC `approve_workflow` yang
+  sudah ada sejak ADR-0007 akhirnya kepakai dari HTTP, bukan cuma test).
+  Satu `Orchestrator()` singleton per proses (pola sama dengan
+  `providers.circuit_breaker.breakers`) supaya approval yang dibuka satu
+  `/run` masih ada untuk `/approvals/*` berikutnya di proses yang sama.
+- **`web/` (bukan folder fondasi) dapat panel baru, aditif murni** — tab
+  switcher "💬 Chat" / "🕸️ Multi-Agent" di header; `core/chat/`'s
+  streaming loop di `app.js` tidak disentuh sama sekali. File baru
+  `web/orchestrator.js` (roles jadi checkbox berurutan, mode select, jalankan
+  workflow, render tiap `AgentResult` per-agent dengan confidence/cost/
+  provider, badge escalate/guardrail/degraded, form Approve/Reject inline
+  saat `state="reviewing"`, daftar pending approvals) — reuse
+  `escapeHtml()`/`mdToHtml()`/`$()` dari `app.js` (script klasik, scope
+  global bersama), tidak duplikasi.
+- **Diverifikasi live end-to-end**: restart `ai-engine.service` (port 8001,
+  butuh restart manual — bukan `--reload`) → `GET /roles`/`modes` benar;
+  `POST /run` role `tool` (Ollama lokal, hindari biaya cloud OpenAI/Claude/
+  Gemini yang live di `.env`) jalan lewat Dispatcher+telemetry sungguhan,
+  balas `state=completed` (output kosong — kuirk `gemma4:e2b` yang sudah
+  dicatat sebelumnya, bukan bug baru). Screenshot headless Chrome kedua tab:
+  Chat tampil seperti semula, panel Multi-Agent tampil dengan 15 role chip
+  ter-load dari API sungguhan.
+
+## Test
+- **308/308 lulus** (`pytest -q`). Baru Tahap 10: 12 test (lihat di atas).
+  Baru Tahap 11: 9 test integrasi `tests/integration/test_orchestrator_api.py`
+  (roles/modes, tolak roles kosong/mode tak dikenal, sequential selesai,
+  eskalasi reflection masuk daftar approval, decide menyelesaikan/menolak,
+  404 trace_id tak dikenal, 403 role tak cukup) — agent distub persis pola
+  `tests/unit/test_orchestrator.py`, nol panggilan provider sungguhan.
+
+## Gap kumulatif (Tahap 1-11, diakui bukan disamarkan)
+- **UI Multi-Agent baru mencakup jalur run+approve** (Tahap 11); belum ada
+  tampilan untuk dashboard observability (cost/latency/provider/memory —
+  gap ini dicatat sejak Tahap 6) atau untuk melihat Execution Timeline
+  (`Tracer`). ChatEngine (`core/chat/`) dan Orchestrator tetap dua sistem
+  terpisah tanpa jembatan — pengguna memilih salah satu lewat tab, tools
+  file (baca/tulis/GIS) tetap hanya ada di jalur Chat.
+- **RBAC ke `agent/tools/` dimulai** (Tahap 10, ADR-0013) tapi baru
+  `write_pdf`; `write_docx`/`write_html`/`write_txt`/`write_json`/
+  `write_geojson`/`write_shp`/`convert_geo`/`generate_code` masih terbuka
+  untuk role apa pun. `core/chat/engine.py` (ChatEngine) sama sekali belum
+  tersambung ke RBAC — tidak ada konsep identitas per sesi chat untuk
+  dipetakan ke role. Rute API selain `/api/v1/agent/run` masih terbuka
+  tanpa autentikasi.
 - **Circuit Breaker SELESAI untuk provider** (Tahap 9, ADR-0012); sasaran
   kedua Bab 55 (`tools/tool_executor.py`) belum ada foldernya di repo —
   saat `tools/` dibangun, pakai registry yang sama dengan key nama tool.
   Counter breaker read-modify-write (bukan HINCRBY atomik) — race kecil
   antar pod diterima, dicatat di ADR-0012.
-- **RBAC (Bab 30 rule 2)** — dibangun lengkap (`security/auth.py`/
-  `permissions.py`) tapi cuma dipasang di satu titik
-  (`Orchestrator.finalize_approval`); belum menyentuh `agent/tools/`
-  (FONDASI terlindungi, Bab 45.1) atau route API manapun. Dicatat sejak
-  ADR-0010.
 - **RAG belum otomatis** — `Retriever`/`build_context`/`llm_rerank()` (Tahap 5)
   ada dan teruji tapi tak dikaitkan otomatis ke setiap dispatch Orchestrator
   — pemanggil pakai eksplisit saat butuh (Bab 29 rule 4: pengaya opsional).
@@ -351,13 +429,17 @@
 
 ## Titik mulai sesi berikutnya (di luar roadmap 8-tahap awal)
 Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
-Circuit Breaker (prioritas #1 pasca-roadmap) selesai 2026-07-05 (ADR-0012).
-Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1) RBAC
-nyata ke `agent/tools/` via strangler pattern (Bab 45.1) mulai dari SATU
-tool berisiko tinggi dulu, bukan semua sekaligus; (2) Dockerfile multi-stage
-dengan rebuild+verifikasi live penuh (bukan cuma review kode) mengingat
-riwayat insiden ADR-0009; (3) solusi storage RWX (StorageClass NFS/Longhorn
-atau pindah ke object storage) kalau memang butuh API >1 replika di
-produksi; (4) Bab 68 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai.
+Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), dan UI
+Multi-Agent (Tahap 11, permintaan langsung Boss) semua selesai 2026-07-05.
+Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1)
+lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo` lain satu per satu
+(pola sama seperti ADR-0013, tinggal tambah entri `TOOL_RISK_ACTIONS`);
+(2) dashboard observability di web UI (cost/latency/provider/memory —
+data sudah ada di `telemetry/monitoring.py`, cuma butuh route + panel baru
+seperti pola Tahap 11); (3) Dockerfile multi-stage dengan rebuild+verifikasi
+live penuh (bukan cuma review kode) mengingat riwayat insiden ADR-0009;
+(4) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (5) Bab 68
+Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
+— belum satupun dimulai.
 
