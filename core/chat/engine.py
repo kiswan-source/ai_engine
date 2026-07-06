@@ -16,6 +16,18 @@ Events yielded by `stream_run` (consumed by api/routes/chat.py → SSE):
   {"type": "file", "filename": str, "ftype": str, "size": int}
   {"type": "error", "message": str}
   {"type": "done"}
+
+RBAC (Tahap 20, closes the gap every Tahap since 10 acknowledged): `stream_run`
+takes an optional `role: str | None = None`, threaded to every tool execution
+via `ToolRegistry.execute(role=...)` — the same generic gate `agent/core.py`
+already uses, unchanged since Tahap 10. `api/routes/chat.py` supplies it from
+`security.auth.get_current_principal`. `role=None` (no caller opts in) is a
+complete no-op, identical to behavior before this Tahap. A denied tool call
+does NOT raise — `_run_tool` catches `PermissionError` and returns it as a
+normal `{"error": ...}` result (same shape `_summarize_result`/`ok` already
+handle), so one denied call ends that tool call, not the whole SSE stream.
+Session ownership (whether a caller may address someone else's `session_id`)
+is a separate, still-open gap — this only gates *tool calls*, not *sessions*.
 """
 import os
 import json
@@ -191,7 +203,7 @@ class ChatEngine:
                     yield json.loads(line)
 
     # ── Execute one tool call, normalising args + paths ──
-    async def _run_tool(self, registry, name: str, args: Any) -> Dict[str, Any]:
+    async def _run_tool(self, registry, name: str, args: Any, role: Optional[str] = None) -> Dict[str, Any]:
         if isinstance(args, str):
             try:
                 args = json.loads(args)
@@ -205,12 +217,22 @@ class ChatEngine:
                 args[key] = self.resolve_path(args[key])
         if "file_paths" in args and isinstance(args["file_paths"], list):
             args["file_paths"] = [self.resolve_path(p) for p in args["file_paths"]]
-        return await asyncio.to_thread(registry.execute, name, args)
+        try:
+            return await asyncio.to_thread(registry.execute, name, args, role)
+        except PermissionError as e:
+            # Same result shape as any other tool failure (_summarize_result/
+            # the ok= check already handle "error" in a dict) — the model sees
+            # a normal denial it can relay, not a crashed turn (role=None,
+            # the unchanged default for every caller that doesn't pass one,
+            # never hits this: ToolRegistry.execute only checks permissions
+            # when role is not None).
+            return {"error": f"Akses ditolak: {e}", "success": False}
 
     # ── Main entry: stream a full assistant turn ──
     async def stream_run(self, session_id: str, user_text: str,
                          new_files: Optional[List[str]] = None,
-                         model: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
+                         model: Optional[str] = None,
+                         role: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
         model = model or self.default_model
         session = self.get_session(session_id)
         new_files = [self.resolve_path(f) for f in (new_files or [])]
@@ -265,7 +287,7 @@ class ChatEngine:
                             continue
                         any_tool_called = True
                         yield {"type": "tool_start", "name": name, "args": args}
-                        result = await self._run_tool(registry, name, args)
+                        result = await self._run_tool(registry, name, args, role)
                         ok = not (isinstance(result, dict) and (result.get("success") is False or
                                   ("error" in result and "success" not in result)))
                         summary = self._summarize_result(result)
@@ -293,7 +315,7 @@ class ChatEngine:
 
             # Optional deterministic fallback when the model ignored tools.
             if not any_tool_called and not produced_files:
-                async for ev in self._fallback(session, user_text, new_files, model):
+                async for ev in self._fallback(session, user_text, new_files, model, role):
                     if ev.get("type") == "file":
                         produced_files.append(ev.get("_path", ""))
                     yield {k: v for k, v in ev.items() if not k.startswith("_")}
@@ -305,7 +327,7 @@ class ChatEngine:
         yield {"type": "done"}
 
     # ── Heuristic fallback (small models that don't emit tool_calls) ──
-    async def _fallback(self, session, user_text, new_files, model) -> AsyncIterator[dict]:
+    async def _fallback(self, session, user_text, new_files, model, role: Optional[str] = None) -> AsyncIterator[dict]:
         g = user_text.lower()
         registry = self._registry(model)
         # Only acts on an obvious "convert/create file" intent with an uploaded file.
@@ -321,7 +343,7 @@ class ChatEngine:
             return
         name, args = target
         yield {"type": "tool_start", "name": name, "args": args}
-        result = await self._run_tool(registry, name, args)
+        result = await self._run_tool(registry, name, args, role)
         ok = not (isinstance(result, dict) and result.get("success") is False)
         yield {"type": "tool_result", "name": name, "ok": ok, "summary": self._summarize_result(result)}
         if ok and isinstance(result, dict) and result.get("file"):

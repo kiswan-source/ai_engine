@@ -7,13 +7,14 @@ import json
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from core.chat.engine import chat_engine, UPLOADS_DIR, REPORTS_DIR
 from core.ai.gemma_client import gemma
 from core.utils.logger import get_logger
+from security.auth import Principal, get_current_principal
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -42,8 +43,14 @@ async def upload(session_id: str = Form(...), files: List[UploadFile] = File(...
 
 
 @router.post("/stream")
-async def stream(req: ChatRequest):
-    """Stream an assistant turn as Server-Sent Events."""
+async def stream(req: ChatRequest, principal: Principal = Depends(get_current_principal)):
+    """Stream an assistant turn as Server-Sent Events.
+
+    RBAC (Tahap 20): ``principal.role`` is threaded into ``ChatEngine.stream_run``
+    so tool-call gates (``TOOL_RISK_ACTIONS``) that were previously inert for
+    Chat now apply. When ``API_KEYS`` is unset (dev default), ``principal``
+    is always ``role="admin"`` — every gate is a no-op, same as today.
+    """
     session_id = req.session_id or uuid.uuid4().hex
     file_paths = [os.path.join(UPLOADS_DIR, os.path.basename(f)) for f in req.files]
 
@@ -52,7 +59,7 @@ async def stream(req: ChatRequest):
         yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
         async for event in chat_engine.stream_run(
             session_id=session_id, user_text=req.message,
-            new_files=file_paths, model=req.model,
+            new_files=file_paths, model=req.model, role=principal.role,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 

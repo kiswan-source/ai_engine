@@ -31,6 +31,7 @@
 | 17* | MCP Client — konsumsi MCP server nyata via SDK resmi, bridge ke Chat tool-calling (Bab 60) | ✅ SELESAI |
 | 18* | Selesaikan migrasi RBAC ke `write_*`/`convert_geo`/`generate_code` (janji ADR-0013) | ✅ SELESAI |
 | 19* | Project Workspace & Folder Access — registrasi folder lokal sebagai sumber kerja Agent (Bab 69, ADR-0005) | ✅ SELESAI |
+| 20* | Sambungkan RBAC ke ChatEngine — tutup gap yang diakui sejak Tahap 10/16/17/18 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1002,8 +1003,100 @@ tabrakan nomor dua seri ADR yang diperingatkan hand-off doc §2).
   Workspace Permission Management UI granular — semua Backlog Prioritas
   21-29, tidak disentuh sama sekali.
 
+**Tahap 20 — Sambungkan RBAC ke ChatEngine**
+
+Ditanya `AskUserQuestion` prioritas berikutnya (MCP Server vs sambungkan
+RBAC ke ChatEngine) — **RBAC ke ChatEngine** dipilih: lebih murah, menutup
+gap yang diakui berulang sejak Tahap 10/16/17/18 ("`core/chat/engine.py`
+sama sekali belum tersambung ke RBAC... satu-satunya jalur yang benar
+eksekusi tool untuk plugin/MCP"), tanpa dependency baru.
+
+**Temuan sebelum coding**: frontend sudah mengirim yang dibutuhkan —
+`web/src/services/apiClient.ts`'s `raw()` (dipakai `chatService.ts`) sudah
+melampirkan `X-API-Key` dari `settingsStore` ke setiap request chat,
+mekanisme yang sama dipakai `projectService`/`workspaceService`.
+`security/auth.py::get_current_principal` (Tahap 7, ADR-0010) sudah siap
+pakai, cuma belum pernah di-opt-in `api/routes/chat.py`. **Perubahan ini
+murni backend** — nol perubahan frontend.
+
+- **`core/chat/engine.py` (folder fondasi, perubahan aditif murni)**:
+  `stream_run()` dapat parameter opsional `role: str | None = None`,
+  diteruskan ke `_run_tool()` (loop tool-calling utama) dan `_fallback()` —
+  yang pada gilirannya memanggil `registry.execute(name, args, role)`,
+  gerbang generik yang sama persis dipakai `agent/core.py` sejak Tahap 10.
+  **Nol perubahan** ke `agent/tools/registry.py`/`security/permissions.py`.
+  `role=None` (setiap pemanggil yang belum opt-in) berperilaku identik
+  sebelum Tahap ini — `ToolRegistry.execute()` cuma memeriksa izin kalau
+  `role is not None`.
+- **Penolakan izin jadi hasil tool biasa, bukan stream yang crash** —
+  sebelumnya `PermissionError` dari `registry.execute()` akan lolos dari
+  `_run_tool()` tanpa ditangkap dan kena `except Exception` di
+  `stream_run()`, mengakhiri SELURUH stream SSE dengan event `error`
+  generik (bukan cuma satu panggilan tool itu). Sekarang `_run_tool()`
+  menangkap `PermissionError` dan mengembalikan
+  `{"error": f"Akses ditolak: {e}", "success": False}` — memakai ulang
+  bentuk hasil error yang SUDAH ADA (`_summarize_result`/perhitungan `ok`
+  sudah menangani `"error"` di dict), jadi model melihatnya sebagai
+  kegagalan tool biasa dan bisa menyampaikan ke pengguna, percakapan tetap
+  lanjut. Nol event baru, nol perubahan protokol untuk `web/app.js`/React UI.
+- **`api/routes/chat.py`**: `stream()` opt-in `Depends(get_current_principal)`,
+  meneruskan `role=principal.role` ke `chat_engine.stream_run()`. Endpoint
+  lain (`/upload`, `/download`, `/sessions*`, `/models`) tidak disentuh —
+  tidak mengeksekusi tool, konsisten pola RBAC-hanya-di-titik-yang-berubah-
+  perilaku yang sudah dipakai di seluruh app.
+- **Keputusan sadar di luar cakupan**: kepemilikan sesi (`session_id`) tetap
+  tidak terikat identitas — siapa pun yang tahu `session_id` orang lain
+  masih bisa mengaksesnya, sama seperti sebelum Tahap ini. Tahap ini HANYA
+  menutup gerbang panggilan-tool, bukan kontrol akses sesi — dicatat
+  eksplisit sebagai gap terpisah yang tetap terbuka, bukan tak sengaja
+  terlewat.
+- **7 test baru** (481/481 total, naik dari 474; `core/chat/` sebelumnya nol test sama
+  sekali): 4 unit `test_chat_engine_rbac.py` (mock `httpx.AsyncClient.stream`
+  + fake `ToolRegistry` minimal — pola sama `test_tool_registry_rbac.py`,
+  bukan `build_registry()` sungguhan supaya tak menyeret GIS/image/Ollama
+  analyzer nyata) — ditolak untuk `user`, diizinkan untuk `operator`/`admin`,
+  tak berubah untuk `role=None`; 3 integrasi `test_chat_api_rbac.py` (HTTP
+  penuh lewat `api.main.app`, `X-API-Key` sungguhan → role → gerbang, plus
+  401 saat `API_KEYS` diset tapi key tak dikirim).
+- **Bug pra-ada ditemukan+diperbaiki saat menulis test, bukan regresi baru**:
+  `tests/integration/test_workspace_api.py`'s isolasi RAG (`_hermetic_rag`)
+  cuma memonkeypatch `settings`, bukan singleton `_retriever` — cukup
+  waktu ditulis (Tahap 19) karena `workspace/indexer.py` saat itu membangun
+  `Retriever` baru tiap panggilan. Sejak `api/routes/workspace.py` diubah
+  Tahap 19 untuk memakai ulang instance `_retriever` milik
+  `api/routes/knowledge.py` (perbaikan bug lain), isolasi lama jadi rapuh
+  tergantung urutan koleksi test se-sesi penuh (`api.routes.knowledge`
+  cuma diimpor SEKALI per proses, `_retriever` dibangun saat itu dengan
+  backend apa pun yang aktif — persis pola pra-ada yang sudah didiagnosis
+  `test_knowledge_api.py`, satu tingkat lebih dalam karena
+  `api.routes.workspace` mengimpor `_retriever` via `from ... import ... as ...`,
+  *binding nama* yang tak ikut berubah kalau `api.routes.knowledge._retriever`
+  di-monkeypatch belakangan). **Fix**: monkeypatch KEDUA binding
+  (`api.routes.knowledge._retriever` DAN `api.routes.workspace._knowledge_retriever`)
+  ke instance `Retriever`+`InMemoryKnowledgeStore` yang SAMA. Diverifikasi:
+  suite penuh lulus 3x berturut-turut (sebelumnya intermiten gagal
+  tergantung urutan file test).
+- **Diverifikasi live sungguhan lewat model asli** (bukan cuma unit test):
+  `API_KEYS` sementara diisi di `.env` (`userkey:user,opkey:operator`),
+  service di-restart. `role=user` → `gemma4:e2b` BENAR memanggil
+  `write_txt` lewat tool-calling asli → `PermissionError` sungguhan
+  (`role 'user' lacks permission 'tool:write_txt'`) → model sendiri
+  menyusun penjelasan Bahasa Indonesia ke pengguna bahwa permintaan
+  ditolak karena izin, stream selesai normal (`done`), **tidak ada file
+  tertulis**. `role=operator` (prompt identik) → tool sukses, **file
+  `.txt` sungguhan tertulis ke `reports/`** dengan isi persis diminta.
+  Tanpa header `X-API-Key` sama sekali setelah `.env` dikembalikan ke
+  kondisi semula (tanpa `API_KEYS`) → perilaku default admin-bypass tetap
+  identik seperti sebelum Tahap ini (nol regresi ke alur dev normal).
+  `.env` dikembalikan persis (diff kosong terhadap backup), service
+  di-restart lagi.
+
 ## Test
-- **Backend: 474/474 lulus** (`pytest -q`) — naik dari 409 lewat 65 test
+- **Backend: 481/481 lulus** (`pytest -q`, stabil 3x berturut-turut) — naik
+  dari 474 lewat 7 test RBAC ChatEngine (Tahap 20, lihat detail di atas: 4
+  unit `test_chat_engine_rbac.py`, 3 integrasi `test_chat_api_rbac.py`;
+  plus perbaikan isolasi RAG pra-ada di `test_workspace_api.py` yang bikin
+  suite penuh rapuh tergantung urutan file). Sebelumnya naik dari 409 lewat 65 test
   Workspace (Tahap 19, lihat detail di atas: filesystem adapter, scanner/
   indexer, RBAC, integrasi API, monitoring dashboard). Sebelumnya naik dari 384 lewat 25 test
   migrasi RBAC (Tahap 18, lihat detail di atas). Sebelumnya naik dari 372 lewat 12 test
@@ -1036,7 +1129,16 @@ tabrakan nomor dua seri ADR yang diperingatkan hand-off doc §2).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-19, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-20, diakui bukan disamarkan)
+- **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
+  berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
+  menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
+  yang benar eksekusi tool untuk `tool:*`/`plugin:*`/`mcp:call`. Yang masih
+  terbuka: **kepemilikan sesi** — `session_id` tetap tak terikat identitas,
+  siapa pun yang tahu ID sesi orang lain masih bisa membaca/melanjutkannya
+  (keputusan sadar di luar cakupan Tahap ini, beda dari gap ChatEngine↔RBAC
+  yang sekarang tertutup). Rute API selain yang sudah opt-in RBAC (chat,
+  agent/run, projects, workspace) masih terbuka tanpa autentikasi.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1181,13 +1283,14 @@ tabrakan nomor dua seri ADR yang diperingatkan hand-off doc §2).
   `generate_code`** (Tahap 10 pilot `write_pdf` + Tahap 18 menyelesaikan
   sisanya) — gap lama ini sudah tertutup. Yang masih terbuka: tool image
   (`image_*`/`images_to_pdf`, keputusan sadar — profil risiko beda, lihat
-  Tahap 18 di atas) dan tool baca (`read_*`). `core/chat/engine.py`
-  (ChatEngine) sama sekali belum tersambung ke RBAC — tidak ada konsep
-  identitas per sesi chat untuk dipetakan ke role, jadi gate ini masih
-  inert untuk semua panggilan dari Chat (satu-satunya jalur yang benar
-  eksekusi tool untuk plugin/MCP, lihat Tahap 16-17). Rute API selain
-  `/api/v1/agent/run` masih terbuka
-  tanpa autentikasi.
+  Tahap 18 di atas) dan tool baca (`read_*`). **`core/chat/engine.py`
+  (ChatEngine) kini tersambung ke RBAC (Tahap 20)** — gap lama "gate ini
+  masih inert untuk semua panggilan dari Chat" sudah tertutup, lihat detail
+  Tahap 20 di atas; identitas tetap per-*request* (dari `X-API-Key`), bukan
+  per-sesi tersimpan — kepemilikan `session_id` sendiri tetap terbuka
+  (gap terpisah, lihat Tahap 20). Rute API selain yang sudah opt-in RBAC
+  (`/api/v1/agent/run`, `/api/v1/chat/stream`, `projects`, `workspace`)
+  masih terbuka tanpa autentikasi.
 - **Circuit Breaker SELESAI untuk provider** (Tahap 9, ADR-0012); sasaran
   kedua Bab 55 (`tools/tool_executor.py`) belum ada foldernya di repo —
   saat `tools/` dibangun, pakai registry yang sama dengan key nama tool.
@@ -1221,22 +1324,24 @@ Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
 (Tahap 12), Projects (Tahap 13), Vision (Tahap 14), Automation (Tahap 15),
 Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 `write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
-ditutup), dan Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
-hand-off Cowork) semua selesai 2026-07-05/06. **Seluruh 5 area Phase 3
-(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
-Workspace baru di atasnya — MCP baru sisi Client (bukan Server, keputusan
-skop sadar). Kandidat prioritas berikutnya, dari yang paling murah
+ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
+hand-off Cowork), dan sambungkan RBAC ke ChatEngine (Tahap 20) semua
+selesai 2026-07-06. **Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`)
+kini punya kode nyata**, ditambah kapabilitas Workspace baru di atasnya,
+dan gate RBAC kini benar-benar hidup di satu-satunya jalur yang
+mengeksekusi tool (Chat) — bukan lagi cuma di `/api/v1/agent/run` yang
+jarang dipakai. Kandidat prioritas berikutnya, dari yang paling murah
 dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja ditunda Tahap 17);
 (2) Dockerfile multi-stage dengan rebuild+verifikasi live penuh (bukan
 cuma review kode) mengingat riwayat insiden ADR-0009; (3) solusi storage
 RWX (StorageClass NFS/Longhorn atau pindah ke object storage) kalau
 memang butuh API >1 replika di produksi; (4) Bab 68 Enterprise
 Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
-satupun dimulai; (5) sambungkan RBAC ke `core/chat/` (ChatEngine) sendiri
-— gap yang kini jadi satu-satunya alasan `tool:*`/`plugin:*`/`mcp:call`
-masih inert untuk jalur Chat; (6) sambungkan Agent Workspace Context
-(Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari Project
-Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
+satupun dimulai; (5) kepemilikan sesi Chat (`session_id` tak terikat
+identitas) — gap yang Tahap 20 sengaja tidak tutup, dicatat terpisah dari
+gerbang tool-call yang sudah tertutup; (6) sambungkan Agent Workspace
+Context (Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari
+Project Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
 Tahap 19.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini

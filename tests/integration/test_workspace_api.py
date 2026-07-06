@@ -4,12 +4,19 @@ Same in-memory SQLite pattern as tests/integration/test_projects_api.py
 (Project/ProjectMember/Workspace/WorkspaceFolder tables only — VectorEmbedding's
 pgvector column would fail create_all() on SQLite).
 
-``/index`` calls `workspace/indexer.py::index_folder`, which builds a fresh
-`Retriever` from current `api.config.settings` on every call (unlike
-`api/routes/knowledge.py`'s module-level singleton) — so pinning
-`VECTOR_BACKEND=memory`/`RAG_EMBEDDING_PROVIDER=hashed` via monkeypatch is
-enough to keep these tests hermetic (Bab 12.3), no route-module singleton
-swap needed the way `test_knowledge_api.py` requires.
+``/index`` reuses `api.routes.knowledge`'s `_retriever` singleton directly
+(`api/routes/workspace.py` module docstring) rather than building a fresh
+one — this makes indexed content actually show up in
+`GET /api/v1/knowledge/search`, matching production behavior with any
+backend. But it also means `api.routes.workspace._knowledge_retriever` is a
+*name binding* captured at import time (`from api.routes.knowledge import
+_retriever as _knowledge_retriever`) — monkeypatching
+`api.routes.knowledge._retriever` alone does NOT change what
+`api.routes.workspace` already imported, same pitfall
+`test_knowledge_api.py`'s docstring describes for the module-level-singleton-
+built-at-import problem, one level further removed. Both bindings must be
+patched to the *same* isolated `Retriever` instance for a test that indexes
+via one route and searches via the other.
 """
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -17,6 +24,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.connection import get_session
 from db.models import Project, ProjectMember, Workspace, WorkspaceFolder
+from rag.embeddings import hashed_bow_embedder
+from rag.knowledge_store import InMemoryKnowledgeStore
+from rag.retriever import Retriever
 
 
 @pytest.fixture(autouse=True)
@@ -28,8 +38,12 @@ def _api_keys(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _hermetic_rag(monkeypatch):
-    monkeypatch.setattr("api.config.settings.VECTOR_BACKEND", "memory")
-    monkeypatch.setattr("api.config.settings.RAG_EMBEDDING_PROVIDER", "hashed")
+    import api.routes.knowledge as knowledge_route
+    import api.routes.workspace as workspace_route
+
+    isolated = Retriever(namespace=knowledge_route.RAG_NAMESPACE, store=InMemoryKnowledgeStore(), embedder=hashed_bow_embedder)
+    monkeypatch.setattr(knowledge_route, "_retriever", isolated)
+    monkeypatch.setattr(workspace_route, "_knowledge_retriever", isolated)
 
 
 @pytest.fixture
