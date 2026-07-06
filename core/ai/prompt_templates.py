@@ -1,82 +1,36 @@
 """
 Prompt templates optimised for Gemma 4:26B instruction format.
 Gemma uses <start_of_turn>user / <start_of_turn>model convention.
+
+Prompt Versioning (Bab 51, Tahap 37) — every template/system prompt below
+is loaded from prompts/<agent>/<name>_v<N>.md rather than embedded inline;
+version is registered explicitly at each call site, never inferred from
+the highest version number on disk.
 """
 from enum import Enum
 from string import Template
+
+from prompts.loader import load_prompt
 
 
 class PromptTemplate(str, Enum):
     """Pre-built prompts for common AI Engine tasks."""
 
     # ── GIS / Mining ──────────────────────────────────────────────────────────
-    GEOLOGICAL_SUMMARY = (
-        "Berikan ringkasan geologi profesional berdasarkan data berikut.\n"
-        "Gunakan bahasa teknis pertambangan Indonesia.\n\n"
-        "Data: $data\n\n"
-        "Format output:\n"
-        "1. Formasi Geologi\n"
-        "2. Litologi Dominan\n"
-        "3. Struktur Geologi\n"
-        "4. Potensi Sumber Daya\n"
-        "5. Rekomendasi Eksplorasi"
-    )
-
-    WIUP_AREA_ANALYSIS = (
-        "Analisis area WIUP berikut untuk keperluan perizinan Minerba.\n\n"
-        "Koordinat: $coordinates\n"
-        "Luas: $area_ha Ha\n"
-        "Lokasi: $location\n\n"
-        "Hasilkan:\n"
-        "1. Deskripsi batas wilayah\n"
-        "2. Estimasi kesesuaian kawasan\n"
-        "3. Potensi tumpang tindih\n"
-        "4. Rekomendasi teknis"
-    )
+    GEOLOGICAL_SUMMARY = load_prompt("templates", "geological_summary", version=1)
+    WIUP_AREA_ANALYSIS = load_prompt("templates", "wiup_area_analysis", version=1)
 
     # ── Document Processing ───────────────────────────────────────────────────
-    DOCUMENT_SUMMARIZE = (
-        "Ringkas dokumen berikut secara profesional.\n"
-        "Ekstrak poin-poin kunci, keputusan penting, dan tindak lanjut yang diperlukan.\n\n"
-        "Dokumen:\n$text\n\n"
-        "Panjang ringkasan: maksimum $max_words kata."
-    )
-
-    DOCUMENT_EXTRACT_ENTITIES = (
-        "Ekstrak semua entitas penting dari dokumen berikut.\n"
-        "Kembalikan dalam format JSON dengan keys: "
-        "persons, organizations, locations, dates, numbers, legal_refs.\n\n"
-        "Dokumen:\n$text"
-    )
+    DOCUMENT_SUMMARIZE = load_prompt("templates", "document_summarize", version=1)
+    DOCUMENT_EXTRACT_ENTITIES = load_prompt("templates", "document_extract_entities", version=1)
 
     # ── Report Generation ─────────────────────────────────────────────────────
-    FIELD_INSPECTION_REPORT = (
-        "Buat laporan pemeriksaan lapangan profesional berdasarkan data berikut.\n\n"
-        "Lokasi: $location\n"
-        "Tanggal: $date\n"
-        "Temuan: $findings\n"
-        "Foto/Observasi: $observations\n\n"
-        "Format: Laporan teknis formal Bahasa Indonesia."
-    )
+    FIELD_INSPECTION_REPORT = load_prompt("templates", "field_inspection_report", version=1)
 
     # ── General ───────────────────────────────────────────────────────────────
-    QA_WITH_CONTEXT = (
-        "Jawab pertanyaan berikut berdasarkan konteks yang diberikan.\n"
-        "Jika tidak ada dalam konteks, katakan 'Informasi tidak tersedia'.\n\n"
-        "Konteks:\n$context\n\n"
-        "Pertanyaan: $question"
-    )
-
-    TRANSLATE_TO_ENGLISH = (
-        "Translate the following Indonesian technical text to professional English:\n\n$text"
-    )
-
-    CLASSIFY_DOCUMENT = (
-        "Klasifikasikan dokumen berikut ke dalam kategori:\n"
-        "[PERIZINAN, GEOLOGI, KEUANGAN, HUKUM, OPERASIONAL, LAINNYA]\n\n"
-        "Dokumen: $text\n\n"
-        "Jawab hanya dengan nama kategori."
-    )
+    QA_WITH_CONTEXT = load_prompt("templates", "qa_with_context", version=1)
+    TRANSLATE_TO_ENGLISH = load_prompt("templates", "translate_to_english", version=1)
+    CLASSIFY_DOCUMENT = load_prompt("templates", "classify_document", version=1)
 
 
 def render(template: PromptTemplate, **kwargs) -> str:
@@ -84,20 +38,6 @@ def render(template: PromptTemplate, **kwargs) -> str:
     return Template(template.value).safe_substitute(**kwargs)
 
 
-GEMMA_SYSTEM_MINING = """Anda adalah AI asisten ahli pertambangan dan geologi Indonesia.
-Anda memiliki keahlian mendalam dalam:
-- Regulasi pertambangan Indonesia (UU Minerba, PP terkait)
-- Geologi regional Kalimantan, Jawa, Sulawesi
-- Proses perizinan WIUP, IUP Eksplorasi, IUP Operasi Produksi
-- Teknik eksplorasi mineral (batubara, bauksit, nikel, andesit, emas)
-- Sistem informasi geospasial untuk pertambangan
-
-Gunakan terminologi teknis yang tepat dan bahasa Indonesia formal."""
-
-GEMMA_SYSTEM_GIS = """Anda adalah AI asisten ahli sistem informasi geografis.
-Anda memahami: koordinat geodetik, proyeksi peta, analisis spasial,
-format data GIS (KML, Shapefile, GeoJSON), dan regulasi tata ruang Indonesia."""
-
-GEMMA_SYSTEM_GENERAL = """Anda adalah AI asisten profesional yang membantu
-dengan analisis data, pembuatan dokumen, dan pemrosesan informasi teknis.
-Selalu berikan jawaban yang akurat, terstruktur, dan dapat ditindaklanjuti."""
+GEMMA_SYSTEM_MINING = load_prompt("system", "mining", version=1)
+GEMMA_SYSTEM_GIS = load_prompt("system", "gis", version=1)
+GEMMA_SYSTEM_GENERAL = load_prompt("system", "general", version=1)

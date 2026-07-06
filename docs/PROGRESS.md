@@ -2236,9 +2236,105 @@ Orchestrator).
   disentuh; `run_single()` sengaja tak dapat `simulate` (kode mati, tak
   ada rute yang memanggilnya).
 
+**Tahap 37 — Prompt Management (Bab 68 Backlog Prioritas 8)**
+
+Item KETIGA dari Bab 68 Enterprise Architecture Backlog. Teks Prioritas 8:
+folder `prompts/` dengan sub-direktori per peran agent, metadata wajib
+(Bab 51.2). Bab 51 sendiri: "Seluruh system prompt agent (Bab 17, Bab 32)
+dikelola sebagai aset berversi, bukan string yang tertanam bebas di dalam
+kode." Dipilih via `AskUserQuestion` (dari 4 kandidat, 2 di antaranya item
+Backlog lain yang sudah disaring genuinely bounded sejak Tahap 34: Prompt
+Management, Configuration Center). Direncanakan lewat Plan Mode dulu.
+
+- **Riset dulu, bukan tebakan**: `grep -rn "Kamu adalah\|Anda adalah"`
+  di seluruh repo (bukan cuma `grep "SYSTEM_PROMPT\s*="` yang dipakai di
+  riset awal sesi ini dan cuma menemukan satu hit) menemukan LIMA konstanta
+  prompt inline nyata, SEMUA bertanggal commit awal `32d11a0` (2026-06-03,
+  dicek lewat `git log -S`): `SYSTEM_PROMPT` (`core/chat/engine.py`),
+  `GEMMA_SYSTEM_MINING/_GIS/_GENERAL` + 8 anggota enum `PromptTemplate`
+  (`core/ai/prompt_templates.py`, dipakai NYATA oleh
+  `api/routes/{ai,gis,pipeline,docs}.py` dan
+  `worker/pipeline/jobs_pipeline.py` — bukan kode mati), dan
+  `PLANNER_SYSTEM` (`agent/core.py`, planner LLM-fallback agent lama
+  berbasis aturan). Dicek juga `agents/generic_agent.py` dan
+  `orchestrator/planner.py`: 15 peran Orchestrator (`planner`, `writer`,
+  `reviewer`, `research`, dst. dari `registry/model_registry.py`) TERNYATA
+  NOL punya system prompt bawaan sama sekali — `GenericLLMAgent` cuma
+  meneruskan `task.system` apa adanya dari pemanggil
+  (`WorkflowRunRequest.system: str = ""`, default kosong). Jadi pohon
+  direktori ilustratif Bab 68.8 (`planner/`, `research/`, `writer/`,
+  `reviewer/`) TIDAK dipetakan ke isi nyata untuk peran Orchestrator —
+  sengaja TIDAK dibuat folder kosong untuk peran yang belum punya prompt
+  sungguhan (itu konten spekulatif, bukan yang diminta).
+- **Di luar cakupan, dicatat eksplisit**: `agent/tools/analyzers.py:25`'s
+  `system = f"Kamu adalah expert programmer..."` — template DINAMIS
+  (interpolasi `{language.upper()}` per panggilan, bukan aset statis) di
+  dalam `agent/tools/`, folder terproteksi (Bab 45.1) yang cuma boleh
+  disentuh untuk registrasi tool satu baris. Nilai rendah, friksi tinggi
+  — dibiarkan inline.
+- **`prompts/loader.py` baru** — `load_prompt(agent, name, version)`
+  membaca `prompts/<agent>/<name>_v<N>.md`, membuang blok frontmatter
+  YAML, mengembalikan isi. Tanpa cache, tanpa logika "ambil versi
+  tertinggi" — versi SELALU argumen eksplisit di titik panggil (aturan
+  Bab 51.2: versi aktif dinyatakan, bukan disimpulkan). File hilang
+  melempar `PromptNotFoundError` (subclass `FileNotFoundError`) — gagal
+  keras saat import, bukan diam-diam jatuh ke prompt kosong/rusak.
+- **Struktur folder** (cuma untuk pemilik dengan isi nyata):
+  `prompts/chat/system_v1.md` (isi persis `SYSTEM_PROMPT` lama),
+  `prompts/planner/planner_v1.md` (isi persis `PLANNER_SYSTEM` lama,
+  placeholder `{tools}` literal dipertahankan — tetap diisi lewat
+  `.replace("{tools}", ...)` yang sama di `agent/core.py`),
+  `prompts/system/{mining,gis,general}_v1.md` (tiga `GEMMA_SYSTEM_*`),
+  `prompts/templates/*_v1.md` (8 file, satu per anggota enum
+  `PromptTemplate`, placeholder `$variable` `string.Template`
+  dipertahankan). Tiap folder dapat satu `CHANGELOG.md` format tabel Bab
+  51.2, baris tunggal "v1 | 2026-06-03 | Versi awal | Baseline" (akurat —
+  ekstraksi tanpa perubahan isi, bukan konten baru). Frontmatter tiap
+  file: `agent`, `version: 1`, `created: 2026-06-03` (tanggal asli lewat
+  `git log -S`, bukan tanggal ekstraksi — isi memang tak berubah, cuma
+  dipindah), `author: kiswan-source`, `status: active`.
+- **Wiring — satu baris assignment per konstanta**: `core/chat/engine.py`
+  (terproteksi Bab 45.1, sentuhan sekecil mungkin) — string inline
+  triple-quote diganti `SYSTEM_PROMPT = load_prompt("chat", "system",
+  version=1)` plus satu baris import baru, TAK ADA baris lain di file ini
+  berubah. `agent/core.py` (tak terproteksi) — `PLANNER_SYSTEM =
+  load_prompt("planner", "planner", version=1)`.
+  `core/ai/prompt_templates.py` (tak terproteksi) — `GEMMA_SYSTEM_*` dan
+  ke-8 anggota enum jadi panggilan `load_prompt(...)`; `render()` dan
+  seluruh pemanggil (`api/routes/ai.py`/`gis.py`/`pipeline.py`/`docs.py`,
+  `worker/pipeline/jobs_pipeline.py`) TAK disentuh — mereka cuma pernah
+  melihat `PromptTemplate.X.value`, tak peduli string itu datang dari
+  mana.
+- **10 test baru (612/612 total, stabil 2x berturut-turut)**: 4 unit
+  `test_prompt_loader.py` (frontmatter terpotong benar, file hilang
+  melempar `PromptNotFoundError`/`FileNotFoundError`, file tanpa
+  frontmatter tetap termuat), 4 unit `test_prompt_content_unchanged.py`
+  (tripwire regresi — `SYSTEM_PROMPT`/`PLANNER_SYSTEM`/`GEMMA_SYSTEM_*`/
+  anggota `PromptTemplate` masih memuat substring pembeda yang di-hardcode
+  di test itu sendiri, BUKAN dibaca ulang dari file sumber — kalau nanti
+  ada yang diam-diam memotong isi `.md`, test ini gagal).
+- **Diverifikasi live sungguhan**: `sudo systemctl restart ai-engine` lalu
+  chat sungguhan lewat `/api/v1/chat/stream` dengan file upload —
+  assistant BENAR memanggil `read_txt` (bukan mengarang isi) lalu
+  meringkas isi file sungguhan, konfirmasi `SYSTEM_PROMPT` termuat utuh
+  dan aturan "jangan mengarang isi file" masih dipatuhi. `POST
+  /api/v1/ai/geological-summary` (memakai `GEMMA_SYSTEM_MINING` +
+  `PromptTemplate.GEOLOGICAL_SUMMARY`) BENAR mengembalikan laporan geologi
+  format 5-bagian PERSIS sesuai template (Formasi Geologi/Litologi
+  Dominan/Struktur Geologi/Potensi Sumber Daya/Rekomendasi Eksplorasi),
+  konfirmasi `core/ai/prompt_templates.py` termuat benar dari file baru.
+- **Gap yang diakui**: 17 dari 20 item Bab 68 Backlog masih belum
+  disentuh; `agent/tools/analyzers.py`'s prompt dinamis sengaja dibiarkan
+  inline (lihat di atas); 15 peran Orchestrator masih nol system prompt
+  nyata untuk dikelola versi — kalau nanti ada yang menambahkan satu,
+  pola `prompts/loader.py` sudah siap dipakai tanpa desain ulang.
+
 ## Test
-- **Backend: 594/594 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~26-29 detik total) — naik dari 584 lewat 10 test Simulation Mode
+- **Backend: 602/602 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~26-28 detik total) — naik dari 594 lewat 8 test Prompt Management
+  (Tahap 37, lihat detail di atas: 4 unit `test_prompt_loader.py`, 4 unit
+  `test_prompt_content_unchanged.py`). Sebelumnya naik dari 584 lewat 10
+  test Simulation Mode
   (Tahap 36, lihat detail di atas: 5 unit `test_mock_provider.py`, 3 unit
   `test_orchestrator.py`, 2 integrasi `test_orchestrator_api.py`).
   Tahap 35 murni frontend, nol test Python baru (tetap 584/584).
@@ -2310,7 +2406,7 @@ Orchestrator).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-36, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-37, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2612,8 +2708,9 @@ lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), PDF/DOCX Workspace
 Write Access (Tahap 33), Security + Audit Dashboards (Tahap 34, Bab
 68 Backlog Prioritas 13 — item PERTAMA dari Backlog 20-item yang
 dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
-35), dan Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
-KEDUA) semua selesai 2026-07-06. **Seluruh 5 area
+35), Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
+KEDUA), dan Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
+item KETIGA) semua selesai 2026-07-06. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2686,14 +2783,21 @@ test, belum ada `MockProvider` nyata yang bisa dipakai ulang; `Orchestrator.run(
 membangun `RoutingEngine`/`Dispatcher` SEMENTARA per panggilan (registry
 asli tak pernah disentuh), tetap lewat `GenericLLMAgent.execute()`
 sungguhan supaya guardrail/confidence scoring juga teruji, bukan cuma
-"apakah ada teks kembali" (lihat detail Tahap 36 di atas). Kandidat
+"apakah ada teks kembali" (lihat detail Tahap 36 di atas). **Tahap 37
+kembali lewat `AskUserQuestion`** (item Bab 68 Backlog KETIGA, dipilih
+dari 4 kandidat yang sama) — riset dulu sebelum coding menemukan bahwa
+prompt inline nyata jauh lebih banyak dari perkiraan awal (LIMA konstanta,
+bukan cuma `SYSTEM_PROMPT` Chat), sekaligus menemukan bahwa 15 peran
+Orchestrator TERNYATA nol punya system prompt bawaan sama sekali —
+pemetaan folder Bab 68.8 disesuaikan ke kenyataan kode, bukan dipaksakan
+mengikuti pohon ilustratif roadmap (lihat detail Tahap 37 di atas). Kandidat
 prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
 storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
 kalau memang butuh API >1 replika di produksi; (2) item lain di Bab 68
-Backlog (18 dari 20 tersisa — Prioritas 8 Prompt Management, 7
-Configuration Center adalah kandidat lain yang sudah disaring genuinely
-bounded; sisanya sebagian besar terlalu besar/spekulatif untuk pola
-Tahap kecil sesi ini, lihat detail Tahap 34); (3) satu proses MCP
+Backlog (17 dari 20 tersisa — Prioritas 7 Configuration Center adalah
+kandidat lain yang sudah disaring genuinely bounded; sisanya sebagian
+besar terlalu besar/spekulatif untuk pola Tahap kecil sesi ini, lihat
+detail Tahap 34); (3) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
 perlu beberapa entri server terkonfigurasi terpisah); (4) pesan error
@@ -2707,7 +2811,11 @@ Redis, bukan bahwa `worker.work()` sungguh memproses job); (7) transport
 SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
 jaringan butuh tinjauan auth+path-sandboxing sendiri); (8) `run_single()`
 sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
-memanggilnya) — item 3-8 kecil/menengah, cuma relevan kalau ada
+memanggilnya); (9) `agent/tools/analyzers.py`'s prompt generate_code
+dinamis (Tahap 37) belum masuk sistem versi prompt — bisa diubah jadi
+template `$language` di `prompts/templates/` kalau nanti dianggap
+bernilai, tapi ditunda karena folder itu terproteksi Bab 45.1 dan nilai
+migrasinya rendah — item 3-9 kecil/menengah, cuma relevan kalau ada
 kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini

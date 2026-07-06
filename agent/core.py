@@ -9,23 +9,15 @@ from typing import Optional
 from agent.schemas import StepResult, ToolCall, AgentResult
 from agent.memory import Memory
 from core.utils.logger import get_logger
+from prompts.loader import load_prompt
 
 logger = get_logger(__name__)
 MAX_STEPS = 8
 
-PLANNER_SYSTEM = """Kamu adalah AI Planner untuk autonomous agent pertambangan dan GIS.
-Tugasmu: tentukan tool berikutnya untuk mencapai goal.
-
-ATURAN KERAS:
-1. Response HANYA JSON valid. TIDAK BOLEH ada teks lain.
-2. Format: {{"tool": "nama_tool", "input": <data>}}
-3. Jika selesai: {{"tool": "DONE"}}
-4. Pilih HANYA dari tool yang tersedia.
-5. Gunakan output step sebelumnya sebagai input step berikutnya.
-6. JANGAN ulangi tool yang sudah berhasil.
-
-TOOLS:
-{tools}"""
+# Prompt Versioning (Bab 51, Tahap 37) — content lives at
+# prompts/planner/planner_v1.md; version is registered explicitly here,
+# never inferred from the highest version number on disk.
+PLANNER_SYSTEM = load_prompt("planner", "planner", version=1)
 
 
 class AIAgent:
