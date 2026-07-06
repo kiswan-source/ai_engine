@@ -7,13 +7,16 @@ from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    echo=settings.DEBUG,
-)
+_engine_kwargs = {"pool_pre_ping": True, "echo": settings.DEBUG}
+if not settings.DATABASE_URL.startswith("sqlite"):
+    # pool_size/max_overflow are Postgres-pool-specific — sqlite's aiosqlite
+    # dialect uses NullPool and rejects them outright (found live, Tahap 32:
+    # the MCP Server subprocess crashed at import time the first time a test
+    # pointed DATABASE_URL at sqlite, since this module-level engine builds
+    # unconditionally on import regardless of whether it's ever used).
+    _engine_kwargs.update(pool_size=10, max_overflow=20)
+
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 AsyncSessionFactory = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False

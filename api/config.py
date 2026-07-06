@@ -1,5 +1,5 @@
 """Application configuration via environment variables."""
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 
 
@@ -174,6 +174,17 @@ class Settings(BaseSettings):
     # write/convert/generate tool is rejected until an operator explicitly
     # sets this to "operator" in the environment that spawns the server.
     MCP_SERVER_ROLE: str = "user"
+    # Workspace access via MCP Server (Tahap 32, Bab 60.1 + 69.5) — same
+    # config-bound identity idea as MCP_SERVER_ROLE above, applied to the
+    # Project-role-scoped Workspace Permission system instead of the global
+    # one. None (default) means workspace_list_files/workspace_read_file/
+    # workspace_write_file stay excluded entirely — byte-for-byte Tahap 28's
+    # original behavior, fully opt-in. There is no MCP caller identity to
+    # look up a real ProjectMember for, so whoever configures this process
+    # IS the identity: set to a real Workspace id + the Project role
+    # (owner/editor/viewer) that process should be treated as holding.
+    MCP_SERVER_WORKSPACE_ID: Optional[str] = None
+    MCP_SERVER_WORKSPACE_ROLE: str = "viewer"
 
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"

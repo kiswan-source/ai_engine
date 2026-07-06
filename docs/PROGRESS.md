@@ -43,6 +43,7 @@
 | 29* | Gambar/GIS Workspace via Chat (Bab 69.5 Vision) — `workspace_read_file` kini bisa gambar (vision sungguhan) & GIS (ringkasan luas), bukan cuma dokumen | ✅ SELESAI |
 | 30* | Workspace Write Access (Bab 69.7 `write_output`) — agent bisa buat/edit file teks LANGSUNG di folder Project Workspace, bukan cuma ke `reports/` | ✅ SELESAI |
 | 31* | Tool-call resilience — satu tool call gagal (argumen kurang/exception apa pun) tak lagi merusak seluruh giliran chat | ✅ SELESAI |
+| 32* | Akses Workspace lewat MCP Server (Bab 60.1 + 69.5) — client MCP eksternal (mis. Claude Desktop) kini bisa baca/tulis Project Workspace | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1883,9 +1884,102 @@ Plan Mode formal.
   ke Bahasa Indonesia yang lebih ramah seperti pesan penolakan RBAC.
   Perbaikan lanjut kalau ternyata model sering bingung dengan format ini.
 
+**Tahap 32 — Akses Workspace lewat MCP Server (Bab 60.1 + 69.5)**
+
+Dipilih lewat `AskUserQuestion` sebagai interpretasi PALING LITERAL dari
+tujuan "agent mandiri... akses file di folder layaknya Claude Cowork":
+client MCP eksternal sungguhan (mis. Claude Desktop) seharusnya bisa
+kerja di dalam folder Project seperti Chat sudah bisa (Tahap 19/23/29/30).
+Menutup gap yang Tahap 28 catat eksplisit: `workspace_list_files`/
+`workspace_read_file`/`workspace_write_file` dikecualikan total dari MCP
+Server karena tak ada sesi ChatEngine di sana untuk menyuntikkan
+`workspace_id` yang sudah diotorisasi. Direncanakan lewat Plan Mode dulu
+(beberapa keputusan model identitas) sebelum coding.
+
+- **Model identitas: terikat konfigurasi, bukan per-request** — stdio
+  tetap tak punya identitas pemanggil (prinsip yang sama `MCP_SERVER_ROLE`
+  Tahap 28 sudah pakai). Dua setting baru: `MCP_SERVER_WORKSPACE_ID`
+  (default `None` — tool Workspace tetap dikecualikan total, PERSIS
+  perilaku Tahap 28, sepenuhnya opt-in) dan `MCP_SERVER_WORKSPACE_ROLE`
+  (default `"viewer"`, konservatif — baca jalan, `write_output` tidak,
+  sampai operator eksplisit ubah). Tak ada `ProjectMember` sungguhan yang
+  dicek — siapa pun yang bisa mengonfigurasi environment proses inilah
+  identitasnya, sama seperti `MCP_SERVER_ROLE` sudah diterima Tahap 28.
+- **Fail-fast di startup tanpa panggilan DB** —
+  `require_workspace_permission(workspace_role, "read")` murni cek dict
+  in-memory (bukan DB), jadi divalidasi SEKALI sebelum stdio loop mulai;
+  keberadaan `workspace_id` itu sendiri TIDAK dicek eager (butuh
+  round-trip DB async yang percuma karena panggilan tool pertama sudah
+  melakukannya) — sikap sama seperti `workspace_list_files`/
+  `workspace_read_file` yang sudah ada.
+- **Eksposur tool jadi kondisional**: `_allowed_schemas(include_workspace:
+  bool)` — tool Workspace muncul di `list_tools()` HANYA kalau
+  `MCP_SERVER_WORKSPACE_ID` dikonfigurasi. `workspace_write_file` tetap
+  DITAMPILKAN walau role `"viewer"` (konsisten dengan ChatEngine — role
+  tak sembunyikan tool dari daftar, ditolak saat dipanggil).
+- **`workspace_id` selalu disuntik dari config, tak pernah dari
+  client/model** — batas keamanan PERSIS yang Tahap 23 sudah bangun untuk
+  Chat, diterjemahkan ke proses ini: `dispatch_tool_call` menimpa
+  `arguments["workspace_id"]` dengan `settings.MCP_SERVER_WORKSPACE_ID`
+  apa pun yang diargumenkan pemanggil.
+- **Cek `write_output` dibiarkan `PermissionError` mengalir tanpa
+  ditangkap** — sama seperti `ValueError` "tool tak dikenal" Tahap 28
+  yang sudah begitu; wrapper SDK MCP sendiri sudah mengubah exception apa
+  pun jadi hasil error yang bersih, tak perlu try/except baru.
+- **Tool tetap berbentuk Tool, bukan "Resource" MCP** — kata Bab 60.1
+  ("Workspace Resource") bisa menyiratkan primitif `Resource` MCP
+  (konten beralamat URI), tapi ChatEngine sudah memodelkan Workspace
+  sebagai 3 Tool (Tahap 23/29/30) — konsistensi lintas dua permukaan yang
+  sama-sama mengekspos Workspace lebih berharga daripada mengejar
+  abstraksi "lebih native MCP" yang malah menyimpang dari cara Chat
+  sudah bekerja.
+- **Bug nyata ketemu saat menulis test e2e, di luar rencana**: subprocess
+  MCP crash SAAT IMPOR kalau `DATABASE_URL` diarahkan ke sqlite —
+  `db/connection.py`'s engine level-modul memaksa `pool_size`/
+  `max_overflow` (kwarg khusus pool Postgres) TANPA SYARAT, dan dialek
+  `aiosqlite`/`NullPool` menolak keduanya mentah-mentah. Modul ini
+  dibangun cuma karena `agent/tools/workspace_reader.py` mengimpor
+  `AsyncSessionFactory` dari situ (walau jarang dipakai — fresh engine
+  Tahap 23 dipakai untuk kerja sungguhan), tapi baris `create_async_engine`
+  level-modul tetap jalan di setiap impor apa pun isinya. **Fix**:
+  `pool_size`/`max_overflow` cuma ditambah kalau `DATABASE_URL` BUKAN
+  sqlite — perilaku Postgres nol berubah, tapi sekarang app (dan test apa
+  pun yang mengimpornya transitif) bisa jalan di atas sqlite juga.
+- **9 test baru (574/574 total, stabil 2x berturut-turut)**: 5 unit
+  `test_mcp_server.py` (skema kondisional include/exclude, injeksi
+  `workspace_id` menimpa nilai model, `write_output` ditolak viewer/
+  diterima editor — fake registry, pola sama Tahap 30 di ChatEngine), 4
+  integrasi `test_mcp_server_e2e.py` (**dogfooding lagi** — subprocess
+  sungguhan + sqlite file-backed sungguhan lewat env `DATABASE_URL`:
+  `list_tools()` menampilkan 3 tool Workspace saat dikonfigurasi; editor
+  menulis file NYATA ke folder NYATA; viewer baca berhasil tulis ditolak;
+  `workspace_id` yang diargumenkan client sungguhan DIABAIKAN, config
+  server yang menang).
+- **Diverifikasi live sungguhan lewat Postgres asli** (BUKAN sqlite kali
+  ini — dev DB `ai-engine.service` yang sesungguhnya): Project+Workspace+
+  folder scratch nyata dibuat via HTTP API, `python -m mcp_server.server`
+  dijalankan manual dengan `MCP_SERVER_WORKSPACE_ID`/`_ROLE` sungguhan,
+  digerakkan skrip ad-hoc pakai `MCPClient` kita sendiri: **editor** →
+  `list_tools()` tampilkan ketiga tool Workspace, baca `seed.txt` nyata
+  (isi cocok), tulis `dari_mcp.txt` BENAR muncul di disk dengan isi
+  PERSIS. **viewer** → baca `dari_mcp.txt` BERHASIL (isi sama), tulis
+  DITOLAK nyata (`"project role 'viewer' lacks workspace permission
+  'write_output'"`). Project/Workspace/folder scratch dihapus setelah
+  verifikasi.
+- **Gap yang diakui**: transport tetap stdio saja (Tahap 28 sengaja,
+  server jaringan butuh tinjauan sendiri); satu proses MCP = satu
+  Workspace + satu role tetap, bukan multi-Workspace dinamis (wajar untuk
+  model identitas config-bound, tapi berarti Claude Desktop yang mau
+  akses BEBERAPA Project perlu beberapa entri server terkonfigurasi
+  terpisah, bukan satu server serba bisa).
+
 ## Test
-- **Backend: 565/565 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~18-19 detik total) — naik dari 563 lewat 2 test tool-call resilience
+- **Backend: 574/574 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~30-35 detik total — naik dari ~18s karena test e2e Tahap 32 spawn
+  beberapa subprocess MCP sungguhan) — naik dari 565 lewat 9 test akses
+  Workspace lewat MCP Server (Tahap 32, lihat detail di atas: 5 unit
+  `test_mcp_server.py`, 4 integrasi `test_mcp_server_e2e.py`). Sebelumnya
+  naik dari 563 lewat 2 test tool-call resilience
   (Tahap 31, lihat detail di atas, di `test_chat_engine_rbac.py`).
   Sebelumnya naik dari 552 lewat 11 test Workspace Write
   Access (Tahap 30, lihat detail di atas: 6 unit `test_workspace_reader.py`,
@@ -1944,7 +2038,7 @@ Plan Mode formal.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-31, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-32, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2022,10 +2116,17 @@ Plan Mode formal.
 - **MCP Client (Tahap 17) — sisi Server SELESAI juga (Tahap 28)**.
   `mcp_server/server.py` baru mengekspos ~23 tool AI_ENGINE (dikurangi 4
   tool session-bound/meta, lihat detail Tahap 28 di atas) ke client MCP
-  eksternal manapun lewat stdio, RBAC digerbang `MCP_SERVER_ROLE`. SSE/HTTP
-  transport tetap belum ada (keputusan skop sadar Tahap 28 — butuh
-  tinjauan auth+path-sandboxing sendiri untuk pemanggil jaringan tak
-  dikenal). **Baru satu server pihak ketiga terkonfigurasi di sisi Client**
+  eksternal manapun lewat stdio, RBAC digerbang `MCP_SERVER_ROLE`. **Akses
+  Workspace lewat MCP Server SELESAI juga (Tahap 32)** — 3 tool Workspace
+  yang tadinya dikecualikan total kini bisa diekspos lewat
+  `MCP_SERVER_WORKSPACE_ID`/`MCP_SERVER_WORKSPACE_ROLE` (model identitas
+  terikat konfigurasi, bukan per-request — tak ada sesi ChatEngine di jalur
+  ini); diverifikasi live client MCP sungguhan baca+tulis folder Workspace
+  nyata lewat Postgres asli, viewer ditolak tulis nyata (lihat detail
+  Tahap 32 di atas). SSE/HTTP transport tetap belum ada (keputusan skop
+  sadar Tahap 28 — butuh tinjauan auth+path-sandboxing sendiri untuk
+  pemanggil jaringan tak dikenal). **Baru satu server pihak ketiga
+  terkonfigurasi di sisi Client**
   (`demo`, fixture dev murni untuk pembuktian) — belum tersambung ke MCP
   server pihak ketiga sungguhan manapun; nambah server nyata baru tinggal
   satu baris di `MCP_SERVERS` tapi belum ada yang dipilih/diverifikasi.
@@ -2207,70 +2308,71 @@ kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
 `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), loose ends
 Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), MCP Server, Bab 60
 sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
-(Tahap 29, Bab 69.5 Vision), dan Workspace Write Access (Tahap 30, Bab
-69.7 `write_output`) semua selesai 2026-07-06. **Seluruh 5 area Phase 3
-(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
-Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
-satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
-kerjanya (di kedua rute yang menyajikannya) DAN memori/monitoring/knowledge
-kini terikat autentikasi, Chat kini bisa membaca Project Workspace DAN
-melihat gambar/menghitung luas GIS-nya DAN membuat/mengedit file teks
-LANGSUNG di dalamnya (bukan cuma baca, dan bukan cuma ekspor ke
-`reports/`) — inilah yang membuat pengalaman "Cowork" yang diminta Boss
-mulai nyata: agent bekerja DI DALAM folder proyek, bukan di sampingnya —
-image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
-ter-bake ke image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata
-bekerja, dan AI_ENGINE kini bisa jadi MCP Server sungguhan (bukan cuma
-Client) untuk client eksternal manapun. **Dicek ulang sebelum ditulis di
-sini** (bukan diasumsikan dari catatan lama): `projects.py` TERNYATA
-sudah punya `Depends(get_current_principal)` di SETIAP rute sejak Tahap
-13 — catatan gap lama yang bilang "endpoint projects.py masih terbuka"
-sudah basi, diperbaiki di bagian "Untuk lanjutan frontend" di bawah;
-bagian "Gap kumulatif" Tahap 19 masih menyimpan klaim basi "ChatEngine
-belum workspace-aware" yang sudah salah sejak Tahap 23 — dikoreksi Tahap
-27; bagian "Gap kumulatif" Tahap 17 masih menyimpan klaim basi "RBAC
-mcp:call inert dari Chat" yang sudah salah sejak Tahap 20 — dikoreksi
-Tahap 28; dan `WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`'s `viewer` TERNYATA
-cuma punya `read_only` (string yang tak pernah dicek kode manapun) padahal
+(Tahap 29, Bab 69.5 Vision), Workspace Write Access (Tahap 30, Bab 69.7
+`write_output`), tool-call resilience (Tahap 31), dan akses Workspace
+lewat MCP Server (Tahap 32, Bab 60.1 + 69.5) semua selesai 2026-07-06.
+**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
+nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
+benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat),
+sesi Chat DAN file hasil kerjanya (di kedua rute yang menyajikannya) DAN
+memori/monitoring/knowledge kini terikat autentikasi, Chat kini bisa
+membaca Project Workspace DAN melihat gambar/menghitung luas GIS-nya DAN
+membuat/mengedit file teks LANGSUNG di dalamnya, satu tool call gagal tak
+lagi merusak seluruh giliran, DAN client MCP eksternal sungguhan (bukan
+cuma Chat) kini juga bisa baca+tulis Project Workspace yang sama — inilah
+yang membuat pengalaman "Cowork" yang diminta Boss makin nyata dari dua
+arah sekaligus: Chat internal DAN agent eksternal (mis. Claude Desktop)
+sama-sama bisa kerja DI DALAM folder proyek, bukan di sampingnya — image
+Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
+image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja.
+**Dicek ulang sebelum ditulis di sini** (bukan diasumsikan dari catatan
+lama): `projects.py` TERNYATA sudah punya `Depends(get_current_principal)`
+di SETIAP rute sejak Tahap 13 — catatan gap lama yang bilang "endpoint
+projects.py masih terbuka" sudah basi, diperbaiki di bagian "Untuk
+lanjutan frontend" di bawah; bagian "Gap kumulatif" Tahap 19 masih
+menyimpan klaim basi "ChatEngine belum workspace-aware" yang sudah salah
+sejak Tahap 23 — dikoreksi Tahap 27; bagian "Gap kumulatif" Tahap 17
+masih menyimpan klaim basi "RBAC mcp:call inert dari Chat" yang sudah
+salah sejak Tahap 20 — dikoreksi Tahap 28; dan
+`WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`'s `viewer` TERNYATA cuma punya
+`read_only` (string yang tak pernah dicek kode manapun) padahal
 `api/routes/chat.py` selalu mengecek `read` — viewer diam-diam SELALU
 403 di Workspace Chat sejak Tahap 23, dikoreksi Tahap 30. **Koreksi
 cakupan Tahap 29 sebelum coding**: opsi yang ditawarkan menyebut "Chat
-DAN MCP Server" untuk gambar/GIS Workspace — TIDAK akurat,
+DAN MCP Server" untuk gambar/GIS Workspace — TIDAK akurat saat itu,
 `mcp_server/server.py` (Tahap 28) sengaja mengecualikan tool Workspace
-sama sekali, jadi Tahap 29 murni ChatEngine (lihat detail di atas). Tahap
-30 bukan hasil `AskUserQuestion` dari daftar kandidat — Boss menyatakan
-langsung tujuan proyek (agent mandiri, buat/edit file, akses folder gaya
-Cowork) dan minta prioritas diputuskan sendiri; dipilih setelah audit
-kode menemukan `write_output` dorman sejak Tahap 19 sebagai gap
-berdampak-langsung-ke-tujuan itu yang paling murah dieksekusi. **Tahap 31
-juga bukan hasil `AskUserQuestion`** — lanjutan langsung tujuan yang sama:
-temuan live Tahap 30 (model lupa argumen wajib → `TypeError` mentah
-merusak SELURUH giliran chat) diputuskan sendiri sebagai prioritas
-karena paling mendasar untuk "agent bekerja mandiri" — agent yang crash
-total gara-gara satu tool call gagal bukan agent yang bisa dipercaya;
-`_run_tool` sekarang menangkap exception apa pun, bukan cuma
-`PermissionError` (lihat detail Tahap 31 di atas). Kandidat prioritas
-berikutnya, dari yang paling murah dieksekusi: (1) solusi storage RWX
-(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
-butuh API >1 replika di produksi; (2) Bab 68 Enterprise Architecture
-Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
-dimulai; (3) akses Workspace lewat MCP Server (gap yang
-ditemukan+didokumentasikan saat Tahap 29 — `mcp_server/server.py` tak
-punya sesi ChatEngine untuk menyuntikkan `workspace_id`, butuh mekanisme
-otorisasi baru untuk pemanggil eksternal yang beda dari pola sesi Chat —
-relevan juga untuk tujuan Cowork kalau ada client MCP eksternal seperti
-Claude Desktop ingin diberi akses folder proyek); (4) PDF/DOCX baru
+sama sekali — celah itulah yang justru ditutup Tahap 32 belakangan. Tahap
+30 dan 31 bukan hasil `AskUserQuestion` dari daftar kandidat — Boss
+menyatakan langsung tujuan proyek (agent mandiri, buat/edit file, akses
+folder gaya Cowork) dan minta prioritas diputuskan sendiri dua kali
+berturut-turut; Tahap 32 kembali lewat `AskUserQuestion` (4 kandidat
+dipetakan dari tujuan yang sama) — dipilih sebagai interpretasi PALING
+LITERAL "seperti Claude Cowork": client MCP eksternal sungguhan, bukan
+cuma Chat internal. **Bug nyata ketemu tak sengaja saat menulis test e2e
+Tahap 32**: `db/connection.py`'s engine level-modul memaksa
+`pool_size`/`max_overflow` (kwarg khusus Postgres) tanpa syarat, bikin
+proses apa pun yang mengimpornya transitif (termasuk subprocess MCP
+Server) crash total kalau `DATABASE_URL` diarahkan ke sqlite — diperbaiki
+sekalian (kwarg itu cuma ditambah kalau BUKAN sqlite), perilaku Postgres
+nol berubah. Kandidat prioritas berikutnya, dari yang paling murah
+dieksekusi: (1) solusi storage RWX (StorageClass NFS/Longhorn atau
+pindah ke object storage) kalau memang butuh API >1 replika di produksi;
+(2) Bab 68 Enterprise Architecture Backlog (20 prioritas di
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) PDF/DOCX baru
 langsung ke Workspace (Tahap 30 sengaja cuma format teks — generator
 `agent/tools/writers.py` masih hardcode ke `OUTPUT_DIR`, butuh parameter
-output-path baru); (5) pesan error tool-call resilience (Tahap 31) masih
+output-path baru; sekarang relevan juga untuk MCP Server sejak Tahap 32);
+(4) satu proses MCP = satu Workspace + satu role tetap (Tahap 32 sengaja
+config-bound, bukan multi-Workspace dinamis — Claude Desktop yang mau
+akses beberapa Project perlu beberapa entri server terkonfigurasi
+terpisah); (5) pesan error tool-call resilience (Tahap 31) masih
 representasi string exception Python mentah, belum diterjemahkan ke
 Bahasa Indonesia yang ramah seperti pesan RBAC; (6) heartbeat RQ yang
 lebih tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin
 konektivitas Redis, bukan bahwa `worker.work()` sungguh memproses job);
-(7) transport SSE/HTTP
-untuk MCP Server (Tahap 28 sengaja stdio-saja, server jaringan butuh
-tinjauan auth+path-sandboxing sendiri) — item 4-7 kecil/menengah, cuma
-relevan kalau ada kebutuhan konkret.
+(7) transport SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja,
+server jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 3-7
+kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

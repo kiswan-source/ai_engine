@@ -19,10 +19,37 @@ def _fake_registry() -> ToolRegistry:
     return reg
 
 
-def test_allowed_schemas_excludes_workspace_and_mcp_meta_tools():
+def _workspace_echo_registry() -> ToolRegistry:
+    """Echoes received kwargs back — lets tests assert what dispatch_tool_call injected."""
+    reg = ToolRegistry()
+    reg.register(
+        "workspace_write_file",
+        lambda **kwargs: {"success": True, "received_args": kwargs},
+        "fake workspace_write_file echoing received args",
+    )
+    reg.register(
+        "workspace_read_file",
+        lambda **kwargs: {"success": True, "received_args": kwargs},
+        "fake workspace_read_file echoing received args",
+    )
+    return reg
+
+
+def test_allowed_schemas_excludes_workspace_and_mcp_meta_tools_by_default():
     names = {s["function"]["name"] for s in _allowed_schemas()}
     assert "workspace_list_files" not in names
     assert "workspace_read_file" not in names
+    assert "workspace_write_file" not in names
+    assert "mcp_list_tools" not in names
+    assert "mcp_call_tool" not in names
+
+
+def test_allowed_schemas_includes_workspace_tools_when_configured():
+    names = {s["function"]["name"] for s in _allowed_schemas(include_workspace=True)}
+    assert "workspace_list_files" in names
+    assert "workspace_read_file" in names
+    assert "workspace_write_file" in names
+    # mcp_* stays excluded regardless of Workspace config — unrelated reason.
     assert "mcp_list_tools" not in names
     assert "mcp_call_tool" not in names
 
@@ -63,3 +90,40 @@ async def test_dispatch_read_tool_unaffected_by_role():
     reg = _fake_registry()
     result = await dispatch_tool_call(reg, "user", "read_txt", {"file_path": "a.txt"})
     assert result["text"] == "isi file"
+
+
+# ─── Workspace access via MCP Server (Bab 60.1 + 69.5, Tahap 32) ────────
+
+async def test_dispatch_workspace_tool_without_workspace_id_configured_raises():
+    reg = _workspace_echo_registry()
+    with pytest.raises(ValueError):
+        await dispatch_tool_call(reg, "user", "workspace_read_file", {"folder_id": "f1", "relative_path": "a.txt"})
+
+
+async def test_dispatch_injects_configured_workspace_id_overriding_caller_supplied_value():
+    reg = _workspace_echo_registry()
+    result = await dispatch_tool_call(
+        reg, "user", "workspace_read_file",
+        {"folder_id": "f1", "relative_path": "a.txt", "workspace_id": "fake-hallucinated-id"},
+        workspace_id="real-ws-id", workspace_role="viewer",
+    )
+    assert result["received_args"]["workspace_id"] == "real-ws-id"
+
+
+async def test_dispatch_denies_workspace_write_for_viewer_role():
+    reg = _workspace_echo_registry()
+    with pytest.raises(PermissionError):
+        await dispatch_tool_call(
+            reg, "user", "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+            workspace_id="real-ws-id", workspace_role="viewer",
+        )
+
+
+async def test_dispatch_allows_workspace_write_for_editor_role():
+    reg = _workspace_echo_registry()
+    result = await dispatch_tool_call(
+        reg, "user", "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+        workspace_id="real-ws-id", workspace_role="editor",
+    )
+    assert result["success"] is True
+    assert result["received_args"]["workspace_id"] == "real-ws-id"
