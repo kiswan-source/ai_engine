@@ -36,6 +36,7 @@
 | 22* | Kepemilikan sesi Chat — tutup gap yang sengaja ditinggalkan Tahap 20 | ✅ SELESAI |
 | 23* | Agent Workspace Context ke ChatEngine (Bab 69.5) — Chat bisa baca Project Workspace, bukan cuma Uploaded Files | ✅ SELESAI |
 | 24* | Kepemilikan file download Chat — tutup gap yang sengaja ditinggalkan Tahap 22/23 | ✅ SELESAI |
+| 25* | Autentikasi + fix path traversal `api/routes/files.py` — tutup bypass nyata yang ditemukan Tahap 24 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1365,9 +1366,73 @@ mengunduh apa pun di `reports/`.
   terbuka, bukan cuma teori. `.env` dikembalikan, service di-restart,
   file test dihapus.
 
+**Tahap 25 — Autentikasi + fix path traversal `api/routes/files.py`**
+
+Dipilih lewat `AskUserQuestion` sebagai kelanjutan LANGSUNG dari temuan
+Tahap 24: `GET /reports/{filename}` (rute lain, folder sama dengan
+`/api/v1/chat/download`) terbuka penuh tanpa autentikasi, bypass nyata
+terhadap perlindungan yang baru dibangun.
+
+- **Ditanya lagi sebelum coding, mengubah cakupan lebih jauh**: `FileList.tsx`
+  (halaman Files) punya tombol unduh berupa `<a href download>` BIASA —
+  TIDAK lewat `apiClient` (yang otomatis lampirkan `X-API-Key`), jadi kalau
+  cuma backend dikunci, tombol itu akan 401 begitu `API_KEYS` aktif di
+  produksi. Ditanya `AskUserQuestion`: kunci saja + catat gap frontend
+  terpisah (pola sama seperti Tahap 24 terhadap `/api/v1/chat/download`,
+  yang memang belum ada pemanggil frontend sama sekali), atau perbaiki
+  sekalian — **perbaiki sekalian** dipilih, beda dari Tahap 24 karena di
+  sini SUDAH ADA fitur frontend yang bekerja hari ini dan akan benar-benar
+  rusak, bukan cuma gap yang belum pernah diisi.
+- **`api/routes/files.py`**: `Depends(get_current_principal)` ditambah ke
+  keempat endpoint (`GET /reports/{filename}`, `GET /reports`,
+  `POST /upload`, `GET /uploads`) — autentikasi, BUKAN kepemilikan
+  per-pengguna seperti `/api/v1/chat/download` (Tahap 24): tak ada konsep
+  sesi di rute ini sama sekali, jadi siapa pun yang terautentikasi tetap
+  bisa lihat file siapa pun — jaminan lebih sempit dari Chat, tapi jauh
+  lebih baik dari "siapa pun di jaringan, tanpa kunci apa pun".
+- **Bug keamanan KEDUA ditemukan di file yang sama, tak direncanakan**:
+  `filename`/`file.filename` di-`os.path.join()` ke `REPORTS_DIR`/
+  `UPLOADS_DIR` TANPA `os.path.basename()` sama sekali — path traversal
+  asli, bukan cuma "tanpa auth". `agent/tools/writers.py`/
+  `core/chat/engine.py` sudah menganggap `os.path.basename()` sebagai
+  pertahanan standar untuk pola ini; rute ini saja yang belum pernah
+  memakainya. Ditambahkan ke `download_report` (baca) DAN `upload_file`
+  (tulis — lebih parah, potensi tulis file sembarang ke luar `uploads/`).
+- **Frontend**: `fileService.ts`'s `reportDownloadUrl()` (string URL untuk
+  `<a href>`) diganti `downloadReport()` — `async` function yang fetch
+  lewat `apiClient.raw()` (melampirkan `X-API-Key`), lalu trigger unduhan
+  dari blob hasil lewat elemen `<a>` sementara + `.click()` terprogram —
+  pola standar "unduhan terautentikasi" untuk SPA tanpa sesi berbasis
+  cookie. `FileList.tsx`: prop `hrefFor` (string) diganti `onDownload`
+  (callback) — `<a href>` jadi `<button onClick>`, notifikasi error kalau
+  gagal ditangani di `FilesPage.tsx` (pola sama seperti `onFileChosen` di
+  file yang sama). `npm run lint`/`npm run build` hijau.
+- **11 test baru** (521/521 total, stabil 2x berturut-turut):
+  `test_files_api.py` — keempat endpoint butuh auth, akses dengan kunci
+  valid berhasil, perilaku tanpa `API_KEYS` tak berubah, DAN untuk
+  traversal: satu test langsung memanggil fungsi handler `download_report()`
+  (bukan lewat HTTP — request HTTP ke `/reports/..%2Fsecret.txt` ternyata
+  dinormalisasi router ASGI SEBELUM sampai ke handler, jatuh ke SPA
+  catch-all yang menyajikan `index.html`, bukan membuktikan apa pun
+  tentang sanitasi fungsi ini — dicatat jujur sebagai temuan, bukan
+  dipaksa lolos) memverifikasi `os.path.basename()` benar-benar memangkas
+  `../` apa pun; satu test HTTP terpisah memverifikasi invarian yang
+  sebenarnya penting terlepas dari perilaku routing: isi file rahasia
+  TIDAK PERNAH muncul di respons.
+- **Diverifikasi live sungguhan**: `API_KEYS` sementara diisi, service
+  di-restart (frontend di-`npm run build` ulang dulu). File test
+  sungguhan ditaruh di `reports/` asli. **`GET /reports/{filename}` TANPA
+  header sama sekali → 401 sungguhan** (persis bypass yang dikonfirmasi
+  hidup di Tahap 24, sekarang tertutup); dengan kunci valid → 200 isi
+  benar; `GET /reports` (list) tanpa auth → 401. `.env` dikembalikan,
+  service di-restart, dikonfirmasi perilaku dev normal (tanpa `API_KEYS`)
+  tak berubah sama sekali.
+
 ## Test
-- **Backend: 510/510 lulus** (`pytest -q`, stabil 2x berturut-turut) —
-  naik dari 504 lewat 6 test kepemilikan file download Chat (Tahap 24,
+- **Backend: 521/521 lulus** (`pytest -q`, stabil 2x berturut-turut) —
+  naik dari 510 lewat 11 test autentikasi+traversal `files.py` (Tahap 25,
+  lihat detail di atas). Sebelumnya naik dari 504 lewat 6 test kepemilikan
+  file download Chat (Tahap 24,
   lihat detail di atas). Sebelumnya naik dari 489 lewat 15 test Agent
   Workspace Context (Tahap 23, lihat
   detail di atas). Sebelumnya naik dari 481 lewat 8 test kepemilikan sesi
@@ -1409,7 +1474,7 @@ mengunduh apa pun di `reports/`.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-24, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-25, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1424,14 +1489,17 @@ mengunduh apa pun di `reports/`.
   **Kepemilikan file download Chat SELESAI juga (Tahap 24)** —
   `/api/v1/chat/download/{filename}` kini wajib `session_id` + kepemilikan
   + bukti file itu memang dihasilkan di sesi itu (`session.produced_files`).
-  **Ditemukan tapi SENGAJA belum ditutup**: `GET /reports/{filename}`
-  (`api/routes/files.py`, rute berbeda, folder sama) tetap terbuka penuh
-  tanpa autentikasi — dikonfirmasi hidup saat verifikasi Tahap 24, celah
-  bypass nyata terhadap perlindungan yang baru dibangun, prioritas
-  terpisah untuk sesi berikutnya (lihat di bawah). Gambar/GIS di Workspace
-  belum bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up
-  terpisah). Rute API selain yang sudah opt-in RBAC (chat, agent/run,
-  projects, workspace) masih terbuka tanpa autentikasi.
+  **`api/routes/files.py` SELESAI juga (Tahap 25)** — bypass nyata yang
+  dikonfirmasi hidup di Tahap 24 kini tertutup: keempat endpoint
+  (`/reports/{filename}`, `/reports`, `/upload`, `/uploads`) wajib
+  autentikasi, plus bug path traversal kedua (ditemukan di file yang sama,
+  `os.path.basename()` tak pernah dipakai) diperbaiki sekalian. Autentikasi
+  di sini BUKAN kepemilikan per-pengguna seperti Chat — tak ada konsep
+  sesi, siapa pun yang terautentikasi tetap lihat file siapa pun (jaminan
+  lebih sempit, didokumentasikan sadar). Gambar/GIS di Workspace belum
+  bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute
+  API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
+  files) masih terbuka tanpa autentikasi.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1622,32 +1690,32 @@ ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
 hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
 multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
 (Tahap 22), Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5),
-dan kepemilikan file download Chat (Tahap 24) semua selesai 2026-07-06.
-**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
-nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
+kepemilikan file download Chat (Tahap 24), dan autentikasi+fix traversal
+`api/routes/files.py` (Tahap 25) semua selesai 2026-07-06. **Seluruh 5
+area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**,
+ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
 benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat),
-sesi Chat DAN file hasil kerjanya kini terikat identitas pemiliknya, Chat
-kini bisa membaca Project Workspace bukan cuma Uploaded Files, dan image
-Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
-image) tertutup sekalian. Kandidat prioritas berikutnya, dari yang paling
-murah dieksekusi: (1) **`GET /reports/{filename}` (`api/routes/files.py`)
-sama sekali tanpa autentikasi** — ditemukan+dikonfirmasi hidup saat
-verifikasi Tahap 24, bypass nyata terhadap perlindungan
-`/api/v1/chat/download` yang baru dibangun (folder yang sama disajikan
-dua rute, cuma satu yang dikunci); `/uploads`/`/upload` di file yang sama
-kemungkinan senasib, belum dicek; (2) MCP Server (sisi Bab 60 yang
-sengaja ditunda Tahap 17); (3) solusi storage RWX (StorageClass
+sesi Chat DAN file hasil kerjanya (di kedua rute yang menyajikannya) kini
+terikat autentikasi, Chat kini bisa membaca Project Workspace bukan cuma
+Uploaded Files, dan image Docker turun 2.83GB→699MB dengan bug keamanan
+nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat prioritas
+berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab
+60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX (StorageClass
 NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
-replika di produksi; (4) Bab 68 Enterprise Architecture Backlog (20
-prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (5)
+replika di produksi; (3) Bab 68 Enterprise Architecture Backlog (20
+prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4)
 gambar/GIS di Workspace belum bisa dibaca lewat Chat — baris Vision Bab
 69.5, gap yang Tahap 23 sengaja tinggalkan (hasil tool hari ini teks
-JSON, bukan input vision, integrasi lebih besar); (6) instal
+JSON, bukan input vision, integrasi lebih besar); (5) instal
 `tesseract-ocr` di Dockerfile (gap pra-ada ditemukan tak sengaja Tahap 21
 — `pytesseract` ada di `requirements.txt` tapi binary-nya tak pernah
-diinstal, OCR lewat `read_image` kemungkinan gagal senyap di Docker); (7)
+diinstal, OCR lewat `read_image` kemungkinan gagal senyap di Docker); (6)
 `HEALTHCHECK` eksplisit di `Dockerfile.api`/`Dockerfile.worker` sendiri
-(Tahap 21 tidak menambahkannya, di luar cakupan saat itu).
+(Tahap 21 tidak menambahkannya, di luar cakupan saat itu); (7)
+`monitoring.py`/`memory.py`/`knowledge.py` masih terbuka tanpa
+autentikasi endpoint-level (lihat butir (d) di bawah) — pola yang sama
+persis dengan `files.py` sebelum Tahap 25, kandidat berikutnya yang
+paling mirip untuk dikunci dengan cara yang sama.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

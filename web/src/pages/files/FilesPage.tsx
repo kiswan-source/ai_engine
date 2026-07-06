@@ -42,6 +42,17 @@ export default function FilesPage() {
       .finally(() => setLoading(false))
   }, [fetchAll])
 
+  async function onDownloadReport(filename: string) {
+    try {
+      await fileService.downloadReport(filename)
+    } catch (err) {
+      pushNotification({
+        variant: 'destructive',
+        message: err instanceof Error ? err.message : 'Gagal mengunduh berkas',
+      })
+    }
+  }
+
   async function onFileChosen(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -89,7 +100,7 @@ export default function FilesPage() {
             <FileList
               files={reports}
               emptyLabel="Belum ada berkas yang dihasilkan."
-              hrefFor={fileService.reportDownloadUrl}
+              onDownload={onDownloadReport}
             />
           </section>
 
