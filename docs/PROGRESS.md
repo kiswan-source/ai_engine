@@ -41,6 +41,7 @@
 | 27* | Loose ends Docker — `tesseract-ocr`/`tesseract-ocr-ind` + `HEALTHCHECK` di `Dockerfile.api`/`Dockerfile.worker` (gap dicatat Tahap 21) | ✅ SELESAI |
 | 28* | MCP Server (Bab 60) — ekspos tool registry AI_ENGINE ke client MCP eksternal, arah sebaliknya dari Client Tahap 17 | ✅ SELESAI |
 | 29* | Gambar/GIS Workspace via Chat (Bab 69.5 Vision) — `workspace_read_file` kini bisa gambar (vision sungguhan) & GIS (ringkasan luas), bukan cuma dokumen | ✅ SELESAI |
+| 30* | Workspace Write Access (Bab 69.7 `write_output`) — agent bisa buat/edit file teks LANGSUNG di folder Project Workspace, bukan cuma ke `reports/` | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1723,12 +1724,123 @@ desain) sebelum coding.
   (sama seperti upload biasa — bukan risiko baru, konsisten dengan
   perilaku yang sudah ada).
 
+**Tahap 30 — Workspace Write Access (Bab 69.7 `write_output`)**
+
+Bukan dipilih dari daftar kandidat `docs/PROGRESS.md` seperti Tahap 21-29 —
+Boss menyatakan LANGSUNG tujuan proyek ini: agent bisa bekerja mandiri,
+membuat/mengedit file, akses file di folder gaya Claude Cowork, lalu minta
+diputuskan sendiri prioritasnya. Diaudit ulang kondisi kode terhadap tujuan
+itu: Chat sudah bisa BACA folder Workspace (dokumen/gambar/GIS, Tahap
+19/23/29), tapi SETIAP tool `write_*` selalu menulis ke `~/ai_engine/reports/`,
+tidak pernah kembali ke folder Workspace itu sendiri — itu "ekspor ke
+folder lain", bukan "kerja di dalam folder proyek Anda". Fondasi RBAC-nya
+sudah ada sejak Tahap 19 (`write_output` di
+`WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`) tapi dicek via `grep`: tak pernah
+ada satu pun pemanggil `require_workspace_permission(..., "write_output")`
+di seluruh kode — persis pola "izin didefinisikan, kodenya nol" yang
+berulang kali ketemu sesi ini (`view_dashboard` dorman sampai Tahap 26).
+Direncanakan lewat Plan Mode (protected folder disentuh, RBAC baru)
+sebelum coding.
+
+- **Bug ditemukan saat membaca tabel izin yang sama, diperbaiki sebagai
+  koreksi kecil bersebelahan**: `viewer` di
+  `WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE` cuma punya `read_only`, BUKAN
+  `read` — padahal `api/routes/chat.py::_check_workspace_access` SELALU
+  mengecek `require_workspace_permission(role, "read")` untuk SETIAP
+  permintaan chat ber-Workspace, dan tak ada satu pun kode lain yang
+  pernah mengecek `read_only`. Artinya **viewer Project selama ini SELALU
+  ditolak 403 di setiap pesan chat ber-Workspace** — jelas bukan
+  maksudnya (owner/editor tak terdampak; string milik viewer sendiri
+  cuma tak pernah dicek siapa pun). Fix: tambah `"read"` ke set izin
+  viewer. Diverifikasi live: benar viewer sekarang bisa
+  `workspace_read_file`/`workspace_list_files` (lihat verifikasi di
+  bawah), tetap TIDAK dapat `write_output`.
+- **Cakupan sengaja dibatasi ke file TEKS saja** (txt/md/log/csv/json/html
+  — kategori yang sama dibaca `TEXT_READERS`, minus pdf/docx/doc yang
+  format biner butuh generator ReportLab/python-docx sendiri, bukan tulis
+  teks mentah) — bikin PDF/DOCX baru langsung di Workspace tetap gap
+  terpisah, generator itu masih hardcode ke `OUTPUT_DIR`.
+- **Mode `overwrite` (default) atau `append`** — beda minimal antara
+  "buat/ganti file" dan "edit dengan menambah", biaya implementasi hampir
+  nol (cuma mode buka file beda).
+- **Root Restriction dipakai ulang apa adanya**: `tools/tool_validator.py::resolve_within_root`
+  (Bab 69.6) sudah gagal-tertutup untuk `../` atau symlink keluar root,
+  dan `Path.resolve()` bekerja normal untuk target yang BELUM ada — jadi
+  gerbang yang sama melindungi tulis tanpa perlu diubah.
+  `FilesystemAdapter` (sebelumnya cuma baca) dapat `write_text()` simetris
+  dengan `read_text()`.
+- **RBAC: role Project di-resolve SEKALI di titik ikat sesi, disimpan di
+  sesi — pola PERSIS yang Tahap 23 pakai untuk `workspace_id` sendiri**,
+  bukan mekanisme baru: `api/routes/chat.py::_check_workspace_access`
+  sekarang MENGEMBALIKAN role yang sudah di-resolve (dulu cuma
+  validasi lalu buang); `stream()` meneruskannya sebagai
+  `workspace_role=` ke `stream_run()`; `Session.workspace_role` (bentuk
+  first-non-null-wins sama seperti `workspace_id`); `_run_tool` mengecek
+  `require_workspace_permission(workspace_role, "write_output")` KHUSUS
+  untuk `workspace_write_file`, menangkap `PermissionError` ke bentuk
+  penolakan yang sama seperti gerbang RBAC lain (tak pernah merusak
+  stream SSE). `agent/tools/` tetap tak pernah mengimpor dari `api/` —
+  alasan PERSIS yang sudah didokumentasikan Tahap 23 untuk keputusan yang
+  sama. **Sengaja TIDAK ditambahkan ke `TOOL_RISK_ACTIONS` global** — pola
+  yang sama seperti `workspace_read_file`/`workspace_list_files`: gerbang
+  Workspace-scoped dianggap gerbang LENGKAP untuk tool Workspace, tak
+  digandakan dengan sistem role global yang tak berkaitan.
+- **Bug nyata ketemu dari test sendiri, sebelum sempat jadi masalah live**:
+  lupa menambahkan `workspace_write_file` ke `WORKSPACE_TOOL_NAMES` —
+  test unit `test_run_tool_allows_write_for_owner_role` gagal
+  (`KeyError: 'workspace_id'`) karena `_run_tool` tak menyuntikkan
+  `workspace_id` ke argumen tool ini. Diperbaiki sebelum lanjut ke live
+  verification, persis kegunaan test yang dimaksud.
+- **11 test baru (563/563 total, stabil 2x berturut-turut)**: 6
+  `test_workspace_reader.py` (`_write_file` bikin file baru; overwrite
+  ganti isi; append tambah isi tanpa hapus yang lama; tolak ekstensi
+  tak didukung; tolak `../` traversal; sync wrapper `asyncio.run()`), 4
+  `test_chat_engine_workspace_context.py` (`_run_tool` tolak viewer,
+  tolak `workspace_role=None`, terima owner DAN suntik `workspace_id`,
+  terima editor), 1 `test_auth_permissions.py` (viewer kini dapat
+  `"read"`, parametrized bersama `read_only`/`knowledge`/`vector`).
+- **Diverifikasi live sungguhan PENUH lewat model asli** (`gemma4:e2b`,
+  `API_KEYS` sementara diisi 2 kunci untuk simulasi owner+viewer, restart
+  `ai-engine.service`, Project+Workspace+folder scratch nyata):
+  **owner** minta buat `catatan.txt` isi "Temuan lapangan: kadar tembaga
+  1.85 persen" → file BENAR muncul di folder Workspace scratch (bukan
+  `reports/`) dengan isi PERSIS; minta append "Update: kadar emas 2.3
+  g/t" → baris baru BENAR ditambahkan, isi lama UTUH; minta buat
+  `script.py` → BENAR ditolak (`"Hanya bisa menulis file teks..."`), file
+  tak pernah muncul di disk. **viewer** (kunci API beda, role Project
+  `viewer`) baca `catatan.txt` → BERHASIL (bukti bug `read`/`read_only`
+  di atas benar-benar tertutup, bukan cuma lolos unit test); coba
+  `workspace_write_file` append → **ditolak nyata**
+  (`"Akses ditolak: project role 'viewer' lacks workspace permission
+  'write_output'"`), isi file dikonfirmasi TAK BERUBAH. `.env`
+  dikembalikan, service di-restart, Project/Workspace/folder scratch
+  dihapus (soft-delete).
+- **Temuan tambahan saat live testing, di luar cakupan diperbaiki
+  sekarang**: model kecil (`gemma4:e2b`) kadang salah pilih nama file
+  (menimpa `seed.txt` alih-alih membuat `catatan.txt` baru saat instruksi
+  kurang eksplisit) atau lupa menyertakan `folder_id` — yang terakhir
+  memicu `TypeError` Python mentah yang MERUSAK SELURUH giliran chat
+  (event `"error"`, bukan penolakan tool yang rapi), karena `_run_tool`
+  cuma menangkap `PermissionError`, bukan `TypeError`/exception generik
+  lain dari argumen tool yang kurang — **gap PRA-ADA di setiap tool**
+  (bukan spesifik Tahap ini), ditemukan tak sengaja karena tool baru ini
+  kebetulan py butuh argumen wajib lebih banyak dari kebanyakan tool lain.
+  Dicatat sebagai kandidat perbaikan terpisah, bukan diperbaiki diam-diam
+  di luar rencana Tahap ini.
+- **Gap yang diakui**: cuma format teks (lihat cakupan di atas) — PDF/DOCX
+  baru langsung ke Workspace belum ada; `_run_tool` cuma menangkap
+  `PermissionError` per tool, bukan exception generik lain (temuan di
+  atas, gap pra-ada semua tool bukan cuma yang baru).
+
 ## Test
-- **Backend: 552/552 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~16-20 detik total) — naik dari 549 lewat 3 test gambar/GIS Workspace
-  (Tahap 29, lihat detail di atas: 2 unit `test_workspace_reader.py`, 1
-  unit `test_chat_engine_workspace_context.py`). Sebelumnya naik dari 539
-  lewat 10 test MCP Server (Tahap 28, lihat detail di atas: 7 unit
+- **Backend: 563/563 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~17-21 detik total) — naik dari 552 lewat 11 test Workspace Write
+  Access (Tahap 30, lihat detail di atas: 6 unit `test_workspace_reader.py`,
+  4 unit `test_chat_engine_workspace_context.py`, 1 unit
+  `test_auth_permissions.py`). Sebelumnya naik dari 549 lewat 3 test
+  gambar/GIS Workspace (Tahap 29, lihat detail di atas: 2 unit
+  `test_workspace_reader.py`, 1 unit `test_chat_engine_workspace_context.py`).
+  Sebelumnya naik dari 539 lewat 10 test MCP Server (Tahap 28, lihat detail di atas: 7 unit
   `test_mcp_server.py`, 3 integrasi `test_mcp_server_e2e.py` dogfooding
   subprocess sungguhan). Sebelumnya tetap 539 di Tahap 27 (loose ends
   Docker, murni infrastruktur, nol test
@@ -1779,7 +1891,7 @@ desain) sebelum coding.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-29, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-30, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1812,7 +1924,13 @@ desain) sebelum coding.
   sungguhan sebagai giliran vision (bukan cuma teks) dan meringkas file
   GIS persis seperti `read_kml`/`read_geojson`/`read_shp`; diverifikasi
   live model benar-benar mendeskripsikan warna/bentuk gambar nyata dan
-  menyebut luas GIS nyata (lihat detail Tahap 29 di atas). Rute
+  menyebut luas GIS nyata (lihat detail Tahap 29 di atas). **Workspace
+  Write Access SELESAI juga (Tahap 30)** — `workspace_write_file` baru
+  bisa buat/timpa/tambah file TEKS langsung di folder Workspace (bukan
+  cuma `reports/`), digerbang `write_output` yang dorman sejak Tahap 19;
+  bug viewer terkunci dari Workspace Chat (`read` vs `read_only`) sekalian
+  ditemukan+diperbaiki; diverifikasi live owner menulis file nyata,
+  viewer ditolak nyata (lihat detail Tahap 30 di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -2030,45 +2148,63 @@ kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
 `api/routes/files.py` (Tahap 25), autentikasi
 `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), loose ends
 Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), MCP Server, Bab 60
-sisi sebaliknya dari Client (Tahap 28), dan gambar/GIS Workspace via Chat
-(Tahap 29, Bab 69.5 Vision) semua selesai 2026-07-06. **Seluruh 5 area
-Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
-kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
+sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
+(Tahap 29, Bab 69.5 Vision), dan Workspace Write Access (Tahap 30, Bab
+69.7 `write_output`) semua selesai 2026-07-06. **Seluruh 5 area Phase 3
+(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
+Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
 kerjanya (di kedua rute yang menyajikannya) DAN memori/monitoring/knowledge
 kini terikat autentikasi, Chat kini bisa membaca Project Workspace DAN
-melihat gambar/menghitung luas GIS-nya (bukan cuma dokumen teks), image
-Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
-image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja, dan
-AI_ENGINE kini bisa jadi MCP Server sungguhan (bukan cuma Client) untuk
-client eksternal manapun. **Dicek ulang sebelum ditulis di sini** (bukan
-diasumsikan dari catatan lama): `projects.py` TERNYATA sudah punya
-`Depends(get_current_principal)` di SETIAP rute sejak Tahap 13 — catatan
-gap lama yang bilang "endpoint projects.py masih terbuka" sudah basi,
-diperbaiki di bagian "Untuk lanjutan frontend" di bawah; bagian "Gap
-kumulatif" Tahap 19 masih menyimpan klaim basi "ChatEngine belum
-workspace-aware" yang sudah salah sejak Tahap 23 — dikoreksi Tahap 27; dan
-bagian "Gap kumulatif" Tahap 17 masih menyimpan klaim basi "RBAC mcp:call
-inert dari Chat" yang sudah salah sejak Tahap 20 — dikoreksi Tahap 28.
-**Koreksi cakupan Tahap 29 sebelum coding**: opsi yang ditawarkan
-menyebut "Chat DAN MCP Server" untuk gambar/GIS Workspace — TIDAK akurat,
+melihat gambar/menghitung luas GIS-nya DAN membuat/mengedit file teks
+LANGSUNG di dalamnya (bukan cuma baca, dan bukan cuma ekspor ke
+`reports/`) — inilah yang membuat pengalaman "Cowork" yang diminta Boss
+mulai nyata: agent bekerja DI DALAM folder proyek, bukan di sampingnya —
+image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
+ter-bake ke image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata
+bekerja, dan AI_ENGINE kini bisa jadi MCP Server sungguhan (bukan cuma
+Client) untuk client eksternal manapun. **Dicek ulang sebelum ditulis di
+sini** (bukan diasumsikan dari catatan lama): `projects.py` TERNYATA
+sudah punya `Depends(get_current_principal)` di SETIAP rute sejak Tahap
+13 — catatan gap lama yang bilang "endpoint projects.py masih terbuka"
+sudah basi, diperbaiki di bagian "Untuk lanjutan frontend" di bawah;
+bagian "Gap kumulatif" Tahap 19 masih menyimpan klaim basi "ChatEngine
+belum workspace-aware" yang sudah salah sejak Tahap 23 — dikoreksi Tahap
+27; bagian "Gap kumulatif" Tahap 17 masih menyimpan klaim basi "RBAC
+mcp:call inert dari Chat" yang sudah salah sejak Tahap 20 — dikoreksi
+Tahap 28; dan `WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`'s `viewer` TERNYATA
+cuma punya `read_only` (string yang tak pernah dicek kode manapun) padahal
+`api/routes/chat.py` selalu mengecek `read` — viewer diam-diam SELALU
+403 di Workspace Chat sejak Tahap 23, dikoreksi Tahap 30. **Koreksi
+cakupan Tahap 29 sebelum coding**: opsi yang ditawarkan menyebut "Chat
+DAN MCP Server" untuk gambar/GIS Workspace — TIDAK akurat,
 `mcp_server/server.py` (Tahap 28) sengaja mengecualikan tool Workspace
-sama sekali, jadi Tahap 29 murni ChatEngine (lihat detail di atas).
-Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1)
-solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (2) Bab 68
-Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) akses Workspace
-lewat MCP Server (gap yang ditemukan+didokumentasikan saat Tahap 29 —
-`mcp_server/server.py` tak punya sesi ChatEngine untuk menyuntikkan
-`workspace_id`, butuh mekanisme otorisasi baru untuk pemanggil eksternal
-yang beda dari pola sesi Chat); (4) heartbeat RQ yang lebih tepat untuk
+sama sekali, jadi Tahap 29 murni ChatEngine (lihat detail di atas). Tahap
+30 bukan hasil `AskUserQuestion` dari daftar kandidat — Boss menyatakan
+langsung tujuan proyek (agent mandiri, buat/edit file, akses folder gaya
+Cowork) dan minta prioritas diputuskan sendiri; dipilih setelah audit
+kode menemukan `write_output` dorman sejak Tahap 19 sebagai gap
+berdampak-langsung-ke-tujuan itu yang paling murah dieksekusi. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
+storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
+kalau memang butuh API >1 replika di produksi; (2) Bab 68 Enterprise
+Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
+satupun dimulai; (3) akses Workspace lewat MCP Server (gap yang
+ditemukan+didokumentasikan saat Tahap 29 — `mcp_server/server.py` tak
+punya sesi ChatEngine untuk menyuntikkan `workspace_id`, butuh mekanisme
+otorisasi baru untuk pemanggil eksternal yang beda dari pola sesi Chat);
+(4) PDF/DOCX baru langsung ke Workspace (Tahap 30 sengaja cuma format
+teks — generator `agent/tools/writers.py` masih hardcode ke `OUTPUT_DIR`,
+butuh parameter output-path baru); (5) `_run_tool` cuma menangkap
+`PermissionError`, bukan exception generik lain — ditemukan live Tahap
+30 (model lupa argumen wajib tool → `TypeError` mentah merusak SELURUH
+giliran chat, bukan penolakan tool yang rapi) — gap PRA-ADA di SETIAP
+tool, bukan spesifik Workspace; (6) heartbeat RQ yang lebih tepat untuk
 `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas Redis, bukan
-bahwa `worker.work()` sungguh memproses job); (5) transport SSE/HTTP
+bahwa `worker.work()` sungguh memproses job); (7) transport SSE/HTTP
 untuk MCP Server (Tahap 28 sengaja stdio-saja, server jaringan butuh
-tinjauan auth+path-sandboxing sendiri) — ketiga item terakhir kecil/
-menengah, cuma relevan kalau ada kebutuhan konkret (produksi bermasalah,
-atau client MCP eksternal butuh Workspace/akses jarak jauh).
+tinjauan auth+path-sandboxing sendiri) — item 4-7 kecil/menengah, cuma
+relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

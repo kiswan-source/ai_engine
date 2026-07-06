@@ -72,6 +72,15 @@ see anyway). GIS files from Workspace return the same compact
 area/centroid/bbox summary `read_kml`/`read_geojson`/`read_shp` already
 produce — no engine change needed for those, they flow through the
 existing generic tool-result path.
+
+Workspace Write Access (Bab 69.7 `write_output`, Tahap 30): `Session.workspace_role`,
+same first-non-null-wins shape as `workspace_id` — caches the Project role
+`api/routes/chat.py` resolved once at bind time. `_run_tool` checks
+`require_workspace_permission(workspace_role, "write_output")` specifically
+for `workspace_write_file`, catching `PermissionError` into the same
+denial-dict shape every other RBAC check here already uses. This keeps the
+same "engine trusts the route's one-time check, agent/tools/ never
+re-derives Project role itself" split Tahap 23 established.
 """
 import os
 import json
@@ -105,7 +114,7 @@ TEXT_READERS = {"pdf": read_pdf, "docx": read_docx, "csv": read_csv,
                 "txt": read_txt, "md": read_txt, "json": read_json}
 # Tools whose workspace_id arg is always injected from the session, never
 # the model (Bab 69.5, Tahap 23) — see _run_tool.
-WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file"}
+WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file", "workspace_write_file"}
 
 SYSTEM_PROMPT = """Kamu adalah asisten AI lokal untuk pekerjaan file & GIS, berjalan dengan model Gemma.
 Kamu bisa membaca dan membuat/mengonversi file: PDF, DOCX, TXT, CSV, JSON, gambar (JPG/PNG/TIFF), dan GIS (KML/GeoJSON/SHP).
@@ -122,14 +131,17 @@ ATURAN:
 - Bila informasi yang ditanyakan sudah ada di hasil tool sebelumnya pada percakapan ini, jawab langsung tanpa memanggil tool lagi.
 - Kamu TIDAK bisa membuat/menggambar gambar baru; untuk gambar hanya bisa baca, konversi, resize, crop, rotate, kompres.
 - Bila sesi ini terhubung ke sebuah Project Workspace (lihat catatan "[Project Workspace terhubung]" di pesan pengguna), dan permintaan pengguna merujuk pekerjaan/dokumen pada Project itu (bukan file yang diunggah langsung), PANGGIL `workspace_list_files` dulu untuk melihat daftar filenya, lalu `workspace_read_file` untuk membaca isi salah satu file sebelum menjawab. Jangan mengarang isi file Workspace.
+- Bila pengguna minta MEMBUAT atau MENGEDIT file DI DALAM Project Workspace/folder proyek mereka (bukan sekadar minta laporan/output terpisah), PANGGIL `workspace_write_file` — file akan tersimpan LANGSUNG di folder Workspace itu, bukan di folder laporan biasa. Tool ini cuma bisa file teks (txt/md/log/csv/json/html); untuk PDF/DOCX/gambar tetap pakai `write_pdf`/`write_docx`/dst. seperti biasa (hasilnya ke folder laporan, bukan Workspace). Kalau ditolak karena izin, sampaikan apa adanya ke pengguna — jangan mencoba tool lain sebagai jalan pintas.
 """
 
 
 class Session:
-    def __init__(self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None):
+    def __init__(self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None,
+                 workspace_role: Optional[str] = None):
         self.id = session_id
         self.owner = owner  # Principal.api_key of whoever created it (Tahap 22); None if unset
         self.workspace_id = workspace_id  # bound Project Workspace (Tahap 23); None if unset
+        self.workspace_role = workspace_role  # caller's Project role on that Workspace (Tahap 30); None if unset
         self.messages: List[Dict[str, Any]] = []   # Ollama-format chat history
         self.history: List[Dict[str, Any]] = []     # display items for the UI
         self.files: List[str] = []  # absolute paths of uploaded files
@@ -149,21 +161,25 @@ class ChatEngine:
 
     # ── Session helpers ──
     def get_session(
-        self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None
+        self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None,
+        workspace_role: Optional[str] = None,
     ) -> Session:
         """Fetch or create a session. ``owner`` is only recorded at creation —
         an existing session's owner never changes (Tahap 22: first caller to
         touch a session_id owns it; api/routes/chat.py enforces this before
         calling here, this method itself doesn't check anything). ``workspace_id``
-        is first-non-null-wins (Tahap 23): binds on creation, or on a later
-        call if the session didn't have one yet — never overwrites an
-        already-bound value."""
+        (and ``workspace_role``, Tahap 30, same shape) is first-non-null-wins
+        (Tahap 23): binds on creation, or on a later call if the session
+        didn't have one yet — never overwrites an already-bound value."""
         if session_id not in self.sessions:
-            self.sessions[session_id] = Session(session_id, owner=owner, workspace_id=workspace_id)
+            self.sessions[session_id] = Session(session_id, owner=owner, workspace_id=workspace_id,
+                                                 workspace_role=workspace_role)
         else:
             session = self.sessions[session_id]
             if session.workspace_id is None and workspace_id is not None:
                 session.workspace_id = workspace_id
+            if session.workspace_role is None and workspace_role is not None:
+                session.workspace_role = workspace_role
         return self.sessions[session_id]
 
     def list_sessions(self, owner: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -279,7 +295,8 @@ class ChatEngine:
 
     # ── Execute one tool call, normalising args + paths ──
     async def _run_tool(
-        self, registry, name: str, args: Any, role: Optional[str] = None, workspace_id: Optional[str] = None
+        self, registry, name: str, args: Any, role: Optional[str] = None, workspace_id: Optional[str] = None,
+        workspace_role: Optional[str] = None,
     ) -> Dict[str, Any]:
         if isinstance(args, str):
             try:
@@ -295,6 +312,18 @@ class ChatEngine:
             if not workspace_id:
                 return {"error": "Sesi ini belum terhubung ke Project Workspace.", "success": False}
             args["workspace_id"] = workspace_id
+        if name == "workspace_write_file":
+            # Bab 69.7 write_output (Tahap 30) — checked here with the
+            # Project role api/routes/chat.py already resolved once at bind
+            # time (cached on session.workspace_role), NOT re-derived here:
+            # agent/tools/ must not import from api/ (same rule Tahap 23
+            # already documented for why per-tool-call re-derivation was
+            # rejected there).
+            try:
+                from security.permissions import require_workspace_permission
+                require_workspace_permission(workspace_role, "write_output")
+            except PermissionError as e:
+                return {"error": f"Akses ditolak: {e}", "success": False}
         # Resolve any path-ish argument against uploads/reports.
         for key in ("file_path", "path", "source"):
             if key in args and isinstance(args[key], str):
@@ -318,9 +347,10 @@ class ChatEngine:
                          model: Optional[str] = None,
                          role: Optional[str] = None,
                          owner: Optional[str] = None,
-                         workspace_id: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
+                         workspace_id: Optional[str] = None,
+                         workspace_role: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
         model = model or self.default_model
-        session = self.get_session(session_id, owner=owner, workspace_id=workspace_id)
+        session = self.get_session(session_id, owner=owner, workspace_id=workspace_id, workspace_role=workspace_role)
         new_files = [self.resolve_path(f) for f in (new_files or [])]
         for f in new_files:
             session.add_file(f)
@@ -373,7 +403,7 @@ class ChatEngine:
                             continue
                         any_tool_called = True
                         yield {"type": "tool_start", "name": name, "args": args}
-                        result = await self._run_tool(registry, name, args, role, session.workspace_id)
+                        result = await self._run_tool(registry, name, args, role, session.workspace_id, session.workspace_role)
                         ok = not (isinstance(result, dict) and (result.get("success") is False or
                                   ("error" in result and "success" not in result)))
                         summary = self._summarize_result(result)

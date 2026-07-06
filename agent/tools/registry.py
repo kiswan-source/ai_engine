@@ -172,10 +172,15 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     # Agent Workspace Context (Bab 69.5, Tahap 23) — workspace_id is always
     # injected by ChatEngine._run_tool from the session's authorized
     # Workspace, never taken from the model's own arguments.
-    from agent.tools.workspace_reader import workspace_list_files, workspace_read_file
+    from agent.tools.workspace_reader import workspace_list_files, workspace_read_file, workspace_write_file
     registry.register("workspace_list_files", workspace_list_files,
         "Daftar semua file di Project Workspace yang terhubung ke sesi ini. Input: {}")
     registry.register("workspace_read_file", workspace_read_file,
         "Baca isi satu file dari Project Workspace. Input: {folder_id, relative_path}")
+    # Workspace Write Access (Bab 69.7 write_output, Tahap 30) — same
+    # workspace_id injection rule as the two tools above; ChatEngine._run_tool
+    # also checks the write_output permission before this ever runs.
+    registry.register("workspace_write_file", workspace_write_file,
+        "Buat/timpa/tambah satu file teks di Project Workspace. Input: {folder_id, relative_path, content, mode}")
 
     return registry

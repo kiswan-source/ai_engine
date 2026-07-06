@@ -120,6 +120,56 @@ async def test_run_tool_leaves_unrelated_tools_untouched(engine):
     assert "workspace_id" not in result["received_args"]
 
 
+# ─── Workspace Write Access RBAC (Bab 69.7 write_output, Tahap 30) ──────
+
+def _write_echo_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        "workspace_write_file",
+        lambda **kwargs: {"success": True, "received_args": kwargs},
+        "fake workspace_write_file echoing received args",
+    )
+    return reg
+
+
+async def test_run_tool_denies_write_for_viewer_role(engine):
+    registry = _write_echo_registry()
+    result = await engine._run_tool(
+        registry, "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+        role=None, workspace_id="real-ws-id", workspace_role="viewer",
+    )
+    assert result["success"] is False
+    assert "akses ditolak" in result["error"].lower()
+
+
+async def test_run_tool_denies_write_when_no_workspace_role_bound(engine):
+    registry = _write_echo_registry()
+    result = await engine._run_tool(
+        registry, "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+        role=None, workspace_id="real-ws-id", workspace_role=None,
+    )
+    assert result["success"] is False
+
+
+async def test_run_tool_allows_write_for_owner_role(engine):
+    registry = _write_echo_registry()
+    result = await engine._run_tool(
+        registry, "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+        role=None, workspace_id="real-ws-id", workspace_role="owner",
+    )
+    assert result["success"] is True
+    assert result["received_args"]["workspace_id"] == "real-ws-id"
+
+
+async def test_run_tool_allows_write_for_editor_role(engine):
+    registry = _write_echo_registry()
+    result = await engine._run_tool(
+        registry, "workspace_write_file", {"folder_id": "f1", "relative_path": "a.txt", "content": "x"},
+        role=None, workspace_id="real-ws-id", workspace_role="editor",
+    )
+    assert result["success"] is True
+
+
 # ─── stream_run integration (binding persistence across messages) ──────
 
 async def test_stream_run_binds_workspace_id_on_first_message(monkeypatch, engine):

@@ -35,6 +35,12 @@ caller's Project role (`api/routes/projects.py::_role_for`, same helper
 No `Depends(get_session)` on this route: a DB session is opened manually,
 only inside the check, so a normal chat request that never uses Workspace
 pays zero extra DB round-trips.
+
+Workspace Write Access (Bab 69.7 `write_output`, Tahap 30): `_check_workspace_access`
+now returns the resolved Project role instead of just validating it —
+`stream()` passes it into `ChatEngine.stream_run(workspace_role=...)`,
+cached on the session so `_run_tool` can gate `workspace_write_file`
+against `write_output` without re-deriving Project role itself.
 """
 import os
 import json
@@ -72,10 +78,13 @@ def _require_session_owner(session_id: str, principal: Principal) -> None:
         raise HTTPException(status_code=403, detail="Sesi ini milik pengguna lain")
 
 
-async def _check_workspace_access(workspace_id: str, principal: Principal) -> None:
+async def _check_workspace_access(workspace_id: str, principal: Principal) -> str | None:
     """404 if the Workspace doesn't exist, 403 if the caller's Project role
     lacks "read" (Tahap 23). Opens its own session — see module docstring
-    on why this isn't a route-level `Depends(get_session)`."""
+    on why this isn't a route-level `Depends(get_session)`. Returns the
+    resolved role (Tahap 30) so `stream()` can cache it on the session as
+    `workspace_role` — the same role `_run_tool` later checks against
+    `write_output`, resolved here once rather than re-derived per tool call."""
     from db.connection import AsyncSessionFactory
     from db.models import Project, Workspace
     from security.permissions import require_workspace_permission
@@ -92,6 +101,7 @@ async def _check_workspace_access(workspace_id: str, principal: Principal) -> No
         require_workspace_permission(role, "read")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    return role
 
 
 @router.post("/upload")
@@ -130,8 +140,9 @@ async def stream(req: ChatRequest, principal: Principal = Depends(get_current_pr
     """
     session_id = req.session_id or uuid.uuid4().hex
     _require_session_owner(session_id, principal)
+    workspace_role = None
     if req.workspace_id:
-        await _check_workspace_access(req.workspace_id, principal)
+        workspace_role = await _check_workspace_access(req.workspace_id, principal)
     file_paths = [os.path.join(UPLOADS_DIR, os.path.basename(f)) for f in req.files]
 
     async def event_source():
@@ -141,6 +152,7 @@ async def stream(req: ChatRequest, principal: Principal = Depends(get_current_pr
             session_id=session_id, user_text=req.message,
             new_files=file_paths, model=req.model, role=principal.role,
             owner=principal.api_key, workspace_id=req.workspace_id,
+            workspace_role=workspace_role,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 

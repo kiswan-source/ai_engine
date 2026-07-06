@@ -113,3 +113,16 @@ class FilesystemAdapter:
         """Resolved absolute path — used to hand off to `agent/tools/readers.py`
         parsers (PDF/DOCX/etc.) which expect a real file path, not bytes."""
         return resolve_within_root(self.root, relative_path)
+
+    def write_text(self, relative_path: str, content: str, mode: str = "w", encoding: str = "utf-8") -> Path:
+        """Create/overwrite (``mode="w"``) or append (``mode="a"``) a text
+        file, gated through the same Root Restriction as every read here
+        (Bab 69.7 Workspace Write Access, Tahap 30). ``resolve_within_root``
+        works for a not-yet-existing target too (``Path.resolve()`` doesn't
+        require the file to exist), so a brand-new file is validated exactly
+        like an existing one — no separate "does it exist" branch needed."""
+        path = resolve_within_root(self.root, relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, mode, encoding=encoding) as f:
+            f.write(content)
+        return path

@@ -107,6 +107,10 @@ TOOL_SCHEMAS = [
         {}, []),
     _fn("workspace_read_file", "Baca satu file dari Project Workspace. Dokumen (pdf/txt/docx/csv/json) dikembalikan sebagai teks. Gambar (jpg/png/dll) akan DITAMPILKAN ke kamu sebagai gambar sungguhan pada giliran berikutnya — deskripsikan isinya. File GIS (kml/geojson/shp) dikembalikan sebagai ringkasan luas/centroid. Pakai folder_id dan relative_path PERSIS dari hasil workspace_list_files.",
         {"folder_id": _STR, "relative_path": _STR}, ["folder_id", "relative_path"]),
+    _fn("workspace_write_file", "Buat, timpa, atau tambah (append) SATU FILE TEKS (txt/md/log/csv/json/html saja — bukan pdf/docx/gambar) LANGSUNG di Project Workspace, bukan di folder laporan biasa. Pakai ini saat pengguna minta membuat/mengedit file di dalam Workspace/folder proyek mereka. mode='overwrite' (default, ganti seluruh isi) atau mode='append' (tambahkan ke akhir file). Pakai folder_id PERSIS dari hasil workspace_list_files.",
+        {"folder_id": _STR, "relative_path": _STR, "content": _STR,
+         "mode": {"type": "string", "enum": ["overwrite", "append"]}},
+        ["folder_id", "relative_path", "content"]),
 ]
 
 # Quick lookup of which tools we expose to the model.

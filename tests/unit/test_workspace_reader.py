@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from agent.tools.workspace_reader import (
     _list_files,
     _read_file,
+    _write_file,
     workspace_list_files,
     workspace_read_file,
+    workspace_write_file,
 )
 from db.models import Workspace, WorkspaceFolder
 
@@ -102,6 +104,64 @@ async def test_read_file_gis_returns_area_summary_not_raw_coordinates(sqlite_ses
     assert result["polygon_count"] == 1
     # The compact summary, not a coordinate dump (gis-tool-output-consistency).
     assert "coordinates" not in result
+
+
+async def test_write_file_creates_new_file(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "catatan.txt", "isi baru", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is True
+    assert result["action"] == "overwrite"
+    assert (tmp_path / "catatan.txt").read_text() == "isi baru"
+
+
+async def test_write_file_overwrite_replaces_content(sqlite_session_factory, tmp_path):
+    (tmp_path / "catatan.txt").write_text("lama")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "catatan.txt", "baru", mode="overwrite", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is True
+    assert (tmp_path / "catatan.txt").read_text() == "baru"
+
+
+async def test_write_file_append_adds_to_existing_content(sqlite_session_factory, tmp_path):
+    (tmp_path / "catatan.txt").write_text("baris 1\n")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "catatan.txt", "baris 2\n", mode="append", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is True
+    assert (tmp_path / "catatan.txt").read_text() == "baris 1\nbaris 2\n"
+
+
+async def test_write_file_rejects_unsupported_extension(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "script.py", "print('x')", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is False
+    assert not (tmp_path / "script.py").exists()
+
+
+async def test_write_file_rejects_path_traversal(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "../outside.txt", "isi", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is False
+    assert not (tmp_path.parent / "outside.txt").exists()
 
 
 async def test_read_file_folder_not_in_workspace(sqlite_session_factory, tmp_path):
@@ -192,3 +252,15 @@ def test_sync_wrapper_read_file_via_asyncio_run(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert result["text"] == "isi laporan sungguhan"
+
+
+def test_sync_wrapper_write_file_via_asyncio_run(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_write_file(workspace_id, folder_id, "baru.txt", "ditulis lewat sync wrapper")
+
+    assert result["success"] is True
+    assert (content_dir / "baru.txt").read_text() == "ditulis lewat sync wrapper"

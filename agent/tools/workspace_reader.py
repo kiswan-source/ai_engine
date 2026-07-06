@@ -47,6 +47,20 @@ too, reusing existing machinery rather than inventing new parsing:
   area/centroid/bbox summary `read_kml`/`read_geojson`/`read_shp` already
   produce, not a raw coordinate dump (see the `gis-tool-output-consistency`
   lesson: dumping full geometry buried the numbers the model needed).
+
+Workspace Write Access (Bab 69.7 `write_output`, Tahap 30): `workspace_write_file`
+creates/overwrites/appends a **plain-text** file (txt/md/log/csv/json/html
+— the same categories `TEXT_READERS` reads, minus pdf/docx/doc, which are
+binary formats `agent/tools/writers.py` generates through ReportLab/
+python-docx, not a raw text write) back into the Workspace folder itself,
+via `FilesystemAdapter.write_text()` — the actual "edit files in your
+project folder" capability the Bab 69.7 permission table anticipated but
+nothing implemented until now. RBAC for this one is NOT re-derived here
+(same "agent/tools/ must not import from api/" rule as `_read_file`) —
+`core/chat/engine.py._run_tool` checks the caller's Project role against
+`write_output` *before* calling this, using the role `api/routes/chat.py`
+already resolved once at bind time (cached on `Session.workspace_role`,
+same shape as `Session.workspace_id`).
 """
 from __future__ import annotations
 
@@ -61,7 +75,13 @@ from agent.tools.gis_io import _load_any_fc, _summarize_fc
 from db.connection import AsyncSessionFactory
 from db.models import Workspace, WorkspaceFolder
 from tools.adapters.filesystem import FilesystemAdapter, classify
+from tools.tool_validator import PathEscapesRootError
 from workspace.indexer import extract_text
+
+# Bab 69.7 Workspace Write Access is scoped to plain-text formats this pass
+# — pdf/docx/doc need their own generators (agent/tools/writers.py), not a
+# raw text write; documented as a follow-up, not attempted here.
+WRITABLE_EXTENSIONS = {"txt", "md", "log", "csv", "json", "html"}
 
 
 async def _list_files(workspace_id: str, session_factory=None) -> Dict[str, Any]:
@@ -142,6 +162,39 @@ async def _read_file(
         return {"success": False, "error": str(e)}
 
 
+async def _write_file(
+    workspace_id: str, folder_id: str, relative_path: str, content: str,
+    mode: str = "overwrite", session_factory=None,
+) -> Dict[str, Any]:
+    session_factory = session_factory or AsyncSessionFactory
+    async with session_factory() as session:
+        folder = await session.get(WorkspaceFolder, folder_id)
+        if folder is None or folder.workspace_id != workspace_id:
+            return {"success": False, "error": "Folder tidak ditemukan di Workspace ini."}
+        folder_path, source_type = folder.path, folder.source_type
+
+    if source_type != "Local":
+        return {"success": False, "error": f"source_type={source_type!r} belum didukung."}
+
+    ext = relative_path.rsplit(".", 1)[-1].lower() if "." in relative_path else ""
+    if ext not in WRITABLE_EXTENSIONS:
+        return {
+            "success": False,
+            "error": f"Hanya bisa menulis file teks ({'/'.join(sorted(WRITABLE_EXTENSIONS))}).",
+        }
+    if mode not in ("overwrite", "append"):
+        return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite' atau 'append')."}
+
+    try:
+        adapter = FilesystemAdapter(folder_path)
+        path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
+        return {"success": True, "path": relative_path, "action": mode, "size": path.stat().st_size}
+    except PathEscapesRootError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def _build_fresh_engine():
     """A new engine/session-factory pair bound to whatever loop calls it —
     see module docstring on why the global AsyncSessionFactory can't be
@@ -177,6 +230,24 @@ def workspace_read_file(workspace_id: str, folder_id: str, relative_path: str) -
         engine, factory = _build_fresh_engine()
         try:
             return await _read_file(workspace_id, folder_id, relative_path, session_factory=factory)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_write_file(
+    workspace_id: str, folder_id: str, relative_path: str, content: str, mode: str = "overwrite"
+) -> Dict[str, Any]:
+    """Tulis (buat/timpa/tambah) satu file teks di Project Workspace.
+    ``workspace_id`` selalu disuntik oleh `ChatEngine._run_tool`; izin
+    ``write_output`` dicek DI SANA sebelum fungsi ini pernah dipanggil —
+    lihat modul docstring."""
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            return await _write_file(workspace_id, folder_id, relative_path, content, mode, session_factory=factory)
         finally:
             await engine.dispose()
 

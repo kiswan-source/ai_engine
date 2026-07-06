@@ -195,8 +195,11 @@ def test_workspace_permission_owner_editor_get_full_access(project_role, action)
     require_workspace_permission(project_role, action)  # must not raise
 
 
-@pytest.mark.parametrize("action", ["read_only", "knowledge", "vector"])
+@pytest.mark.parametrize("action", ["read", "read_only", "knowledge", "vector"])
 def test_workspace_permission_viewer_allowed_actions(action):
+    # "read" added Tahap 30 — api/routes/chat.py has only ever checked
+    # "read" (not "read_only", which nothing else checks for), so viewer
+    # was silently locked out of Workspace Chat before this fix.
     assert has_workspace_permission("viewer", action)
 
 

@@ -51,6 +51,12 @@ membership role (owner/editor/viewer — the same roles
 ``api/routes/projects.py::_role_for``/``_require`` already compute), not a
 global system role. ``WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`` below is that
 second, deliberately separate mapping.
+
+Tahap 30 wires up ``write_output`` for real (``workspace_write_file`` in
+``agent/tools/workspace_reader.py``, checked from ``core/chat/engine.py``)
+and fixes a bug found in the same table: ``viewer`` only ever had
+``read_only``, but every actual caller (``api/routes/chat.py``) checks
+``"read"`` — ``viewer`` now has both.
 """
 from __future__ import annotations
 
@@ -117,7 +123,15 @@ def check_tool_permission(role: str, tool_name: str) -> None:
 WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE: dict[str, frozenset[str]] = {
     "owner": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
     "editor": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
-    "viewer": frozenset({"read_only", "knowledge", "vector"}),
+    # "read" added here Tahap 30 — bug found while wiring write_output:
+    # api/routes/chat.py::_check_workspace_access has only ever checked the
+    # "read" action for every Workspace-bound chat request, but this set
+    # only ever had "read_only" (a string nothing else in the codebase
+    # checks for). That meant a Project viewer was silently 403'd on every
+    # single Workspace-bound chat message — clearly not the intent, since
+    # owner/editor were unaffected and viewers plainly SHOULD be able to
+    # read. viewer still correctly lacks write_output.
+    "viewer": frozenset({"read", "read_only", "knowledge", "vector"}),
 }
 
 
