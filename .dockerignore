@@ -1,0 +1,52 @@
+# Build context exclusions (Bab 37 rule 2 follow-up, found during the
+# multi-stage Dockerfile rebuild+verify pass) — this file didn't exist
+# before, so `COPY . .` was baking the host's venv/ (338MB, redundant — the
+# image builds its own), web/node_modules/ (277MB, irrelevant to the Python
+# backend), and — the real finding — the literal `.env` file (with live
+# provider API keys) directly into every image layer. `docker-compose.yml`
+# already injects `.env` at runtime via `env_file:`; it must never also be
+# copied into the image filesystem itself.
+
+# Secrets — never bake real credentials into image layers.
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data/logs — volume-mounted (reports/uploads) or regenerated fresh
+# in the container; baking in stale copies wastes space and can shadow the
+# mount depending on build vs. mount order.
+audit.log
+security_audit.log
+*.log
+uploads/
+reports/
+
+# Frontend — api/main.py serves the already-built web/dist/ output; the
+# Python image has no use for node_modules or frontend source/tests.
+web/node_modules/
+web/src/
+web/tests/
+web/node_modules
+web/.vite/
+
+# VCS / tooling / docs — not needed by the running app.
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+docs/
+k8s/
+backups/
+*.swp
+.DS_Store

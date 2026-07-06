@@ -1,19 +1,46 @@
-FROM python:3.12-slim
+# Multi-stage build (Bab 37 rule 2, ADR-0009 follow-up) — the single-stage
+# version kept gcc/libpq-dev/libgdal-dev (compiler + dev headers, needed only
+# to build wheels for asyncpg/psycopg2/fiona/shapely/pyproj) in the final
+# runtime image. Verified live (not just reviewed) that dropping them from
+# the runtime stage doesn't break GIS: fiona/shapely/pyproj ship manylinux
+# wheels that bundle their own GDAL/GEOS/PROJ shared libraries (auditwheel),
+# so nothing in `agent/tools/gis_io.py`/`core/gis/processor.py` needs the
+# system libgdal at runtime — only pip needed it, at build time, to resolve
+# wheels for this platform.
 
-# System dependencies (PostGIS client, GDAL for GIS)
+FROM python:3.12-slim AS builder
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     gdal-bin \
     libgdal-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Install Python deps
 COPY requirements.txt .
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir -r requirements.txt
+
+
+FROM python:3.12-slim
+
+# curl + libexpat1 — no compiler, no dev headers, no GDAL toolchain in the
+# shipped image. libexpat1 (GDAL's XML parser, used for KML/GML) is NOT
+# bundled inside fiona's manylinux wheel the way libgdal/libgeos/libproj
+# are — verified live: fiona import failed with
+# "ImportError: libexpat.so.1: cannot open shared object file" the first
+# time this stage dropped libgdal-dev (which used to pull it in
+# transitively via apt, masking the real dependency).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY . .
 

@@ -1,12 +1,35 @@
-FROM python:3.12-slim
+# Multi-stage build (Bab 37 rule 2, ADR-0009 follow-up) — mirrors
+# docker/Dockerfile.api's split; see that file's header comment for the
+# rationale (fiona/shapely/pyproj wheels bundle their own GDAL/GEOS/PROJ
+# shared libs, so the runtime stage needs no system GDAL toolchain).
+
+FROM python:3.12-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev gdal-bin libgdal-dev curl \
+    gcc libpq-dev gdal-bin libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt .
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir -r requirements.txt
+
+
+FROM python:3.12-slim
+
+# libexpat1: see docker/Dockerfile.api's comment on the same line — fiona's
+# wheel doesn't bundle it, and it stopped arriving transitively once
+# libgdal-dev left this stage.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 COPY . .
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

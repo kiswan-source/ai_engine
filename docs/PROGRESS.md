@@ -32,6 +32,7 @@
 | 18* | Selesaikan migrasi RBAC ke `write_*`/`convert_geo`/`generate_code` (janji ADR-0013) | ✅ SELESAI |
 | 19* | Project Workspace & Folder Access — registrasi folder lokal sebagai sumber kerja Agent (Bab 69, ADR-0005) | ✅ SELESAI |
 | 20* | Sambungkan RBAC ke ChatEngine — tutup gap yang diakui sejak Tahap 10/16/17/18 | ✅ SELESAI |
+| 21* | Dockerfile multi-stage (Bab 37 rule 2) — `docker/Dockerfile.api`/`Dockerfile.worker` + `.dockerignore` baru | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1091,6 +1092,72 @@ murni backend** — nol perubahan frontend.
   `.env` dikembalikan persis (diff kosong terhadap backup), service
   di-restart lagi.
 
+**Tahap 21 — Dockerfile multi-stage (Bab 37 rule 2, ADR-0009 follow-up)**
+
+Dipilih lewat `AskUserQuestion` dari 3 kandidat (MCP Server / kepemilikan
+sesi Chat / Dockerfile multi-stage). Gap ini dicatat sejak ADR-0011:
+`docker/Dockerfile.api`/`Dockerfile.worker` menginstal `gcc`/`libpq-dev`/
+`libgdal-dev` (compiler + dev headers, cuma perlu untuk build wheel
+asyncpg/psycopg2/fiona/shapely/pyproj) langsung ke image final, single-stage.
+
+- **Kedua Dockerfile dipecah jadi 2 stage**: `builder` (apt build-tools
+  lengkap + `python -m venv /opt/venv` + `pip install`) dan runtime
+  (`COPY --from=builder /opt/venv /opt/venv` saja, tanpa compiler/dev
+  headers sama sekali).
+- **Temuan tak terduga saat verifikasi, bukan bagian rencana awal**:
+  dicek `du` dulu sebelum ubah apa pun — **tidak ada `.dockerignore` sama
+  sekali di repo ini**. `COPY . .` diam-diam membawa `venv/` host (338MB,
+  sepenuhnya redundan — image build venv sendiri), `web/node_modules/`
+  (277MB, tak relevan buat backend Python), DAN **`.env` sungguhan berisi
+  API key OpenAI/Anthropic/Google asli** langsung ke filesystem image —
+  dikonfirmasi nyata lewat `docker run --rm ai_engine-api python3 -c
+  "open('/app/.env').read()"` sebelum diperbaiki, bukan cuma dugaan.
+  **Ini temuan keamanan nyata** (siapa pun dengan akses image/registry bisa
+  ekstrak `.env` dan dapat kredensial produksi), bukan cuma soal ukuran
+  image — `.dockerignore` baru dibuat, mengecualikan `.env`/`.env.*`,
+  `venv/`, `web/node_modules/`/`web/src/`/`web/tests/` (BUKAN `web/dist/` —
+  itu yang benar-benar disajikan `api/main.py` saat runtime, diverifikasi
+  masih ada di image setelah exclude), `.git/`, `docs/`, `k8s/`,
+  `backups/`, `audit.log`/`*.log`, `uploads/`/`reports/` (sudah
+  volume-mounted di compose, baking salinan basi cuma buang tempat).
+- **Bug nyata ketemu lewat verifikasi live, persis pola insiden ADR-0009
+  yang jadi alasan tugas ini diminta** — setelah `libgdal-dev` dibuang dari
+  stage runtime, `import fiona` gagal:
+  `ImportError: libexpat.so.1: cannot open shared object file`.
+  `libgdal-dev` dulu menarik `libexpat1` secara transitif lewat apt
+  (dependency tersembunyi), dan wheel fiona (walau membundel
+  GDAL/GEOS/PROJ sendiri lewat auditwheel) TERNYATA tidak membundel
+  `libexpat`. **Fix**: tambah `libexpat1` (paket runtime, bukan `-dev`) ke
+  kedua Dockerfile. Diverifikasi ulang setelah fix: `fiona`/`shapely`/
+  `pyproj` impor + baca file GeoJSON sungguhan berhasil di dalam container.
+- **Hasil ukuran image**: `ai_engine-api`/`worker_ai`/`worker_gis` turun
+  dari **2.83GB → 699MB** (~75%, gabungan multi-stage + `.dockerignore` —
+  mayoritas justru dari `.dockerignore` menyingkirkan `venv`/`node_modules`
+  yang sebelumnya ikut ter-copy, bukan cuma dari memisah compiler).
+- **Diverifikasi live penuh** (bukan cuma review kode, sesuai permintaan
+  eksplisit mengingat riwayat ADR-0009): `docker compose build --no-cache`
+  ketiga image → `docker compose up -d` → `docker compose ps` ketiganya
+  `Up`, nol crash-loop di log `worker_ai`/`worker_gis` → `GET
+  /health/ready` sungguhan 200 (database/redis/ollama/openai/claude/gemini
+  semua `ok`) → **`POST /api/v1/gis/area/calculate` sungguhan lewat HTTP**
+  menghitung luas poligon nyata (123.19 Ha, centroid, bbox benar) →
+  **`pytest -q tests/unit` dijalankan DI DALAM container** sungguhan,
+  412/412 lulus → dikonfirmasi `.env`/`venv`/`web/node_modules` sudah
+  GONE dari image sementara `web/dist/index.html` (dibutuhkan runtime)
+  tetap PRESENT.
+- **Gap yang diakui**: `docker/Dockerfile.postgres` tidak disentuh (sudah
+  berbasis image `postgis/postgis` yang cuma menambah satu paket apk +
+  copy file, bukan pola build-lalu-strip yang sama relevan). Belum ada
+  `HEALTHCHECK` instruction eksplisit di `Dockerfile.api`/`Dockerfile.worker`
+  sendiri (docker-compose.yml cuma mendefinisikannya untuk
+  postgres/redis) — di luar cakupan tugas ini, dicatat sebagai kandidat
+  terpisah. `pytesseract` (OCR) di `requirements.txt` menyebut butuh
+  binary `tesseract` di host, tapi `tesseract-ocr` TIDAK PERNAH diinstal
+  di Dockerfile manapun (gap pra-ada, ditemukan tak sengaja saat audit
+  dependency runtime, bukan regresi Tahap ini — OCR lewat `read_image`
+  kemungkinan sudah gagal senyap di Docker sejak awal, di luar cakupan
+  untuk diperbaiki sekarang).
+
 ## Test
 - **Backend: 481/481 lulus** (`pytest -q`, stabil 3x berturut-turut) — naik
   dari 474 lewat 7 test RBAC ChatEngine (Tahap 20, lihat detail di atas: 4
@@ -1129,7 +1196,7 @@ murni backend** — nol perubahan frontend.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-20, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-21, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1299,9 +1366,10 @@ murni backend** — nol perubahan frontend.
 - **RAG belum otomatis** — `Retriever`/`build_context`/`llm_rerank()` (Tahap 5)
   ada dan teruji tapi tak dikaitkan otomatis ke setiap dispatch Orchestrator
   — pemanggil pakai eksplisit saat butuh (Bab 29 rule 4: pengaya opsional).
-- **Dockerfile belum multi-stage (Bab 37 rule 2)** — `docker/Dockerfile.api`/
-  `Dockerfile.worker` install build tooling ke image final. Dicatat sejak
-  ADR-0011.
+- **Dockerfile multi-stage SELESAI (Bab 37 rule 2, Tahap 21)** — gap ini
+  (dicatat sejak ADR-0011) sudah tertutup; `.dockerignore` baru sekalian
+  menutup temuan keamanan nyata (`.env` sungguhan ter-bake ke image
+  sebelumnya). Image turun 2.83GB→699MB. Lihat detail Tahap 21 di atas.
 - **Postgres/Redis single-instance** — tidak ada operator HA (Patroni/
   CloudNativePG untuk Postgres, Sentinel/Cluster untuk Redis) baik di
   `docker-compose.yml` maupun `k8s/`. Dicatat sejak ADR-0011.
@@ -1325,24 +1393,28 @@ Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
 Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 `write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
 ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
-hand-off Cowork), dan sambungkan RBAC ke ChatEngine (Tahap 20) semua
-selesai 2026-07-06. **Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`)
-kini punya kode nyata**, ditambah kapabilitas Workspace baru di atasnya,
-dan gate RBAC kini benar-benar hidup di satu-satunya jalur yang
-mengeksekusi tool (Chat) — bukan lagi cuma di `/api/v1/agent/run` yang
-jarang dipakai. Kandidat prioritas berikutnya, dari yang paling murah
-dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja ditunda Tahap 17);
-(2) Dockerfile multi-stage dengan rebuild+verifikasi live penuh (bukan
-cuma review kode) mengingat riwayat insiden ADR-0009; (3) solusi storage
-RWX (StorageClass NFS/Longhorn atau pindah ke object storage) kalau
-memang butuh API >1 replika di produksi; (4) Bab 68 Enterprise
-Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
-satupun dimulai; (5) kepemilikan sesi Chat (`session_id` tak terikat
-identitas) — gap yang Tahap 20 sengaja tidak tutup, dicatat terpisah dari
-gerbang tool-call yang sudah tertutup; (6) sambungkan Agent Workspace
-Context (Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari
-Project Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
-Tahap 19.
+hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), dan Dockerfile
+multi-stage (Tahap 21, ADR-0011 gap ditutup) semua selesai 2026-07-06.
+**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
+nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
+benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat), dan
+image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
+ter-bake ke image) tertutup sekalian. Kandidat prioritas berikutnya, dari
+yang paling murah dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja
+ditunda Tahap 17); (2) solusi storage RWX (StorageClass NFS/Longhorn atau
+pindah ke object storage) kalau memang butuh API >1 replika di produksi;
+(3) Bab 68 Enterprise Architecture Backlog (20 prioritas di
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4) kepemilikan sesi
+Chat (`session_id` tak terikat identitas) — gap yang Tahap 20 sengaja
+tidak tutup, dicatat terpisah dari gerbang tool-call yang sudah tertutup;
+(5) sambungkan Agent Workspace Context (Bab 69.5) ke ChatEngine — tool
+Chat baru yang membaca dari Project Workspace, bukan cuma Uploaded Files,
+gap yang sengaja ditinggalkan Tahap 19; (6) instal `tesseract-ocr` di
+Dockerfile (gap pra-ada ditemukan tak sengaja Tahap 21 — `pytesseract`
+ada di `requirements.txt` tapi binary-nya tak pernah diinstal, OCR lewat
+`read_image` kemungkinan gagal senyap di Docker); (7) `HEALTHCHECK`
+eksplisit di `Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
+menambahkannya, di luar cakupan saat itu).
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
