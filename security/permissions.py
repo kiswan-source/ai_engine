@@ -40,6 +40,17 @@ rather than writing new content from an arbitrary prompt, a materially
 different risk profile from "write filesystem" (Bab 30 rule 2). Read-only
 tools (``read_*``, ``calculate_area``) stay ungated for the same reason
 ``mcp_list_tools`` does — no write, no risk category to gate.
+
+Tahap 19 (Workspace, Bab 69.7/ADR-0005) adds Workspace Permission
+(``read``/``write_output``/``read_only``/``temporary``/``generated``/
+``knowledge``/``vector``/``admin``) — but this one is **not** shaped like
+``TOOL_RISK_ACTIONS`` or ``_ROLE_PERMISSIONS``, because a Workspace is
+always a resource belonging to exactly one ``Project`` (Bab 69.11: "Workspace
+adalah bagian dari Project"), so access is mediated through that Project's
+membership role (owner/editor/viewer — the same roles
+``api/routes/projects.py::_role_for``/``_require`` already compute), not a
+global system role. ``WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`` below is that
+second, deliberately separate mapping.
 """
 from __future__ import annotations
 
@@ -96,6 +107,33 @@ def check_tool_permission(role: str, tool_name: str) -> None:
     if action is None:
         return
     require_permission(role, action)
+
+
+# Project role -> permitted Workspace Permission actions (Bab 69.7). Separate
+# from _ROLE_PERMISSIONS on purpose — see module docstring, Tahap 19. Owner
+# and editor get the same set here (PROJECT_SPECIFICATION.md leaves no
+# owner/editor distinction for Workspace specifically, unlike e.g. archiving
+# a Project, which projects.py restricts to owner-only).
+WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE: dict[str, frozenset[str]] = {
+    "owner": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
+    "editor": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
+    "viewer": frozenset({"read_only", "knowledge", "vector"}),
+}
+
+
+def has_workspace_permission(project_role: str | None, action: str) -> bool:
+    """Whether a caller with ``project_role`` on the owning Project may perform
+    Workspace ``action`` (one of ``WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE``'s values).
+    ``project_role=None`` (not a member at all) always denies."""
+    if project_role is None:
+        return False
+    return action in WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE.get(project_role, frozenset())
+
+
+def require_workspace_permission(project_role: str | None, action: str) -> None:
+    """Raise :class:`PermissionError` if ``project_role`` may not perform Workspace ``action``."""
+    if not has_workspace_permission(project_role, action):
+        raise PermissionError(f"project role {project_role!r} lacks workspace permission {action!r}")
 
 
 def require_role(action: str):

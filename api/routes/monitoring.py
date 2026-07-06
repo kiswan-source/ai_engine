@@ -18,17 +18,20 @@ decision, not a one-line addition here.
 """
 from dataclasses import asdict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.routes.orchestrator import _orchestrator
+from db.connection import get_session
 from telemetry import monitoring
 
 router = APIRouter()
 
 
 @router.get("/dashboard")
-async def dashboard():
-    """Bab 62 dashboards — Agent, Workflow, Provider, Cost, Latency, Health, Queue (Memory excluded, see module docstring)."""
+async def dashboard(session: AsyncSession = Depends(get_session)):
+    """Bab 62 dashboards — Agent, Workflow, Provider, Cost, Latency, Health,
+    Queue, Workspace (Bab 69.14, Tahap 19; Memory excluded, see module docstring)."""
     await _orchestrator._ensure_telemetry_started()
     return {
         "agent": monitoring.agent_dashboard(_orchestrator.agents, _orchestrator.metrics),
@@ -38,6 +41,7 @@ async def dashboard():
         "latency": monitoring.latency_dashboard(_orchestrator.metrics),
         "health": await monitoring.health_dashboard(),
         "queue": await monitoring.queue_dashboard(),
+        "workspace": await monitoring.workspace_dashboard(session),
     }
 
 

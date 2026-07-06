@@ -181,3 +181,55 @@ class ScheduledJob(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class Workspace(Base):
+    """Project Workspace (MASTER_INSTRUCTION.md Bab 69, ADR-0005, Tahap 19).
+
+    One-to-one with ``Project`` (``project_id`` unique) — PROJECT_SPECIFICATION.md
+    §7.1's proposed schema, implemented as-is.
+
+    ``status`` is the 4-value operational enum the spec defines
+    (Active/Scanning/Indexing/Error) — deliberately **not** reused for
+    soft-delete the way ``Project.status`` doubles as "archived": that enum
+    is explicitly closed-set in §7.1, unlike ``Project``'s. Soft-delete here
+    is the separate nullable ``deleted_at`` instead — ``DELETE
+    /api/v1/workspace/{id}`` sets it without ever touching ``status`` or
+    dropping the row (ADR-0005: deleting a Workspace registration never
+    deletes the source files it points to).
+    """
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), unique=True, index=True)
+    root_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="Active")  # Active | Scanning | Indexing | Error
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class WorkspaceFolder(Base):
+    """One registered folder mount inside a Workspace (Bab 69.3/69.4).
+
+    Metadata-only registration — ``path`` always points at the folder's
+    original location; its contents are never copied (ADR-0005's binding
+    principle). Only ``source_type="Local"`` has a working adapter this pass
+    (`tools/adapters/filesystem.py`) — Network/Server are modeled in the enum
+    already (per PROJECT_SPECIFICATION.md §7.1) but rejected at the API layer
+    until their adapters exist (Bab 69.16 roadmap). ``Upload`` is listed in
+    the spec's enum too but is out of scope here: Uploaded Files stay the
+    existing `Document`/upload mechanism unchanged (F-003 resolution, see
+    docs/PROGRESS.md Tahap 19) rather than becoming a `WorkspaceFolder` row.
+    """
+
+    __tablename__ = "workspace_folders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), index=True)
+    source_type: Mapped[str] = mapped_column(String(32))  # Local | Network | Server | Upload
+    path: Mapped[str] = mapped_column(String(1024))
+    alias: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    registered_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

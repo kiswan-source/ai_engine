@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Trash2, UserPlus } from 'lucide-react'
+import { ArrowLeft, FolderKanban, Trash2, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -179,11 +179,16 @@ function ProjectDetailView({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {isOwner && project.status === 'active' && (
-        <Button size="sm" variant="outline" className="w-fit" onClick={onArchive}>
-          Arsipkan Proyek
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" className="w-fit" onClick={() => navigate(`/projects/${projectId}/workspace`)}>
+          <FolderKanban size={14} className="mr-1" /> Workspace
         </Button>
-      )}
+        {isOwner && project.status === 'active' && (
+          <Button size="sm" variant="outline" className="w-fit" onClick={onArchive}>
+            Arsipkan Proyek
+          </Button>
+        )}
+      </div>
 
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-medium">Anggota</h2>

@@ -25,6 +25,7 @@ from api.routes import knowledge as knowledge_router
 from api.routes import projects as projects_router
 from api.routes import automation as automation_router
 from api.routes import plugins as plugins_router
+from api.routes import workspace as workspace_router
 
 logger = get_logger(__name__)
 
@@ -105,6 +106,7 @@ app.include_router(knowledge_router.router, prefix="/api/v1/knowledge", tags=["K
 app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["Projects"])
 app.include_router(automation_router.router, prefix="/api/v1/automation", tags=["Automation"])
 app.include_router(plugins_router.router, prefix="/api/v1/plugins", tags=["Plugins"])
+app.include_router(workspace_router.router, prefix="/api/v1/workspace", tags=["Workspace"])
 
 if (WEB_DIST_DIR / "index.html").exists():
     # SPA fallback: React Router (FRONTEND_ARCHITECTURE.md §5) owns client-side

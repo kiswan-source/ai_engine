@@ -3,7 +3,14 @@ import pytest
 from fastapi import HTTPException
 
 from security.auth import Principal, get_current_principal, verify_api_key
-from security.permissions import check_tool_permission, has_permission, require_permission, require_role
+from security.permissions import (
+    check_tool_permission,
+    has_permission,
+    has_workspace_permission,
+    require_permission,
+    require_role,
+    require_workspace_permission,
+)
 
 
 # ─── auth.py ──────────────────────────────────────────────────────────────
@@ -177,3 +184,34 @@ def test_check_tool_permission_allows_operator_for_mcp_call_tool():
 
 def test_check_tool_permission_noop_for_mcp_list_tools():
     check_tool_permission("user", "mcp_list_tools")  # not gated — discovery only
+
+
+# ─── Workspace Permission (Bab 69.7, resource-scoped via Project role, Tahap 19) ──
+
+@pytest.mark.parametrize("action", ["read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"])
+@pytest.mark.parametrize("project_role", ["owner", "editor"])
+def test_workspace_permission_owner_editor_get_full_access(project_role, action):
+    assert has_workspace_permission(project_role, action)
+    require_workspace_permission(project_role, action)  # must not raise
+
+
+@pytest.mark.parametrize("action", ["read_only", "knowledge", "vector"])
+def test_workspace_permission_viewer_allowed_actions(action):
+    assert has_workspace_permission("viewer", action)
+
+
+@pytest.mark.parametrize("action", ["write_output", "admin", "generated", "temporary"])
+def test_workspace_permission_viewer_denied_write_actions(action):
+    assert not has_workspace_permission("viewer", action)
+    with pytest.raises(PermissionError):
+        require_workspace_permission("viewer", action)
+
+
+def test_workspace_permission_non_member_denied():
+    assert not has_workspace_permission(None, "read")
+    with pytest.raises(PermissionError):
+        require_workspace_permission(None, "read")
+
+
+def test_workspace_permission_unknown_role_denied():
+    assert not has_workspace_permission("stranger", "read")

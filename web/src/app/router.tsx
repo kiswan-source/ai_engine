@@ -10,6 +10,7 @@ import { WorkspaceLayout } from '@/components/layout/WorkspaceLayout'
 
 const ChatPage = lazy(() => import('@/pages/chat/ChatPage'))
 const ProjectsPage = lazy(() => import('@/pages/projects/ProjectsPage'))
+const WorkspacePage = lazy(() => import('@/pages/projects/WorkspacePage'))
 const FilesPage = lazy(() => import('@/pages/files/FilesPage'))
 const KnowledgePage = lazy(() => import('@/pages/knowledge/KnowledgePage'))
 const MemoryPage = lazy(() => import('@/pages/memory/MemoryPage'))
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: 'chat/:conversationId', element: withSuspense(<ChatPage />) },
       { path: 'projects', element: withSuspense(<ProjectsPage />) },
       { path: 'projects/:projectId', element: withSuspense(<ProjectsPage />) },
+      { path: 'projects/:projectId/workspace', element: withSuspense(<WorkspacePage />) },
       { path: 'files', element: withSuspense(<FilesPage />) },
       { path: 'knowledge', element: withSuspense(<KnowledgePage />) },
       { path: 'memory', element: withSuspense(<MemoryPage />) },

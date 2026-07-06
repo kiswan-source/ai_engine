@@ -5,7 +5,9 @@ need a live DB/Redis/provider/RQ connection and are verified live instead —
 same precedent as PostgresConversationStore/PostgresLongTermStore (Tahap 3).
 """
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from db.models import Workspace, WorkspaceFolder
 from memory.vector_memory import VectorMemory
 from messaging import EventBus, InMemoryBroker
 from registry.agent_registry import AgentRegistry
@@ -144,3 +146,80 @@ async def test_check_alerts_none_when_under_thresholds(bus):
 
     alerts = await monitoring.check_alerts(metrics, costs)
     assert alerts == []
+
+
+# ─── workspace_dashboard (Bab 69.14, Tahap 19) ─────────────────────────────
+
+@pytest.fixture
+async def sqlite_session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Workspace.metadata.create_all, tables=[Workspace.__table__, WorkspaceFolder.__table__])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
+
+
+async def test_workspace_dashboard_counts_by_status(sqlite_session):
+    session = sqlite_session
+    session.add_all(
+        [
+            Workspace(project_id="p1", status="Active"),
+            Workspace(project_id="p2", status="Scanning"),
+            Workspace(project_id="p3", status="Error"),
+        ]
+    )
+    await session.commit()
+
+    dashboard = await monitoring.workspace_dashboard(session)
+    assert dashboard["total_workspaces"] == 3
+    assert dashboard["active"] == 1
+    assert dashboard["by_status"] == {"Active": 1, "Scanning": 1, "Indexing": 0, "Error": 1}
+
+
+async def test_workspace_dashboard_excludes_soft_deleted(sqlite_session):
+    from datetime import datetime
+
+    session = sqlite_session
+    session.add_all(
+        [
+            Workspace(project_id="p1", status="Active"),
+            Workspace(project_id="p2", status="Active", deleted_at=datetime.utcnow()),
+        ]
+    )
+    await session.commit()
+
+    dashboard = await monitoring.workspace_dashboard(session)
+    assert dashboard["total_workspaces"] == 1
+
+
+async def test_workspace_dashboard_aggregates_folder_scan_counts(sqlite_session, tmp_path):
+    (tmp_path / "report.txt").write_text("laporan")
+    (tmp_path / "site.png").write_bytes(b"\x89PNG")
+
+    session = sqlite_session
+    ws = Workspace(project_id="p1", status="Active")
+    session.add(ws)
+    await session.flush()
+    session.add(WorkspaceFolder(workspace_id=ws.id, source_type="Local", path=str(tmp_path)))
+    await session.commit()
+
+    dashboard = await monitoring.workspace_dashboard(session)
+    assert dashboard["document_count"] == 1
+    assert dashboard["image_count"] == 1
+    assert dashboard["total_size_bytes"] > 0
+    assert dashboard["errors"] == []
+
+
+async def test_workspace_dashboard_reports_missing_folder_as_error_not_fatal(sqlite_session):
+    session = sqlite_session
+    ws = Workspace(project_id="p1", status="Active")
+    session.add(ws)
+    await session.flush()
+    session.add(WorkspaceFolder(workspace_id=ws.id, source_type="Local", path="/no/such/directory"))
+    await session.commit()
+
+    dashboard = await monitoring.workspace_dashboard(session)
+    assert dashboard["total_workspaces"] == 1
+    assert len(dashboard["errors"]) == 1

@@ -3,9 +3,10 @@
 > Catatan lanjutan pembangunan enterprise multi-agent per `MASTER_INSTRUCTION.md`
 > (tersimpan di `D:\01_Project\AI ENGINE` = `/mnt/d/01_Project/AI ENGINE`,
 > **bukan** di `docs/` repo git ini — dua lokasi berbeda).
-> Sumber kebenaran = MASTER_INSTRUCTION.md (v1.3, 68 Bab) + 16 dokumen pendamping
-> (9 backend, 2 product-facing, 5 implementation-facing dari FINAL ARCHITECTURE
-> DECISION 5 Juli 2026).
+> Sumber kebenaran = MASTER_INSTRUCTION.md (v1.4, 69 Bab — naik dari v1.3/68 Bab
+> per 6 Juli 2026, Bab 69 Project Workspace & Folder Access/ADR-0005) + 16
+> dokumen pendamping (9 backend, 2 product-facing, 5 implementation-facing dari
+> FINAL ARCHITECTURE DECISION 5 Juli 2026).
 
 ## Status per 2026-07-05
 
@@ -29,6 +30,7 @@
 | 16* | Plugin — `PluginInterface` + plugin Weather nyata via Chat tool-calling (Bab 59) | ✅ SELESAI |
 | 17* | MCP Client — konsumsi MCP server nyata via SDK resmi, bridge ke Chat tool-calling (Bab 60) | ✅ SELESAI |
 | 18* | Selesaikan migrasi RBAC ke `write_*`/`convert_geo`/`generate_code` (janji ADR-0013) | ✅ SELESAI |
+| 19* | Project Workspace & Folder Access — registrasi folder lokal sebagai sumber kerja Agent (Bab 69, ADR-0005) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -875,8 +877,135 @@ entri.
   mock), dihapus setelah verifikasi. Service live di-restart +
   `/health/ready` dicek untuk memastikan tak ada regresi.
 
+**Tahap 19 — Project Workspace & Folder Access (Bab 69, ADR-0005)**
+
+Hand-off satu-kali dari Cowork (`CLAUDE_CODE_PROMPT_WORKSPACE_IMPLEMENTATION.md`,
+ditulis di root `D:\01_Project\AI ENGINE`, bukan `docs/`/`audit/`) meminta
+implementasi Bab 69 — desain Boss-approved per 6 Juli 2026, belum ada kode
+sama sekali. Dikerjakan sebagai kapabilitas aditif murni (Strangler Pattern):
+`core/chat/`, `core/document/`, `core/gis/`, `agent/tools/`,
+`api/routes/chat.py` tidak disentuh.
+
+**Temuan penting sebelum coding**: Bab 69.11 bilang adapter filesystem
+Workspace "memperluas `tools/adapters/filesystem.py` yang sudah ada" — tapi
+package `tools/` tidak ada sama sekali di repo ini sebelum Tahap ini
+(dikonfirmasi lewat pencarian penuh). Dibuat baru, sejajar
+`registry/`/`rag/`/`memory/`/`agent/` (Bab 5) — bukan pelanggaran Bab 45.1
+(yang menyebut `agent/tools/` secara spesifik, folder yang sudah sungguh
+ada dan tetap tak disentuh). Persis pola drift dokumentasi-vs-kode yang
+sudah diperingatkan audit 6 Juli 2026 (F-001/F-003/F-004) — dicatat
+eksplisit, bukan ditutupi dengan menafsirkan ulang Bab 69.11 secara paksa.
+Detail lengkap keputusan ini ada di `docs/adr/ADR-0014-workspace-implementation.md`
+(termasuk catatan disambiguasi: repo kode ini kebetulan **sudah punya**
+`ADR-0005-orchestrator-workflow-engine.md`, topik sama sekali berbeda dari
+ADR-0005 produk di `ARCHITECTURE_DECISIONS.md` — persis contoh nyata
+tabrakan nomor dua seri ADR yang diperingatkan hand-off doc §2).
+
+- **`tools/` (baru)** — `tool_validator.py` (`resolve_within_root`, Root
+  Restriction Bab 69.6: menolak `../` dan symlink yang keluar root) +
+  `adapters/filesystem.py` (`FilesystemAdapter`: `scan()`/`list_tree()`/
+  `read_bytes()`/`read_text()`, Local-only pass ini, klasifikasi file
+  document/image/gis/other memakai grup ekstensi yang sama persis dengan
+  `agent/tools/registry.py`).
+- **`workspace/` (baru, domain module)** — `scanner.py` (agregasi hasil
+  scan lintas `WorkspaceFolder`) dan `indexer.py` (membaca file
+  document-classified lewat `agent/tools/readers.py` yang sudah ada — bukan
+  parser baru — lalu mengindeks ke pipeline RAG yang sama dengan
+  `api/routes/knowledge.py`). `workspace/` bergantung ke `tools/`+`rag/`,
+  tak pernah ke `api/` (Hexagonal Architecture, Bab 4.2).
+- **DB (`db/models.py`)**: `Workspace`/`WorkspaceFolder` persis skema
+  `PROJECT_SPECIFICATION.md` §7.1, dengan satu deviasi terdokumentasi:
+  soft-delete lewat `deleted_at` terpisah (bukan memperluas enum `status`
+  yang eksplisit 4-nilai tertutup — Active/Scanning/Indexing/Error — di
+  spesifikasi), beda dari pola `Project.status="archived"`.
+- **RBAC (`security/permissions.py`)**: Workspace Permission (Bab 69.7)
+  **resource-scoped lewat Project role**, bukan entri global baru di
+  `_ROLE_PERMISSIONS`/`TOOL_RISK_ACTIONS` — `WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE`
+  memetakan owner/editor → akses penuh, viewer → read-only, karena Workspace
+  selalu bagian dari satu Project (Bab 69.11), bukan aksi sistem-lebar.
+  Setiap route mutasi (`create`/`patch`/`delete`/`mount`/`scan`/`index`)
+  digerbang lewat satu action `"admin"` — keputusan disengaja, didokumentasikan
+  di `api/routes/workspace.py` docstring (Bab 69.7 tidak merinci pemetaan
+  8 action ke masing-masing endpoint; 7 action granular lain disiapkan
+  untuk lapisan Agent-content-access masa depan, Bab 69.5).
+- **API (`api/routes/workspace.py`, baru)** — memformalkan rancangan Bab
+  69.13 jadi bentuk RESTful `/workspace/{id}/mount|scan|index|files|tree|status`
+  (id eksplisit di path, bukan sketsa datar Bab 69.13 yang cuma valid untuk
+  1 Workspace sistem-lebar). `POST .../mount` menolak eksplisit
+  `source_type` selain `Local` (pesan "roadmap", Bab 69.16) dan path yang
+  tidak ada di disk. Root Restriction ditegakkan **per-`WorkspaceFolder`**,
+  bukan satu "Workspace Root" tunggal — `Workspace.root_path` murni field
+  tampilan (Bab 69.14 "Workspace Path"), diisi otomatis dari folder pertama
+  yang di-mount.
+- **RAG (Bab 69.10)** — `POST .../index` memakai ulang **instance**
+  `_retriever` singleton `api/routes/knowledge.py` (bukan cuma nama
+  namespace yang sama). Ini bug nyata yang ditemukan lewat test, bukan
+  cuma isu hermetisitas: dengan `VECTOR_BACKEND=memory` (default dev/CI),
+  dua `Retriever` yang dibangun terpisah membungkus `InMemoryKnowledgeStore`
+  berbeda dan tidak saling melihat data — berbagi instance yang sama
+  membuat "Workspace Folder adalah Source RAG resmi" benar-benar berlaku
+  ujung-ke-ujung, bukan cuma kebetulan berfungsi saat pakai pgvector.
+- **F-003 diselesaikan** (bukan edit `docs/`/`audit/`, murni keputusan
+  implementasi): Uploaded Files tetap mekanisme `Document`/upload yang
+  sudah ada, tidak berubah sama sekali; Workspace Files (`GET .../files`)
+  adalah konsep aditif baru dari `WorkspaceFolder`, bukan tabel gabungan.
+- **F-004**: `Workspace`/`WorkspaceFolder` kini punya skema nyata — rujukan
+  konkret untuk Boss saat memperbarui `MASTER_INSTRUCTION.md` Bab 4.4.
+- **Frontend (`web/`)** — `types/workspace.ts`, `services/workspaceService.ts`,
+  `stores/workspaceStore.ts` (thin, pola sama seperti `projectStore.ts`),
+  `pages/projects/WorkspacePage.tsx` (field persis Bab 69.14: Workspace
+  Path, Folder List, Status, Last Scan, Document/Image/GIS Count, Vector
+  Status, Knowledge Status, Storage Used, Index Status). Rute baru
+  `/projects/:projectId/workspace`, tombol "Workspace" ditambahkan di
+  `ProjectDetailView` — **tidak** ada item sidebar baru berdiri sendiri
+  (Bab 69.14/`AI_WORKSPACE_ARCHITECTURE.md` §8, pola yang sama sejak Tahap
+  15/16). `npm run lint`/`npm run build` hijau.
+- **Monitoring (`telemetry/monitoring.py` + `api/routes/monitoring.py`)** —
+  `workspace_dashboard()` baru: jumlah Workspace, Workspace aktif per
+  status, agregat Document/Image/GIS Count, total storage. Berbeda dari
+  dashboard lain di modul ini (baca state in-memory `Orchestrator`),
+  dashboard ini DB-backed dan **live re-scan** filesystem tiap dipanggil —
+  tidak ada cache counts persisten di `Workspace`/`WorkspaceFolder` (gap
+  yang diakui, kandidat Bab 68 Prioritas 23 Incremental Index masa depan).
+  Folder yang tak terakses (mis. NAS mati) dilaporkan di `errors`, tidak
+  menggagalkan seluruh dashboard.
+- **65 test baru** (474/474 total, naik dari 409): 17
+  `test_filesystem_adapter.py` (Root Restriction termasuk symlink escape),
+  2 `test_workspace_scanner.py`, 3 `test_workspace_indexer.py`, 16 integrasi
+  `test_workspace_api.py` (CRUD, RBAC per role, mount/scan/index/files/
+  tree/status, soft-delete), 23 Workspace Permission di
+  `test_auth_permissions.py`, 4 `workspace_dashboard` di
+  `test_monitoring.py`.
+- **Diverifikasi live sungguhan** (bukan cuma unit test) — service systemd
+  (`ai-engine.service`, port 8001) di-restart untuk memuat kode baru +
+  tabel DB baru (auto-created via `init_db()` ke Postgres sungguhan);
+  folder scratch nyata dibuat berisi 1 dokumen (`.txt`), 1 gambar (`.png`),
+  1 file GIS (`.geojson`) → `POST /workspace` → `POST /mount` folder
+  sungguhan → `POST /scan` (hasil: document=1/image=1/gis=1, persis jumlah
+  file asli) → `POST /index` (1 chunk) → `GET /api/v1/knowledge/search`
+  **sungguhan menemukan** isi file (skor 0.70, metadata `source=workspace`
+  + `workspace_id` yang benar) lewat backend pgvector sungguhan, bukan
+  mock. Root Restriction diverifikasi: mount path yang tidak ada di disk →
+  400; `source_type=Network` → 400 pesan roadmap. Workspace+Project test
+  di-soft-delete setelah verifikasi, folder scratch dihapus. **Tidak** ada
+  interactive browser drive (tidak ada Playwright/Cypress di repo ini) —
+  gap yang diakui eksplisit, bukan disamarkan, posisi sama seperti Tahap 14
+  (Vision) mengakui belum diverifikasi ke provider cloud sungguhan.
+- **Gap yang diakui** (Bab 69.16, scope-sempit-sadar): Network/Server/
+  Cloud/SharePoint/OneDrive/GDrive/S3 folder source belum ada adapternya —
+  `mount` menolak eksplisit, bukan diam-diam menerima. `core/chat/engine.py`
+  (folder fondasi) belum workspace-aware — Agent Workspace Context (Bab
+  69.5) baru ada di sisi backend/API, belum ada tool Chat yang membaca dari
+  Workspace. Tidak ada cache counts persisten (tiap panggilan dashboard/
+  status re-scan filesystem). Auto Sync/Live File Watcher/Incremental
+  Index/Versioning/Snapshot/Multi Workspace/Remote Workspace/Collaboration/
+  Workspace Permission Management UI granular — semua Backlog Prioritas
+  21-29, tidak disentuh sama sekali.
+
 ## Test
-- **Backend: 409/409 lulus** (`pytest -q`) — naik dari 384 lewat 25 test
+- **Backend: 474/474 lulus** (`pytest -q`) — naik dari 409 lewat 65 test
+  Workspace (Tahap 19, lihat detail di atas: filesystem adapter, scanner/
+  indexer, RBAC, integrasi API, monitoring dashboard). Sebelumnya naik dari 384 lewat 25 test
   migrasi RBAC (Tahap 18, lihat detail di atas). Sebelumnya naik dari 372 lewat 12 test
   MCP Client (Tahap 17, lihat detail di atas): 4 unit MCPClient, 5 unit
   registry bridge, 3 unit permission. Sebelumnya naik dari 356 lewat 16 test
@@ -907,7 +1036,22 @@ entri.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-18, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-19, diakui bukan disamarkan)
+- **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
+  Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
+  scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
+  menerima. `core/chat/engine.py` belum workspace-aware — Agent Workspace
+  Context (Bab 69.5) baru ada di backend/API, belum ada tool Chat yang
+  membaca dari Workspace, jadi ChatEngine masih hanya tahu Uploaded Files
+  seperti sebelumnya. Tidak ada cache counts persisten — `workspace_dashboard()`
+  dan `GET .../status` re-scan filesystem tiap dipanggil (O(files on disk)),
+  bukan baca dari kolom ter-materialisasi. Tidak ada interactive browser
+  drive (tidak ada Playwright/Cypress di repo ini) — WorkspacePage.tsx
+  diverifikasi lewat `npm run build`/code review, bukan klik sungguhan di
+  browser. Auto Sync/Live File Watcher/Incremental Index/Versioning/
+  Snapshot/Multi Workspace/Remote Workspace/Collaboration/Workspace
+  Permission Management UI granular — semua Backlog Prioritas 21-29, nol
+  disentuh.
 - **MCP Client (Tahap 17) cuma Client, bukan Server** — keputusan skop
   sadar (dipilih Boss lewat `AskUserQuestion`); AI_ENGINE tidak bisa
   dikonsumsi client MCP eksternal (mis. Claude Desktop) sampai sisi Server
@@ -1075,20 +1219,25 @@ Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
 Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
 Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
 (Tahap 12), Projects (Tahap 13), Vision (Tahap 14), Automation (Tahap 15),
-Plugin (Tahap 16), MCP Client (Tahap 17), dan migrasi RBAC penuh ke
+Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 `write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
-ditutup) semua selesai 2026-07-05/06. **Seluruh 5 area Phase 3
-(`PROJECT_SPECIFICATION.md`) kini punya kode nyata** — MCP baru sisi
-Client (bukan Server, keputusan skop sadar). Kandidat prioritas
-berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab
-60 yang sengaja ditunda Tahap 17); (2) Dockerfile multi-stage dengan
-rebuild+verifikasi live penuh (bukan cuma review kode) mengingat riwayat
-insiden ADR-0009; (3) solusi storage RWX (StorageClass NFS/Longhorn atau
-pindah ke object storage) kalau memang butuh API >1 replika di produksi;
-(4) Bab 68 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (5) sambungkan RBAC ke
-`core/chat/` (ChatEngine) sendiri — gap yang kini jadi satu-satunya alasan
-`tool:*`/`plugin:*`/`mcp:call` masih inert untuk jalur Chat.
+ditutup), dan Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
+hand-off Cowork) semua selesai 2026-07-05/06. **Seluruh 5 area Phase 3
+(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
+Workspace baru di atasnya — MCP baru sisi Client (bukan Server, keputusan
+skop sadar). Kandidat prioritas berikutnya, dari yang paling murah
+dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja ditunda Tahap 17);
+(2) Dockerfile multi-stage dengan rebuild+verifikasi live penuh (bukan
+cuma review kode) mengingat riwayat insiden ADR-0009; (3) solusi storage
+RWX (StorageClass NFS/Longhorn atau pindah ke object storage) kalau
+memang butuh API >1 replika di produksi; (4) Bab 68 Enterprise
+Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
+satupun dimulai; (5) sambungkan RBAC ke `core/chat/` (ChatEngine) sendiri
+— gap yang kini jadi satu-satunya alasan `tool:*`/`plugin:*`/`mcp:call`
+masih inert untuk jalur Chat; (6) sambungkan Agent Workspace Context
+(Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari Project
+Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
+Tahap 19.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
@@ -1118,5 +1267,25 @@ Client (bukan Server, keputusan skop sadar), baru satu server
 terkonfigurasi (fixture dev, belum tersambung ke MCP server pihak ketiga
 sungguhan), dan sesi tak persisten (satu koneksi baru per panggilan).
 **Seluruh 5 area Phase 3 kini punya kode nyata**, tak ada lagi yang nol
-kode sama sekali.
+kode sama sekali. (j) Project Workspace (Tahap 19) SELESAI — diverifikasi
+live lewat scan+index folder sungguhan dan RAG search sungguhan menemukan
+isinya (lihat detail Tahap 19 di atas); `WorkspacePage.tsx` sendiri belum
+pernah diklik di browser sungguhan (tidak ada Playwright/Cypress di repo
+ini), baru `npm run build`/code review; UI belum menampilkan pesan error
+per-folder dari `errors` (`workspace_dashboard`) atau progres granular
+Scanning→Active (halaman perlu di-refresh manual, belum polling otomatis).
+
+**Untuk lanjutan Workspace (Tahap 19) spesifik**: (a) folder sumber baru
+Local — Network/Server/Cloud/SharePoint/OneDrive/GDrive/S3 (Bab 69.16,
+Backlog Prioritas 21-29) nol disentuh; (b) `core/chat/engine.py` belum
+tersambung ke Workspace sama sekali — Agent Workspace Context (Bab 69.5)
+murni backend/API hari ini, ChatEngine masih hanya tahu Uploaded Files;
+(c) tidak ada cache counts persisten — `workspace_dashboard()`/`GET
+.../status` re-scan filesystem tiap panggilan (O(files on disk)), jadi
+akan melambat untuk Workspace besar; kandidat solusi: kolom
+`document_count`/`image_count`/`gis_count`/`size_bytes` ter-materialisasi
+di `Workspace`, diperbarui hanya saat `POST .../scan` (selaras Bab 68
+Prioritas 23, Incremental Index); (d) WorkspacePage.tsx polling status
+manual (tombol Scan/Index), belum auto-poll `GET .../status` ala
+`workflowStore.applyEvent()`.
 

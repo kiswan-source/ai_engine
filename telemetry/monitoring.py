@@ -229,6 +229,72 @@ async def queue_dashboard(queue_names: tuple[str, ...] = ("ai_queue", "gis_queue
     return result
 
 
+async def workspace_dashboard(session) -> dict:
+    """Bab 62/69.14 Workspace Dashboard — counts by status + a live, uncached
+    folder walk for aggregate size/document/image/gis counts.
+
+    Unlike every other dashboard in this module (which reads in-memory
+    ``Orchestrator`` state), this one is DB-backed — ``Workspace`` has no
+    registry/metrics-collector equivalent — so it takes an
+    ``AsyncSession`` directly, following `api/routes/knowledge.py`'s
+    precedent for DB-backed routes.
+
+    The per-folder walk is genuinely live: neither ``Workspace`` nor
+    ``WorkspaceFolder`` persists a counts/size cache (that only exists
+    transiently in a `POST .../scan` HTTP response today), so this is
+    O(files on disk) per dashboard call — cheap for a handful of local
+    Workspaces, but a materialized-counts cache is a natural future
+    optimization (Bab 68 Backlog Prioritas 23, Incremental Index), not
+    built this pass. A folder that's offline/inaccessible (e.g. a NAS
+    down — ADR-0005's accepted availability trade-off) is skipped and
+    reported in ``errors``, not fatal to the whole dashboard.
+    """
+    from sqlalchemy import select
+
+    from db.models import Workspace, WorkspaceFolder
+    from tools.adapters.filesystem import FilesystemAdapter
+
+    workspaces = (await session.execute(select(Workspace).where(Workspace.deleted_at.is_(None)))).scalars().all()
+
+    by_status = {"Active": 0, "Scanning": 0, "Indexing": 0, "Error": 0}
+    for ws in workspaces:
+        by_status[ws.status] = by_status.get(ws.status, 0) + 1
+
+    total_documents = total_images = total_gis = 0
+    total_size_bytes = 0
+    errors: list[str] = []
+
+    for ws in workspaces:
+        folders = (
+            (await session.execute(select(WorkspaceFolder).where(WorkspaceFolder.workspace_id == ws.id)))
+            .scalars()
+            .all()
+        )
+        for folder in folders:
+            if folder.source_type != "Local":
+                continue
+            try:
+                summary = FilesystemAdapter(folder.path).scan()
+            except (NotADirectoryError, OSError) as exc:
+                errors.append(f"{ws.id}:{folder.id}: {exc}")
+                continue
+            total_documents += summary.document_count
+            total_images += summary.image_count
+            total_gis += summary.gis_count
+            total_size_bytes += summary.total_size_bytes
+
+    return {
+        "total_workspaces": len(workspaces),
+        "active": by_status["Active"],
+        "by_status": by_status,
+        "document_count": total_documents,
+        "image_count": total_images,
+        "gis_count": total_gis,
+        "total_size_bytes": total_size_bytes,
+        "errors": errors,
+    }
+
+
 @dataclass(frozen=True)
 class Alert:
     """One threshold breach (Bab 35 rule 2)."""
