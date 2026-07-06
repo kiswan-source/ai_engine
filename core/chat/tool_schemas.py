@@ -105,7 +105,7 @@ TOOL_SCHEMAS = [
     # either — ChatEngine injects it from the session, never from the model.
     _fn("workspace_list_files", "Daftar semua file di Project Workspace yang terhubung ke sesi chat ini (folder lokal yang diregistrasikan). Panggil ini dulu sebelum membaca file dari Workspace.",
         {}, []),
-    _fn("workspace_read_file", "Baca isi satu file dokumen (pdf/txt/docx/csv/json) dari Project Workspace. Pakai folder_id dan relative_path PERSIS dari hasil workspace_list_files.",
+    _fn("workspace_read_file", "Baca satu file dari Project Workspace. Dokumen (pdf/txt/docx/csv/json) dikembalikan sebagai teks. Gambar (jpg/png/dll) akan DITAMPILKAN ke kamu sebagai gambar sungguhan pada giliran berikutnya — deskripsikan isinya. File GIS (kml/geojson/shp) dikembalikan sebagai ringkasan luas/centroid. Pakai folder_id dan relative_path PERSIS dari hasil workspace_list_files.",
         {"folder_id": _STR, "relative_path": _STR}, ["folder_id", "relative_path"]),
 ]
 

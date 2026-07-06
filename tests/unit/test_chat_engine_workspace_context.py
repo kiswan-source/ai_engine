@@ -147,3 +147,37 @@ async def test_session_keeps_bound_workspace_id_when_later_message_omits_it(monk
     tool_results = [e for e in events if e["type"] == "tool_result"]
     assert tool_results[0]["ok"] is True  # still connected via the session's remembered binding
     assert engine.sessions["sess-1"].workspace_id == "ws-1"
+
+
+# ─── Workspace image → real vision turn (Bab 69.5, Tahap 29) ───────────────
+
+def _image_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        "workspace_read_file",
+        lambda **kw: {
+            "success": True, "path": "site.png", "type": "image",
+            "image_base64": "ZmFrZS1pbWFnZS1ieXRlcw==", "mime_type": "image/png",
+            "text": "Gambar dari Workspace: site.png",
+        },
+        "fake workspace_read_file returning an image result",
+    )
+    return reg
+
+
+async def test_image_tool_result_injects_followup_vision_message(monkeypatch):
+    monkeypatch.setattr("core.chat.engine.build_registry", lambda base_url, model: _image_registry())
+    engine = ChatEngine()
+    rounds = [
+        [_tool_call_round("workspace_read_file", {"folder_id": "f1", "relative_path": "site.png"})],
+        [_final_round("Gambar menunjukkan lokasi tambang.")],
+    ]
+    await _run(monkeypatch, engine, rounds, workspace_id="ws-1")
+
+    messages = engine.sessions["sess-1"].messages
+    tool_idx = next(i for i, m in enumerate(messages) if m.get("role") == "tool")
+    vision_msg = messages[tool_idx + 1]
+    assert vision_msg["role"] == "user"
+    assert vision_msg["images"] == ["ZmFrZS1pbWFnZS1ieXRlcw=="]
+    # The base64 must NOT leak into the tool-role JSON fed back as text.
+    assert "ZmFrZS1pbWFnZS1ieXRlcw==" not in messages[tool_idx]["content"]

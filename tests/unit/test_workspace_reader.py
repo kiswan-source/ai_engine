@@ -1,7 +1,12 @@
 """Unit tests for agent/tools/workspace_reader.py (Bab 69.5, Tahap 23) —
 the Agent Workspace Context tools exposed to Chat.
+
+Image/GIS category dispatch (Tahap 29) is tested here too — same fixtures,
+just new file categories under the same `_read_file` entry point.
 """
 import asyncio
+import base64
+import json
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -64,6 +69,39 @@ async def test_read_file_returns_real_content(sqlite_session_factory, tmp_path):
 
     assert result["success"] is True
     assert result["text"] == "kadar emas anomali distrik alpha"
+
+
+async def test_read_file_image_returns_base64_and_mime_type(sqlite_session_factory, tmp_path):
+    from PIL import Image
+
+    img_path = tmp_path / "site.png"
+    Image.new("RGBA", (20, 10), (255, 0, 0, 255)).save(str(img_path))
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _read_file(workspace_id, folder_id, "site.png", session_factory=sqlite_session_factory)
+
+    assert result["success"] is True
+    assert result["type"] == "image"
+    assert result["mime_type"] == "image/png"
+    assert base64.b64decode(result["image_base64"]) == img_path.read_bytes()
+
+
+async def test_read_file_gis_returns_area_summary_not_raw_coordinates(sqlite_session_factory, tmp_path):
+    fc = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"name": "Blok A"},
+         "geometry": {"type": "Polygon", "coordinates": [
+             [[110, -7], [110.1, -7], [110.1, -7.1], [110, -7], [110, -7]]]}}]}
+    (tmp_path / "blok.geojson").write_text(json.dumps(fc))
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _read_file(workspace_id, folder_id, "blok.geojson", session_factory=sqlite_session_factory)
+
+    assert result["success"] is True
+    assert result["type"] == "gis"
+    assert result["total_area_ha"] > 0
+    assert result["polygon_count"] == 1
+    # The compact summary, not a coordinate dump (gis-tool-output-consistency).
+    assert "coordinates" not in result
 
 
 async def test_read_file_folder_not_in_workspace(sqlite_session_factory, tmp_path):

@@ -40,6 +40,7 @@
 | 26* | Autentikasi `memory.py`/`monitoring.py`/`knowledge.py` — pola gap sama seperti `files.py` sebelum Tahap 25 | ✅ SELESAI |
 | 27* | Loose ends Docker — `tesseract-ocr`/`tesseract-ocr-ind` + `HEALTHCHECK` di `Dockerfile.api`/`Dockerfile.worker` (gap dicatat Tahap 21) | ✅ SELESAI |
 | 28* | MCP Server (Bab 60) — ekspos tool registry AI_ENGINE ke client MCP eksternal, arah sebaliknya dari Client Tahap 17 | ✅ SELESAI |
+| 29* | Gambar/GIS Workspace via Chat (Bab 69.5 Vision) — `workspace_read_file` kini bisa gambar (vision sungguhan) & GIS (ringkasan luas), bukan cuma dokumen | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1650,12 +1651,87 @@ yang sudah ada.
   tapi berarti satu server = satu tingkat akses tetap, bukan granular
   per klien.
 
+**Tahap 29 — Gambar/GIS Workspace via Chat (Bab 69.5 Vision follow-up)**
+
+Dipilih lewat `AskUserQuestion` dari 4 kandidat (gambar/GIS Workspace /
+Bab 68 Backlog / transport SSE/HTTP MCP / heartbeat RQ). Menutup gap yang
+Tahap 23 tinggalkan eksplisit: `workspace_read_file` cuma bisa dokumen
+(pdf/txt/docx/csv/json) — file gambar atau GIS di Project Workspace
+mengembalikan "Tipe file tidak didukung". Direncanakan dulu lewat Plan
+Mode (protected folder `core/chat/engine.py` disentuh, beberapa keputusan
+desain) sebelum coding.
+
+- **Koreksi cakupan ditemukan saat riset, sebelum coding dimulai**: opsi
+  yang ditawarkan ke Boss menyebut "Chat DAN MCP Server" — itu TIDAK
+  akurat. `mcp_server/server.py` (Tahap 28) sengaja MENGECUALIKAN
+  `workspace_list_files`/`workspace_read_file` sama sekali (tak ada sesi
+  ChatEngine di sana untuk menyuntikkan `workspace_id`) — jadi tak ada
+  apa pun untuk diperluas di sisi MCP. Tahap ini murni ChatEngine; akses
+  Workspace lewat MCP tetap gap terpisah yang lebih besar (sudah dicatat
+  di gap Tahap 28).
+- **`agent/tools/workspace_reader.py`'s `_read_file` kini dispatch per
+  kategori** via `tools/adapters/filesystem.py::classify()` (fungsi yang
+  SUDAH ADA, dipakai `FilesystemAdapter.scan()` sejak Tahap 19 — bukan
+  logika klasifikasi baru): `document` (jalur lama, tak berubah), `image`
+  (baru: baca byte mentah, base64-encode, `mimetypes.guess_type` stdlib —
+  bentuk data PERSIS yang sudah dipakai gambar upload di
+  `_build_user_message`), `gis` (baru: pakai ulang `agent/tools/gis_io.py`'s
+  `_load_any_fc()`/`_summarize_fc()` — ringkasan luas/centroid/bbox
+  kompak yang SAMA dipakai `read_kml`/`read_geojson`/`read_shp`, BUKAN
+  dump koordinat mentah, sesuai pelajaran `gis-tool-output-consistency`
+  yang sudah lama dicatat).
+- **Mekanisme baru: suntik giliran vision sungguhan setelah hasil tool
+  gambar**, di `core/chat/engine.py::stream_run` (protected, aditif
+  murni). Pesan `tool`-role Ollama tak bisa dipercaya membawa `images` —
+  mekanisme yang SUDAH TERBUKTI di codebase ini adalah pesan `user`-role
+  dengan daftar `images` base64 (persis yang sudah dipakai gambar upload
+  di `_build_user_message`). Jadi tepat setelah pesan hasil tool
+  di-append, kalau hasilnya `type == "image"`, di-append SATU pesan lagi:
+  `{"role": "user", "content": "(Gambar dari Workspace: ...)", "images": [base64]}`
+  — giliran berikutnya `_stream_chat` akan benar-benar mengirim gambar
+  itu ke Ollama.
+- **Detail teknis ditemukan saat membaca ulang loop, sebelum bug sempat
+  terjadi**: pesan `tool`-role isinya `json.dumps(result)[:12000]` —
+  membiarkan base64 mentah masuk situ akan menghabiskan sebagian besar
+  budget 12.000 karakter untuk fragmen base64 terpotong yang tak berguna
+  (model tak bisa "melihat" gambar dari teks base64). Fix: base64 dibuang
+  dari salinan `result` sebelum di-JSON-dump ke pesan `tool`; salinan ASLI
+  (base64 utuh) dipakai untuk pesan vision baru di atas.
+- **3 test baru (552/552 total, stabil 2x berturut-turut)**: 2
+  `test_workspace_reader.py` (gambar → base64 decode balik = byte file
+  asli + mime_type benar; GeoJSON poligon nyata → `total_area_ha`/
+  `polygon_count` benar, TIDAK ada `"coordinates"` mentah di hasil), 1
+  `test_chat_engine_workspace_context.py` (fake `workspace_read_file`
+  bertipe image → pesan `user`/`images` muncul TEPAT setelah pesan `tool`,
+  dan base64 TIDAK bocor ke konten JSON pesan `tool` itu sendiri).
+- **Diverifikasi live sungguhan lewat model asli** (`gemma4:e2b`, restart
+  `ai-engine.service`, Project+Workspace+folder scratch nyata dengan satu
+  PNG 200×100 biru+kotak kuning di tengah dan satu GeoJSON poligon nyata):
+  "deskripsikan gambar site.png" → model BENAR menyebut "biru terang" di
+  atas-bawah dan "kuning cerah" di tengah, plus tata letak spasial yang
+  cocok (kotak kuning "dibatasi garis biru di kiri dan kanan") — bukti
+  kuat model benar-benar MELIHAT gambar sungguhan (bukan halusinasi warna
+  acak), mekanisme suntik-vision-di-tengah-loop terbukti berfungsi
+  terhadap model dan chat template asli, bukan cuma tak error. "berapa
+  luas blok.geojson" → jawaban **12298.3366 Ha**, cocok dengan perhitungan
+  independen untuk poligon 0.1°×0.1° di lintang -7° (~11.1km × ~11.0km ≈
+  122 km²) — angka nyata dari file nyata, bukan dikarang. Project/
+  Workspace/folder scratch dihapus (soft-delete) setelah verifikasi.
+- **Gap yang diakui**: akses Workspace lewat MCP Server tetap tak ada
+  sama sekali (lihat koreksi cakupan di atas — gap terpisah, lebih besar,
+  dari Tahap 28); tak ada batas ukuran file gambar sebelum base64-encode
+  (sama seperti upload biasa — bukan risiko baru, konsisten dengan
+  perilaku yang sudah ada).
+
 ## Test
-- **Backend: 549/549 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~18-19 detik total) — naik dari 539 lewat 10 test MCP Server (Tahap 28,
-  lihat detail di atas: 7 unit `test_mcp_server.py`, 3 integrasi
-  `test_mcp_server_e2e.py` dogfooding subprocess sungguhan). Sebelumnya
-  tetap 539 di Tahap 27 (loose ends Docker, murni infrastruktur, nol test
+- **Backend: 552/552 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~16-20 detik total) — naik dari 549 lewat 3 test gambar/GIS Workspace
+  (Tahap 29, lihat detail di atas: 2 unit `test_workspace_reader.py`, 1
+  unit `test_chat_engine_workspace_context.py`). Sebelumnya naik dari 539
+  lewat 10 test MCP Server (Tahap 28, lihat detail di atas: 7 unit
+  `test_mcp_server.py`, 3 integrasi `test_mcp_server_e2e.py` dogfooding
+  subprocess sungguhan). Sebelumnya tetap 539 di Tahap 27 (loose ends
+  Docker, murni infrastruktur, nol test
   Python baru; diverifikasi live lewat rebuild image + `docker inspect`
   alih-alih pytest, lihat detail di atas). Sebelumnya naik dari 521 lewat 20 test autentikasi
   `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26, lihat detail di
@@ -1703,7 +1779,7 @@ yang sudah ada.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-27, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-29, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1731,8 +1807,12 @@ yang sudah ada.
   ulang kepemilikan sesi Tahap 22 langsung (bukan mekanisme baru),
   `monitoring.py` jadi pemakai pertama sungguhan `require_role("view_dashboard")`
   (ada sejak Tahap 7, tak pernah dipasang), `knowledge.py` autentikasi
-  polos (tak ada konsep pemilik dokumen). Gambar/GIS di Workspace belum
-  bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute
+  polos (tak ada konsep pemilik dokumen). **Gambar/GIS di Workspace SELESAI
+  juga (Tahap 29)** — `workspace_read_file` kini menampilkan gambar
+  sungguhan sebagai giliran vision (bukan cuma teks) dan meringkas file
+  GIS persis seperti `read_kml`/`read_geojson`/`read_shp`; diverifikasi
+  live model benar-benar mendeskripsikan warna/bentuk gambar nyata dan
+  menyebut luas GIS nyata (lihat detail Tahap 29 di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -1949,19 +2029,20 @@ multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
 kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
 `api/routes/files.py` (Tahap 25), autentikasi
 `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), loose ends
-Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), dan MCP Server, Bab 60
-sisi sebaliknya dari Client (Tahap 28) semua selesai 2026-07-06. **Seluruh
-5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**,
-ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar
-hidup di satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN
-file hasil kerjanya (di kedua rute yang menyajikannya) DAN
-memori/monitoring/knowledge kini terikat autentikasi, Chat kini bisa
-membaca Project Workspace bukan cuma Uploaded Files, image Docker turun
-2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke image) tertutup
-sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja, dan AI_ENGINE kini
-bisa jadi MCP Server sungguhan (bukan cuma Client) untuk client eksternal
-manapun. **Dicek ulang sebelum ditulis di sini** (bukan diasumsikan dari
-catatan lama): `projects.py` TERNYATA sudah punya
+Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), MCP Server, Bab 60
+sisi sebaliknya dari Client (Tahap 28), dan gambar/GIS Workspace via Chat
+(Tahap 29, Bab 69.5 Vision) semua selesai 2026-07-06. **Seluruh 5 area
+Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
+kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
+satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
+kerjanya (di kedua rute yang menyajikannya) DAN memori/monitoring/knowledge
+kini terikat autentikasi, Chat kini bisa membaca Project Workspace DAN
+melihat gambar/menghitung luas GIS-nya (bukan cuma dokumen teks), image
+Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
+image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja, dan
+AI_ENGINE kini bisa jadi MCP Server sungguhan (bukan cuma Client) untuk
+client eksternal manapun. **Dicek ulang sebelum ditulis di sini** (bukan
+diasumsikan dari catatan lama): `projects.py` TERNYATA sudah punya
 `Depends(get_current_principal)` di SETIAP rute sejak Tahap 13 — catatan
 gap lama yang bilang "endpoint projects.py masih terbuka" sudah basi,
 diperbaiki di bagian "Untuk lanjutan frontend" di bawah; bagian "Gap
@@ -1969,20 +2050,25 @@ kumulatif" Tahap 19 masih menyimpan klaim basi "ChatEngine belum
 workspace-aware" yang sudah salah sejak Tahap 23 — dikoreksi Tahap 27; dan
 bagian "Gap kumulatif" Tahap 17 masih menyimpan klaim basi "RBAC mcp:call
 inert dari Chat" yang sudah salah sejak Tahap 20 — dikoreksi Tahap 28.
+**Koreksi cakupan Tahap 29 sebelum coding**: opsi yang ditawarkan
+menyebut "Chat DAN MCP Server" untuk gambar/GIS Workspace — TIDAK akurat,
+`mcp_server/server.py` (Tahap 28) sengaja mengecualikan tool Workspace
+sama sekali, jadi Tahap 29 murni ChatEngine (lihat detail di atas).
 Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1)
 solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
 storage) kalau memang butuh API >1 replika di produksi; (2) Bab 68
 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) gambar/GIS di
-Workspace belum bisa dibaca lewat Chat MAUPUN MCP Server — baris Vision
-Bab 69.5, gap yang Tahap 23 sengaja tinggalkan dan Tahap 28 mewarisi
-(hasil tool hari ini teks JSON, bukan input vision, integrasi lebih
-besar); (4) heartbeat RQ yang lebih tepat untuk `HEALTHCHECK` worker
-(Tahap 27 cuma menjamin konektivitas Redis, bukan bahwa `worker.work()`
-sungguh memproses job); (5) transport SSE/HTTP untuk MCP Server (Tahap 28
-sengaja stdio-saja, server jaringan butuh tinjauan auth+path-sandboxing
-sendiri) — kedua item terakhir kecil, cuma relevan kalau pernah jadi
-masalah nyata di produksi atau ada kebutuhan client MCP jarak jauh.
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) akses Workspace
+lewat MCP Server (gap yang ditemukan+didokumentasikan saat Tahap 29 —
+`mcp_server/server.py` tak punya sesi ChatEngine untuk menyuntikkan
+`workspace_id`, butuh mekanisme otorisasi baru untuk pemanggil eksternal
+yang beda dari pola sesi Chat); (4) heartbeat RQ yang lebih tepat untuk
+`HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas Redis, bukan
+bahwa `worker.work()` sungguh memproses job); (5) transport SSE/HTTP
+untuk MCP Server (Tahap 28 sengaja stdio-saja, server jaringan butuh
+tinjauan auth+path-sandboxing sendiri) — ketiga item terakhir kecil/
+menengah, cuma relevan kalau ada kebutuhan konkret (produksi bermasalah,
+atau client MCP eksternal butuh Workspace/akses jarak jauh).
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

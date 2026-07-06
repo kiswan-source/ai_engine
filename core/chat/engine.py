@@ -59,6 +59,19 @@ session's `produced_files` — previously any caller could fetch anything in
 `GET /reports/{filename}` (`api/routes/files.py`, a different, older route
 serving the same directory) still has no such check — a separate, wider
 gap this Tahap does not close, documented in `docs/PROGRESS.md`.
+
+Workspace images (Bab 69.5 Vision, Tahap 29): when `workspace_read_file`
+(`agent/tools/workspace_reader.py`) returns an image (`type == "image"`,
+category detection lives in `tools/adapters/filesystem.py::classify`),
+`stream_run` follows the tool-role result with a synthetic `user`-role
+message carrying `images: [base64]` — the same mechanism already used for
+uploaded images, just triggered mid-tool-loop instead of at turn start.
+The raw base64 is stripped from the tool-role JSON first (it would waste
+most of `TOOL_RESULT_MAX_CHARS` on a truncated fragment the model can't
+see anyway). GIS files from Workspace return the same compact
+area/centroid/bbox summary `read_kml`/`read_geojson`/`read_shp` already
+produce — no engine change needed for those, they flow through the
+existing generic tool-result path.
 """
 import os
 import json
@@ -376,14 +389,38 @@ class ChatEngine:
                             session.history.append(file_item)
                             yield file_item
 
+                        is_workspace_image = (
+                            ok and isinstance(result, dict)
+                            and result.get("type") == "image" and result.get("image_base64")
+                        )
+                        # Never let the raw base64 reach the tool-role JSON: it would
+                        # both eat most of TOOL_RESULT_MAX_CHARS on a truncated,
+                        # useless fragment and give the model text it can't see an
+                        # image from. The real image goes out as its own vision
+                        # turn right below instead.
+                        content_for_model = result
+                        if is_workspace_image:
+                            content_for_model = {k: v for k, v in result.items() if k != "image_base64"}
                         session.messages.append({
                             "role": "tool", "tool_name": name,
                             # Keep enough of the result for the model to actually
                             # use what it just read. Readers already cap their text
                             # at ~10k chars; cutting to 4k here threw most of a
                             # document away right after "reading" it.
-                            "content": json.dumps(result, ensure_ascii=False, default=str)[:TOOL_RESULT_MAX_CHARS],
+                            "content": json.dumps(content_for_model, ensure_ascii=False, default=str)[:TOOL_RESULT_MAX_CHARS],
                         })
+                        if is_workspace_image:
+                            # Ollama tool-role messages don't reliably carry
+                            # `images` — the proven mechanism in this codebase is a
+                            # user-role message with an `images` list (same as
+                            # uploaded images in _build_user_message above). This
+                            # makes the *next* round's _stream_chat call actually
+                            # show the model the picture it just "read".
+                            session.messages.append({
+                                "role": "user",
+                                "content": f"(Gambar dari Workspace: {result.get('path', '')})",
+                                "images": [result["image_base64"]],
+                            })
                 else:
                     yield {"type": "token", "text": "\n\n_(Batas langkah tool tercapai.)_"}
 

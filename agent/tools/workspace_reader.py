@@ -32,22 +32,35 @@ time this was tried against a live server. Fix: the sync wrappers build a
 directly (same-loop callers, e.g. a future async call site, or tests that
 inject their own factory already on the right loop).
 
-Scoped to document files only (pdf/txt/md/log/docx/doc/csv/json — the same
-categories `workspace/indexer.py` already indexes). Images/GIS Workspace
-files are Bab 69.5's "Vision" row, a separate integration (tool results are
-JSON text fed back to the model today, not vision input) — explicitly left
-as a follow-up gap, not attempted here.
+Document files (pdf/txt/md/log/docx/doc/csv/json — the same categories
+`workspace/indexer.py` already indexes) go through `extract_text()`.
+
+Image and GIS files (Bab 69.5's "Vision" row, Tahap 29) are handled here
+too, reusing existing machinery rather than inventing new parsing:
+- **image**: read raw bytes + base64-encode, same shape uploaded images
+  already use (`core/chat/engine.py::_build_user_message`'s `images_b64`).
+  `core/chat/engine.py::stream_run` is what turns this into a real vision
+  turn — this module only produces the data, it doesn't know about
+  Ollama's message format.
+- **gis** (kml/geojson/shp/zip): reuses `agent/tools/gis_io.py`'s
+  `_load_any_fc()`/`_summarize_fc()` — the exact same compact
+  area/centroid/bbox summary `read_kml`/`read_geojson`/`read_shp` already
+  produce, not a raw coordinate dump (see the `gis-tool-output-consistency`
+  lesson: dumping full geometry buried the numbers the model needed).
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
 from typing import Any, Dict
 
 from sqlalchemy import select
 
+from agent.tools.gis_io import _load_any_fc, _summarize_fc
 from db.connection import AsyncSessionFactory
 from db.models import Workspace, WorkspaceFolder
-from tools.adapters.filesystem import FilesystemAdapter
+from tools.adapters.filesystem import FilesystemAdapter, classify
 from workspace.indexer import extract_text
 
 
@@ -95,18 +108,38 @@ async def _read_file(
         return {"success": False, "error": f"source_type={source_type!r} belum didukung."}
     try:
         adapter = FilesystemAdapter(folder_path)
-        text = extract_text(adapter, relative_path)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-    if text is None:
+        category = classify(relative_path)
+        abs_path = adapter.absolute_path(relative_path)
+
+        if category == "document":
+            text = extract_text(adapter, relative_path)
+            if text is None:
+                return {"success": False, "error": "File dokumen ini gagal dibaca sebagai teks."}
+            return {"success": True, "path": relative_path, "type": "document",
+                    "text": text[:10000], "truncated": len(text) > 10000}
+
+        if category == "image":
+            with open(abs_path, "rb") as fh:
+                data = fh.read()
+            mime_type, _ = mimetypes.guess_type(relative_path)
+            return {
+                "success": True, "path": relative_path, "type": "image",
+                "image_base64": base64.b64encode(data).decode(),
+                "mime_type": mime_type or "application/octet-stream",
+                "text": f"Gambar dari Workspace: {relative_path}",
+            }
+
+        if category == "gis":
+            fc = _load_any_fc(str(abs_path))
+            summary = _summarize_fc(fc)
+            return {"success": True, "path": relative_path, "type": "gis", **summary}
+
         return {
             "success": False,
-            "error": (
-                "Tipe file tidak didukung atau gagal dibaca sebagai teks "
-                "(gambar/GIS di Workspace belum bisa dibaca lewat tool ini)."
-            ),
+            "error": "Tipe file tidak didukung (bukan dokumen, gambar, atau GIS yang dikenali).",
         }
-    return {"success": True, "path": relative_path, "text": text[:10000], "truncated": len(text) > 10000}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def _build_fresh_engine():
