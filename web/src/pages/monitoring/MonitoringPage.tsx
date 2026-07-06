@@ -11,7 +11,7 @@ import { StatTile } from '@/components/monitoring/StatTile'
 import { StatusBadge, type StatusVariant } from '@/components/monitoring/StatusBadge'
 import { monitoringService } from '@/services/monitoringService'
 import type { MonitoringDashboard, MonitoringAlert } from '@/types/monitoring'
-import { formatUsd, formatMs, formatPercent } from '@/lib/utils'
+import { formatUsd, formatMs, formatPercent, formatBytes } from '@/lib/utils'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -175,6 +175,27 @@ export default function MonitoringPage() {
             )
           })}
         </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-medium">Workspace</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatTile label="Total Workspace" value={String(dashboard.workspace.total_workspaces)} />
+          <StatTile label="Aktif" value={String(dashboard.workspace.active)} />
+          <StatTile label="Dokumen" value={String(dashboard.workspace.document_count)} />
+          <StatTile label="Gambar" value={String(dashboard.workspace.image_count)} />
+          <StatTile label="File GIS" value={String(dashboard.workspace.gis_count)} />
+          <StatTile label="Ukuran total" value={formatBytes(dashboard.workspace.total_size_bytes)} />
+        </div>
+        {dashboard.workspace.errors.length > 0 && (
+          <div className="flex flex-col gap-1 rounded-lg border border-warning/50 bg-warning/10 p-3">
+            {dashboard.workspace.errors.map((err) => (
+              <p key={err} className="text-xs text-warning-foreground">
+                {err}
+              </p>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="flex flex-col gap-2">

@@ -46,6 +46,7 @@
 | 32* | Akses Workspace lewat MCP Server (Bab 60.1 + 69.5) — client MCP eksternal (mis. Claude Desktop) kini bisa baca/tulis Project Workspace | ✅ SELESAI |
 | 33* | PDF/DOCX Workspace Write Access — `workspace_write_file` kini bisa bikin dokumen PDF/DOCX sungguhan langsung di folder Workspace, lewat Chat maupun MCP | ✅ SELESAI |
 | 34* | Security + Audit Dashboards (Bab 68 Backlog Prioritas 13) — 2 dashboard baru melengkapi 8 dashboard Bab 62, item Backlog pertama yang dikerjakan | ✅ SELESAI |
+| 35* | Perbaiki drift `workspace_dashboard()` frontend — data sudah ada di API sejak Tahap 19, kini tampil di Monitoring page | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -2118,6 +2119,42 @@ kandidat Backlog yang sudah disaring. Direncanakan lewat Plan Mode.
   ini; drift `workspace_dashboard()` frontend (temuan di atas) belum
   diperbaiki.
 
+**Tahap 35 — Perbaiki drift `workspace_dashboard()` frontend**
+
+Menutup temuan Tahap 34: `telemetry/monitoring.py::workspace_dashboard()`
+(Tahap 19, Bab 62/69.14) sudah ada di respons `GET /dashboard` sejak lama,
+tapi tipe TypeScript `MonitoringDashboard` dan `MonitoringPage.tsx` di
+frontend TAK PERNAH menampilkannya — murni drift, bukan bug backend.
+Dipilih via `AskUserQuestion` sebagai kandidat paling kecil/cepat.
+Dikerjakan langsung tanpa Plan Mode formal — perubahan mekanis, nol
+keputusan desain baru (pola PERSIS section Security/Audit Tahap 34).
+
+- **`web/src/types/monitoring.ts`**: interface `WorkspaceDashboard` baru
+  (mirror persis bentuk dict backend), ditambahkan ke `MonitoringDashboard`.
+- **`web/src/pages/monitoring/MonitoringPage.tsx`**: section "Workspace"
+  baru (Total Workspace, Aktif, Dokumen, Gambar, File GIS, Ukuran total
+  via `StatTile` + `formatBytes` yang sudah ada) ditempatkan di antara
+  Antrean dan Keamanan, mengikuti urutan field di dict backend. Array
+  `errors` (folder offline/tak bisa diakses) ditampilkan di kotak
+  peringatan kalau tak kosong — pola yang sama seperti banner alert di
+  atas halaman.
+- **Murni perubahan frontend** — nol perubahan backend (data sudah ada
+  dan sudah diuji sejak Tahap 19/26), jadi nol test Python baru;
+  `pytest -q` 584/584 tetap lulus (dijalankan ulang untuk konfirmasi).
+- **Diverifikasi**: `npm run build`/`lint` hijau (0 error, warning
+  pra-ada sama seperti Tahap 34). Live: dibuat Project+Workspace+folder
+  scratch nyata berisi satu dokumen, `GET /dashboard` dicek dulu via curl
+  (`document_count:1`, `total_size_bytes:32`, plus SATU entri `errors`
+  nyata dari folder Workspace yatim peninggalan sesi verifikasi
+  sebelumnya — kebetulan menguji jalur render `errors` sekaligus).
+  Screenshot browser Chromium (Playwright) ke halaman Monitoring
+  sungguhan mengonfirmasi section Workspace merender angka PERSIS cocok
+  respons API (2 Workspace, 1 aktif, 1 dokumen, 32 B) TERMASUK pesan
+  error di kotak peringatan, nol error console. Project/Workspace/folder
+  scratch dihapus setelah verifikasi.
+- **Gap yang diakui**: 19 dari 20 item Bab 68 Backlog masih belum
+  disentuh (tak berubah dari Tahap 34).
+
 ## Test
 - **Backend: 584/584 lulus** (`pytest -q`, stabil 2x berturut-turut,
   ~25-29 detik total) — naik dari 578 lewat 10 test Security+Audit
@@ -2188,7 +2225,7 @@ kandidat Backlog yang sudah disaring. Direncanakan lewat Plan Mode.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-34, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-35, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2247,7 +2284,12 @@ kandidat Backlog yang sudah disaring. Direncanakan lewat Plan Mode.
   melengkapi 8 Bab 62, gap redaksi PII tak pernah tercatat di audit trail
   ditutup sekalian; diverifikasi live prompt-injection nyata (gratis lewat
   Ollama) langsung terefleksi di dashboard, screenshot browser konfirmasi
-  UI merender data nyata (lihat detail Tahap 34 di atas). Rute
+  UI merender data nyata (lihat detail Tahap 34 di atas). **Drift
+  `workspace_dashboard()` frontend SELESAI juga (Tahap 35)** — data yang
+  sudah ada di API sejak Tahap 19 kini benar-benar tampil di
+  `MonitoringPage.tsx` (section Workspace baru); diverifikasi live
+  screenshot browser cocok persis respons API termasuk jalur render
+  `errors` (lihat detail Tahap 35 di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -2476,9 +2518,10 @@ sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
 (Tahap 29, Bab 69.5 Vision), Workspace Write Access (Tahap 30, Bab 69.7
 `write_output`), tool-call resilience (Tahap 31), akses Workspace
 lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), PDF/DOCX Workspace
-Write Access (Tahap 33), dan Security + Audit Dashboards (Tahap 34, Bab
+Write Access (Tahap 33), Security + Audit Dashboards (Tahap 34, Bab
 68 Backlog Prioritas 13 — item PERTAMA dari Backlog 20-item yang
-dikerjakan) semua selesai 2026-07-06. **Seluruh 5 area
+dikerjakan), dan perbaikan drift `workspace_dashboard()` frontend (Tahap
+35) semua selesai 2026-07-06. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2538,29 +2581,30 @@ baru), NOL wiring RBAC baru di dua file yang sudah menggerbangnya.
 **Gap redaksi PII tak pernah masuk audit trail ditemukan+ditutup Tahap
 34** — satu-satunya aksi guardrail yang diterapkan tapi tak pernah
 dicatat, akan bikin Security Dashboard baru selalu nol permanen untuk
-kategori itu kalau dibiarkan. Kandidat prioritas berikutnya, dari yang
+kategori itu kalau dibiarkan. **Tahap 35 kembali lewat `AskUserQuestion`**
+— dipilih sebagai kandidat paling kecil/cepat dari daftar, langsung
+menutup drift `workspace_dashboard()` yang ditemukan Tahap 34 tanpa Plan
+Mode formal (perubahan mekanis murni frontend, nol keputusan desain
+baru). Kandidat prioritas berikutnya, dari yang
 paling murah dieksekusi: (1) solusi storage RWX (StorageClass NFS/Longhorn
 atau pindah ke object storage) kalau memang butuh API >1 replika di
 produksi; (2) item lain di Bab 68 Backlog (19 dari 20 tersisa — Prioritas
 16 Simulation Mode, 8 Prompt Management, 7 Configuration Center adalah
 kandidat lain yang sudah disaring genuinely bounded saat Tahap 34
 disiapkan; sisanya sebagian besar terlalu besar/spekulatif untuk pola
-Tahap kecil sesi ini, lihat detail Tahap 34); (3) drift
-`workspace_dashboard()` (Tahap 19) yang sudah ada di API sejak lama tapi
-tak pernah muncul di frontend `MonitoringDashboard`/`MonitoringPage.tsx`
-— ditemukan saat Tahap 34, dicatat bukan diperbaiki; (4) satu proses MCP
+Tahap kecil sesi ini, lihat detail Tahap 34); (3) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
-perlu beberapa entri server terkonfigurasi terpisah); (5) pesan error
+perlu beberapa entri server terkonfigurasi terpisah); (4) pesan error
 tool-call resilience (Tahap 31) masih representasi string exception
 Python mentah, belum diterjemahkan ke Bahasa Indonesia yang ramah seperti
-pesan RBAC; (6) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
+pesan RBAC; (5) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
 didukung untuk ditulis ke Workspace — `agent/tools/writers.py` memang
-belum punya generator untuk itu sama sekali; (7) heartbeat RQ yang lebih
+belum punya generator untuk itu sama sekali; (6) heartbeat RQ yang lebih
 tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas
-Redis, bukan bahwa `worker.work()` sungguh memproses job); (8) transport
+Redis, bukan bahwa `worker.work()` sungguh memproses job); (7) transport
 SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
-jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 4-8
+jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 3-7
 kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini

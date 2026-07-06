@@ -86,6 +86,17 @@ export interface AuditDashboard {
   recent: AuditEntry[]
 }
 
+export interface WorkspaceDashboard {
+  total_workspaces: number
+  active: number
+  by_status: Record<string, number>
+  document_count: number
+  image_count: number
+  gis_count: number
+  total_size_bytes: number
+  errors: string[]
+}
+
 export interface MonitoringDashboard {
   agent: AgentDashboard
   workflow: WorkflowDashboard
@@ -94,6 +105,7 @@ export interface MonitoringDashboard {
   latency: LatencyDashboard
   health: HealthDashboard
   queue: QueueDashboard
+  workspace: WorkspaceDashboard
   security: SecurityDashboard
   audit: AuditDashboard
 }
