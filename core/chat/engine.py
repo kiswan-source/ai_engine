@@ -88,6 +88,17 @@ denial-dict shape — found live during Tahap 30 verification, where a
 model call missing a required argument raised a raw `TypeError` that
 propagated out of the tool loop entirely and killed the whole SSE turn.
 Every tool shared this gap, not just the newest one.
+
+Friendly tool-error messages (Tahap 41): Tahap 31's denial dict embedded
+the raw `str(exception)` verbatim (e.g. a stdlib `TypeError`'s English
+"missing 1 required positional argument" phrasing) — a normal tool
+failure the model could react to, but not phrased for the person reading
+the chat. `_friendly_tool_error` prefixes the most common exception
+types (missing/wrong argument, missing file, missing dict key, bad value)
+with a short Indonesian sentence naming what went wrong; the original
+exception text is kept, not hidden, since the model still benefits from
+the specifics when composing its own explanation. Anything not in the
+map keeps the exact wording Tahap 31 already used.
 """
 import os
 import json
@@ -128,6 +139,25 @@ WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file", "workspac
 # prompts/chat/system_v1.md; version is registered explicitly here, never
 # inferred from the highest version number on disk.
 SYSTEM_PROMPT = load_prompt("chat", "system", version=1)
+
+# Friendly tool-error prefixes (Tahap 41) — the most common exception
+# shapes a tool call raises, keyed by exact type (not isinstance, so a
+# more specific subclass some future tool raises isn't silently matched
+# to the wrong sentence). Anything not listed keeps Tahap 31's original
+# "Tool '<name>' gagal: <e>" wording.
+_FRIENDLY_ERROR_PREFIXES = {
+    TypeError: "Argumen tool tidak lengkap atau salah",
+    FileNotFoundError: "File tidak ditemukan",
+    KeyError: "Data yang dibutuhkan tool tidak lengkap",
+    ValueError: "Nilai argumen tool tidak valid",
+}
+
+
+def _friendly_tool_error(name: str, e: Exception) -> str:
+    prefix = _FRIENDLY_ERROR_PREFIXES.get(type(e))
+    if prefix is None:
+        return f"Tool '{name}' gagal: {e}"
+    return f"{prefix} untuk tool '{name}': {e}"
 
 
 class Session:
@@ -348,7 +378,7 @@ class ChatEngine:
             # the PermissionError case above: one bad call ends that call,
             # not the conversation.
             logger.warning("tool call raised", tool=name, error=str(e))
-            return {"error": f"Tool '{name}' gagal: {e}", "success": False}
+            return {"error": _friendly_tool_error(name, e), "success": False}
 
     # ── Main entry: stream a full assistant turn ──
     async def stream_run(self, session_id: str, user_text: str,

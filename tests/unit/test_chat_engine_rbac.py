@@ -199,3 +199,51 @@ async def test_run_tool_returns_error_dict_for_generic_exception(engine):
     result = await engine._run_tool(registry, "write_txt", {"filename": "out.txt"}, role=None)
     assert result["success"] is False
     assert "write_txt" in result["error"]
+
+
+# ─── Friendly tool-error messages (Tahap 41) — common exception shapes get an
+# Indonesian prefix naming what went wrong; the raw exception text is kept,
+# not hidden.
+
+def test_friendly_tool_error_prefixes_type_error():
+    from core.chat.engine import _friendly_tool_error
+
+    msg = _friendly_tool_error("write_txt", TypeError("missing 1 required positional argument: 'content'"))
+    assert msg.startswith("Argumen tool tidak lengkap atau salah")
+    assert "write_txt" in msg
+    assert "missing 1 required positional argument" in msg  # original detail preserved
+
+
+def test_friendly_tool_error_prefixes_file_not_found():
+    from core.chat.engine import _friendly_tool_error
+
+    msg = _friendly_tool_error("read_pdf", FileNotFoundError("[Errno 2] No such file or directory: 'x.pdf'"))
+    assert msg.startswith("File tidak ditemukan")
+    assert "read_pdf" in msg
+
+
+def test_friendly_tool_error_prefixes_key_error():
+    from core.chat.engine import _friendly_tool_error
+
+    msg = _friendly_tool_error("convert_geo", KeyError("'target_format'"))
+    assert msg.startswith("Data yang dibutuhkan tool tidak lengkap")
+
+
+def test_friendly_tool_error_prefixes_value_error():
+    from core.chat.engine import _friendly_tool_error
+
+    msg = _friendly_tool_error("resize_image", ValueError("width must be positive"))
+    assert msg.startswith("Nilai argumen tool tidak valid")
+
+
+def test_friendly_tool_error_falls_back_for_unmapped_exception_types():
+    from core.chat.engine import _friendly_tool_error
+
+    msg = _friendly_tool_error("write_txt", RuntimeError("disk full"))
+    assert msg == "Tool 'write_txt' gagal: disk full"  # Tahap 31's original wording, unchanged
+
+
+async def test_run_tool_wraps_type_error_with_friendly_prefix(engine):
+    registry = _crashy_registry()
+    result = await engine._run_tool(registry, "write_txt", {"filename": "out.txt"}, role=None)
+    assert result["error"].startswith("Argumen tool tidak lengkap atau salah")

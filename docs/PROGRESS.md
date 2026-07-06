@@ -2592,8 +2592,64 @@ nol keputusan desain baru).
 - **Gap yang diakui**: tidak ada yang baru — Tahap ini murni menutup
   temuan samping Tahap 39.
 
+**Tahap 41 — Pesan Error Tool-Call Jadi Ramah**
+
+Item dari daftar "Titik mulai sesi berikutnya" (gap diakui sejak Tahap
+31). Dipilih via `AskUserQuestion`. Dikerjakan LANGSUNG tanpa Plan Mode
+formal (perubahan mekanis, terlokalisasi ke satu fungsi, nol keputusan
+desain arsitektural).
+
+- **Cek dulu jalur mana yang perlu disentuh**: MCP Server
+  (`mcp_server/server.py::dispatch_tool_call`) SENGAJA tak menangkap
+  exception generik sendiri (Tahap 32 — dibiarkan mengalir, wrapper SDK
+  MCP resmi yang mengubahnya jadi error result bersih) — bukan target
+  yang tepat untuk "pesan ramah Bahasa Indonesia" karena MCP itu
+  permukaan machine-facing (klien seperti Claude Desktop), bukan chat
+  manusia. Cuma `core/chat/engine.py::_run_tool`'s `except Exception`
+  (Tahap 31) yang relevan — satu-satunya jalur yang menyusun teks buat
+  dibaca manusia langsung di UI Chat.
+- **Fix**: dict `_FRIENDLY_ERROR_PREFIXES` baru (`TypeError`→"Argumen
+  tool tidak lengkap atau salah", `FileNotFoundError`→"File tidak
+  ditemukan", `KeyError`→"Data yang dibutuhkan tool tidak lengkap",
+  `ValueError`→"Nilai argumen tool tidak valid") + fungsi
+  `_friendly_tool_error(name, e)` yang mencocokkan TIPE PERSIS (bukan
+  `isinstance`, supaya subclass yang lebih spesifik nanti tak diam-diam
+  ketiban kalimat yang salah). Teks exception ASLI tetap disertakan
+  (bukan disembunyikan) — model masih dapat detail spesifik saat menyusun
+  penjelasannya sendiri ke pengguna. Tipe yang tak ada di peta tetap pakai
+  kalimat asli Tahap 31 (`Tool '<name>' gagal: <e>`), tak ada regresi buat
+  kasus yang belum dipetakan.
+- **6 test baru (619/619 total, stabil 2x berturut-turut)** di
+  `test_chat_engine_rbac.py`: 4 unit `_friendly_tool_error` langsung
+  (TypeError/FileNotFoundError/KeyError/ValueError masing-masing dapat
+  prefix benar + detail asli tetap ada), 1 unit tipe tak terpetakan jatuh
+  ke kalimat asli tak berubah, 1 unit `_run_tool` sungguhan (bukan cuma
+  fungsi helper terisolasi) mengonfirmasi wrapper terpasang end-to-end.
+- **Diverifikasi live sungguhan LANGSUNG terhadap registry produksi**
+  (bukan skrip terisolasi) — dipanggil `ChatEngine()._run_tool()`
+  sungguhan dengan `registry` NYATA dari `build_registry()` yang sama
+  dipakai `ai-engine.service`, `write_txt` tanpa argumen `content`: hasil
+  `{'error': "Argumen tool tidak lengkap atau salah untuk tool
+  'write_txt': write_txt() missing 1 required positional argument:
+  'content'", 'success': False}` — prefix ramah + detail asli sama-sama
+  hadir. Juga dicoba lewat Chat sungguhan (`read_pdf` ke file yang
+  sengaja tak ada): TERNYATA `agent/tools/readers.py` sudah menjaga
+  sendiri (`return {"error": "File not found: ..."}`) TANPA pernah
+  melempar exception — jalur `FileNotFoundError` di peta baru ini
+  melindungi tool LAIN yang belum/tak punya penjagaan serupa, bukan
+  readers.py yang memang sudah aman sejak awal (temuan jujur, bukan bug).
+- **Gap yang diakui**: cuma 4 tipe exception paling umum yang dipetakan;
+  exception spesifik-domain lain (mis. dari `fiona`/`shapely` di GIS, atau
+  provider Ollama) tetap jatuh ke kalimat generik Tahap 31 — diperluas
+  nanti kalau ada kasus nyata yang butuh; MCP Server sengaja tak disentuh
+  (lihat di atas).
+
 ## Test
-- **Backend: tetap 613/613, TAPI kecepatan pulih normal** (Tahap 40 —
+- **Backend: 619/619 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~20-22 detik total) — naik dari 613 lewat 6 test Pesan Error Tool-Call
+  Ramah (Tahap 41, lihat detail di atas, semua di
+  `test_chat_engine_rbac.py`). Sebelumnya tetap 613/613, TAPI kecepatan
+  pulih normal (Tahap 40 —
   fix embedder eksplisit di `test_knowledge_api.py`/`test_knowledge_auth.py`,
   lihat detail di atas): `pytest -q` stabil 2x berturut-turut ~22.5 detik
   total, dan kedua file itu sendiri sekarang 12/12 lulus dalam 1.03 detik
@@ -2686,7 +2742,7 @@ nol keputusan desain baru).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-40, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-41, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2992,9 +3048,10 @@ dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
 KEDUA), Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
 item KETIGA), Configuration Center (Tahap 38, Bab 68 Backlog
 Prioritas 7 — item KEEMPAT), Solusi Storage RWX untuk Produksi
-(Tahap 39, di luar Backlog Bab 68), dan fix test isolation panggilan
+(Tahap 39, di luar Backlog Bab 68), fix test isolation panggilan
 OpenAI diam-diam di Knowledge test (Tahap 40, menutup temuan samping
-Tahap 39) semua selesai 2026-07-07. **Seluruh 5 area
+Tahap 39), dan pesan error tool-call jadi ramah (Tahap 41, gap diakui
+sejak Tahap 31) semua selesai 2026-07-07. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -3102,32 +3159,50 @@ pemanggilan `Retriever(`/`default_embedder()` di `tests/` menunjukkan
 awal, dan dua pemanggilan `default_embedder()` di `test_rag.py` legitimate
 test untuk fungsi itu sendiri, aman lewat monkeypatch provider sebelum
 dipanggil) — fix satu argumen `embedder=hashed_bow_embedder` per fixture,
-kedua file 12/12 lulus turun dari 338-481 detik ke 1.03 detik. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) item lain di
+kedua file 12/12 lulus turun dari 338-481 detik ke 1.03 detik. **Tahap 41
+dipilih via `AskUserQuestion`**, dikerjakan langsung tanpa Plan Mode
+(perubahan mekanis, terlokalisasi) — dicek dulu bahwa MCP Server
+(`dispatch_tool_call`) SENGAJA tak perlu disentuh (permukaan
+machine-facing, bukan chat manusia; Tahap 32 sudah sengaja membiarkan
+exception mengalir ke wrapper SDK MCP), cuma `core/chat/engine.py`'s
+`_run_tool` yang relevan — 4 tipe exception paling umum
+(`TypeError`/`FileNotFoundError`/`KeyError`/`ValueError`) dapat prefix
+Indonesia lewat `_friendly_tool_error()`, teks asli tetap disertakan,
+tipe tak terpetakan tetap pakai kalimat Tahap 31. Diverifikasi live
+LANGSUNG terhadap `registry` produksi sungguhan (bukan skrip terisolasi):
+`write_txt` tanpa `content` → `"Argumen tool tidak lengkap atau salah
+untuk tool 'write_txt': ..."`. Temuan jujur sekalian: `read_pdf` ke file
+yang sengaja tak ada TERNYATA sudah dijaga sendiri oleh
+`agent/tools/readers.py` (`return {"error": "File not found: ..."}`
+tanpa pernah melempar exception) — jalur `FileNotFoundError` yang baru
+melindungi tool LAIN yang belum punya penjagaan serupa, bukan readers.py
+yang memang sudah aman. Kandidat prioritas berikutnya, dari yang paling
+murah dieksekusi: (1) item lain di
 Bab 68 Backlog (16 dari 20 tersisa — sisanya sebagian besar terlalu
 besar/spekulatif untuk pola Tahap kecil sesi ini, lihat detail Tahap 34);
 (2) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
-perlu beberapa entri server terkonfigurasi terpisah); (3) pesan error
-tool-call resilience (Tahap 31) masih representasi string exception
-Python mentah, belum diterjemahkan ke Bahasa Indonesia yang ramah seperti
-pesan RBAC; (4) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
+perlu beberapa entri server terkonfigurasi terpisah); (3) format dokumen
+lain (`.xlsx`/`.pptx`/dst.) tetap tak
 didukung untuk ditulis ke Workspace — `agent/tools/writers.py` memang
-belum punya generator untuk itu sama sekali; (5) heartbeat RQ yang lebih
+belum punya generator untuk itu sama sekali; (4) heartbeat RQ yang lebih
 tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas
-Redis, bukan bahwa `worker.work()` sungguh memproses job); (6) transport
+Redis, bukan bahwa `worker.work()` sungguh memproses job); (5) transport
 SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
-jaringan butuh tinjauan auth+path-sandboxing sendiri); (7) `run_single()`
+jaringan butuh tinjauan auth+path-sandboxing sendiri); (6) `run_single()`
 sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
-memanggilnya); (8) `agent/tools/analyzers.py`'s prompt generate_code
-dinamis (Tahap 37) belum masuk sistem versi prompt; (9) belum ada
+memanggilnya); (7) `agent/tools/analyzers.py`'s prompt generate_code
+dinamis (Tahap 37) belum masuk sistem versi prompt; (8) belum ada
 validasi skema/tipe di level `config/*.yaml` selain error pydantic saat
-startup (Tahap 38); (10) jalur object storage (S3-compatible) untuk
+startup (Tahap 38); (9) jalur object storage (S3-compatible) untuk
 `uploads`/`reports` (Tahap 39 sengaja tak menyentuh ini — perubahan lebih
 besar, butuh menulis ulang `agent/tools/readers.py`/`writers.py`
-terproteksi); (11) pola NFS-Ganesha Tahap 39 masih referensi/demo — perlu
-diganti backend RWX terkelola sebelum dipakai produksi sungguhan — item
+terproteksi); (10) pola NFS-Ganesha Tahap 39 masih referensi/demo — perlu
+diganti backend RWX terkelola sebelum dipakai produksi sungguhan; (11)
+`_FRIENDLY_ERROR_PREFIXES` Tahap 41 cuma 4 tipe exception paling umum —
+tipe spesifik-domain lain (GIS `fiona`/`shapely`, provider Ollama) masih
+kalimat generik — item
 2-11 kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
