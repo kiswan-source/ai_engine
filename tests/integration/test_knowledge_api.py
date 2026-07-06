@@ -19,6 +19,16 @@ teardown with a "different loop" error. `InMemoryKnowledgeStore` is what CI
 actually exercises (no `.env` there), so pinning it here keeps the test
 hermetic (Bab 12.3) rather than depending on whichever backend happens to
 be configured locally.
+
+Also pins `embedder=hashed_bow_embedder` explicitly (Tahap 40 fix) —
+`Retriever.__init__`'s default is `embedder or default_embedder()`, and
+`default_embedder()` reads `RAG_EMBEDDING_PROVIDER` from `settings` at
+call time, same as the store did. Without this override, any dev box with
+a real `OPENAI_API_KEY` configured (this one has one, Tahap 4/provider
+verification) makes real, slow, sometimes-flaky network calls to OpenAI's
+embedding endpoint on every ingest/search in this "isolated" test — caught
+live via `ss -tnp` showing a real HTTPS connection from the pytest
+process (Tahap 39 RWX-storage verification's incidental discovery).
 """
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -26,6 +36,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.connection import get_session
 from db.models import Document
+from rag.embeddings import hashed_bow_embedder
 from rag.knowledge_store import InMemoryKnowledgeStore
 from rag.retriever import Retriever
 
@@ -34,7 +45,10 @@ from rag.retriever import Retriever
 def _isolated_retriever(monkeypatch):
     import api.routes.knowledge as route
 
-    monkeypatch.setattr(route, "_retriever", Retriever(namespace=route.RAG_NAMESPACE, store=InMemoryKnowledgeStore()))
+    monkeypatch.setattr(
+        route, "_retriever",
+        Retriever(namespace=route.RAG_NAMESPACE, store=InMemoryKnowledgeStore(), embedder=hashed_bow_embedder),
+    )
 
 
 @pytest.fixture

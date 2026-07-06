@@ -7,7 +7,8 @@ shared across every caller, same as it always has been) — same posture as
 Same isolated-retriever + sqlite pattern as `test_knowledge_api.py` (which
 deliberately runs with no `API_KEYS` to prove the ingest/search plumbing
 itself) — kept in a separate file rather than retrofitting headers onto
-every call there.
+every call there. Also pins `embedder=hashed_bow_embedder` for the same
+reason as that file (Tahap 40 fix) — see its docstring for the full story.
 """
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.connection import get_session
 from db.models import Document
+from rag.embeddings import hashed_bow_embedder
 from rag.knowledge_store import InMemoryKnowledgeStore
 from rag.retriever import Retriever
 
@@ -28,7 +30,10 @@ def _api_keys(monkeypatch):
 def _isolated_retriever(monkeypatch):
     import api.routes.knowledge as route
 
-    monkeypatch.setattr(route, "_retriever", Retriever(namespace=route.RAG_NAMESPACE, store=InMemoryKnowledgeStore()))
+    monkeypatch.setattr(
+        route, "_retriever",
+        Retriever(namespace=route.RAG_NAMESPACE, store=InMemoryKnowledgeStore(), embedder=hashed_bow_embedder),
+    )
 
 
 @pytest.fixture

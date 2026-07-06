@@ -2556,9 +2556,50 @@ Direncanakan via Plan Mode.
   `embedder=hashed_bow_embedder` (sudah ada di `rag/embeddings.py`)
   eksplisit di kedua fixture itu.
 
+**Tahap 40 — Fix Test Isolation: Panggilan OpenAI Diam-diam di Knowledge
+Test**
+
+Menutup temuan samping Tahap 39. Dipilih via `AskUserQuestion` sebagai
+kandidat termurah. Dikerjakan LANGSUNG tanpa Plan Mode formal (akar
+masalah sudah terdiagnosis penuh di Tahap 39 — mekanisme jelas, mirror
+pola yang SUDAH BENAR di `test_workspace_api.py`/`test_workspace_indexer.py`,
+nol keputusan desain baru).
+
+- **Cek dulu apakah gap ini lebih luas** — `grep` semua pemanggilan
+  `Retriever(`/`default_embedder()` di `tests/`: `test_workspace_api.py`
+  dan `test_workspace_indexer.py` TERNYATA SUDAH BENAR (`embedder=
+  hashed_bow_embedder` eksplisit sejak ditulis); dua pemanggilan
+  `default_embedder()` di `test_rag.py` TERNYATA aman juga —
+  keduanya memonkeypatch `RAG_EMBEDDING_PROVIDER` ke nilai aman
+  (`"hashed"` eksplisit, atau `"openai"` dengan `OPENAI_API_KEY=""`)
+  SEBELUM memanggil `default_embedder()`, jadi keduanya legitimate test
+  UNTUK `default_embedder()` itu sendiri, bukan instance dari bug ini.
+  Gap ini murni terbatas ke `test_knowledge_api.py`/`test_knowledge_auth.py`
+  — tak ada file lain yang perlu disentuh.
+- **Fix**: `Retriever(namespace=..., store=InMemoryKnowledgeStore())` di
+  kedua file itu jadi `Retriever(namespace=..., store=
+  InMemoryKnowledgeStore(), embedder=hashed_bow_embedder)` — satu argumen
+  tambahan per fixture, docstring kedua file diperbarui menjelaskan
+  kenapa (mengutip kejadian `ss -tnp` Tahap 39 sebagai bukti).
+- **Diverifikasi**: `pytest tests/integration/test_knowledge_api.py
+  tests/integration/test_knowledge_auth.py -v` — 12/12 lulus dalam
+  **1.03 detik** (turun drastis dari 338-481 detik sebelum fix). Full
+  suite 613/613 lulus stabil 2x berturut-turut, **~22.5 detik total**
+  (kembali ke kecepatan normal, bukan lagi berpotensi 400+ detik kalau
+  jaringan OpenAI lambat/rate-limited). Nol perubahan kode produksi — cuma
+  2 file test — jadi tak ada verifikasi live layanan sungguhan yang
+  relevan untuk Tahap ini.
+- **Gap yang diakui**: tidak ada yang baru — Tahap ini murni menutup
+  temuan samping Tahap 39.
+
 ## Test
-- **Backend: tetap 613/613** (Tahap 39 nol perubahan Python, jadi jumlah
-  test tak berubah) — TAPI dua kali `pytest -q` dijalankan ULANG demi
+- **Backend: tetap 613/613, TAPI kecepatan pulih normal** (Tahap 40 —
+  fix embedder eksplisit di `test_knowledge_api.py`/`test_knowledge_auth.py`,
+  lihat detail di atas): `pytest -q` stabil 2x berturut-turut ~22.5 detik
+  total, dan kedua file itu sendiri sekarang 12/12 lulus dalam 1.03 detik
+  (dulu 338-481 detik, tergantung kondisi jaringan OpenAI nyata). Tahap 39
+  sendiri nol perubahan Python, jadi jumlah test tak berubah dari
+  perbaikan itu — TAPI dua kali `pytest -q` dijalankan ULANG demi
   verifikasi (setelah `kind` dibongkar) masing-masing gagal 2 test acak
   berbeda, keduanya SELALU di `test_knowledge_api.py`/
   `test_knowledge_auth.py`, dan masing-masing lambat tak wajar
@@ -2645,7 +2686,7 @@ Direncanakan via Plan Mode.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-39, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-40, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2950,9 +2991,10 @@ dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
 35), Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
 KEDUA), Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
 item KETIGA), Configuration Center (Tahap 38, Bab 68 Backlog
-Prioritas 7 — item KEEMPAT), dan Solusi Storage RWX untuk Produksi
-(Tahap 39, di luar Backlog Bab 68 — dari daftar "Titik mulai sesi
-berikutnya") semua selesai 2026-07-06/07. **Seluruh 5 area
+Prioritas 7 — item KEEMPAT), Solusi Storage RWX untuk Produksi
+(Tahap 39, di luar Backlog Bab 68), dan fix test isolation panggilan
+OpenAI diam-diam di Knowledge test (Tahap 40, menutup temuan samping
+Tahap 39) semua selesai 2026-07-07. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -3051,36 +3093,42 @@ Ganesha) didokumentasikan di `k8s/README.md` untuk siapa pun yang pakai
 pola ini lagi. Verifikasi Tahap 39 juga TAK SENGAJA menemukan gap
 pra-ada di test suite (`test_knowledge_api.py`/`test_knowledge_auth.py`
 diam-diam memanggil API OpenAI sungguhan lewat `default_embedder()` yang
-tak ter-mock di lingkungan dev — lihat detail lengkap di atas). Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) fix
-kecil test isolation — tambah `embedder=hashed_bow_embedder` eksplisit
-di fixture `_isolated_retriever` kedua file test itu, supaya `pytest`
-lokal tak pernah diam-diam memanggil API berbayar; (2) item lain di
+tak ter-mock di lingkungan dev — lihat detail lengkap di atas). **Tahap
+40 dipilih via `AskUserQuestion`** sebagai kandidat termurah, dikerjakan
+langsung tanpa Plan Mode (akar masalah sudah terdiagnosis penuh) — dicek
+dulu apakah gap lebih luas dari 2 file itu (TERNYATA TIDAK: `grep` semua
+pemanggilan `Retriever(`/`default_embedder()` di `tests/` menunjukkan
+`test_workspace_api.py`/`test_workspace_indexer.py` SUDAH BENAR sejak
+awal, dan dua pemanggilan `default_embedder()` di `test_rag.py` legitimate
+test untuk fungsi itu sendiri, aman lewat monkeypatch provider sebelum
+dipanggil) — fix satu argumen `embedder=hashed_bow_embedder` per fixture,
+kedua file 12/12 lulus turun dari 338-481 detik ke 1.03 detik. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) item lain di
 Bab 68 Backlog (16 dari 20 tersisa — sisanya sebagian besar terlalu
 besar/spekulatif untuk pola Tahap kecil sesi ini, lihat detail Tahap 34);
-(3) satu proses MCP
+(2) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
-perlu beberapa entri server terkonfigurasi terpisah); (4) pesan error
+perlu beberapa entri server terkonfigurasi terpisah); (3) pesan error
 tool-call resilience (Tahap 31) masih representasi string exception
 Python mentah, belum diterjemahkan ke Bahasa Indonesia yang ramah seperti
-pesan RBAC; (5) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
+pesan RBAC; (4) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
 didukung untuk ditulis ke Workspace — `agent/tools/writers.py` memang
-belum punya generator untuk itu sama sekali; (6) heartbeat RQ yang lebih
+belum punya generator untuk itu sama sekali; (5) heartbeat RQ yang lebih
 tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas
-Redis, bukan bahwa `worker.work()` sungguh memproses job); (7) transport
+Redis, bukan bahwa `worker.work()` sungguh memproses job); (6) transport
 SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
-jaringan butuh tinjauan auth+path-sandboxing sendiri); (8) `run_single()`
+jaringan butuh tinjauan auth+path-sandboxing sendiri); (7) `run_single()`
 sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
-memanggilnya); (9) `agent/tools/analyzers.py`'s prompt generate_code
-dinamis (Tahap 37) belum masuk sistem versi prompt; (10) belum ada
+memanggilnya); (8) `agent/tools/analyzers.py`'s prompt generate_code
+dinamis (Tahap 37) belum masuk sistem versi prompt; (9) belum ada
 validasi skema/tipe di level `config/*.yaml` selain error pydantic saat
-startup (Tahap 38); (11) jalur object storage (S3-compatible) untuk
+startup (Tahap 38); (10) jalur object storage (S3-compatible) untuk
 `uploads`/`reports` (Tahap 39 sengaja tak menyentuh ini — perubahan lebih
 besar, butuh menulis ulang `agent/tools/readers.py`/`writers.py`
-terproteksi); (12) pola NFS-Ganesha Tahap 39 masih referensi/demo — perlu
+terproteksi); (11) pola NFS-Ganesha Tahap 39 masih referensi/demo — perlu
 diganti backend RWX terkelola sebelum dipakai produksi sungguhan — item
-3-12 kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
+2-11 kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
