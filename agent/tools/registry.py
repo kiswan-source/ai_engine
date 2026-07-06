@@ -169,4 +169,13 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("mcp_call_tool", mcp_call_tool,
         "Panggil satu tool di MCP server. Input: {server, tool_name, arguments}")
 
+    # Agent Workspace Context (Bab 69.5, Tahap 23) — workspace_id is always
+    # injected by ChatEngine._run_tool from the session's authorized
+    # Workspace, never taken from the model's own arguments.
+    from agent.tools.workspace_reader import workspace_list_files, workspace_read_file
+    registry.register("workspace_list_files", workspace_list_files,
+        "Daftar semua file di Project Workspace yang terhubung ke sesi ini. Input: {}")
+    registry.register("workspace_read_file", workspace_read_file,
+        "Baca isi satu file dari Project Workspace. Input: {folder_id, relative_path}")
+
     return registry

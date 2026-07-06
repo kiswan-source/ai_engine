@@ -15,6 +15,15 @@ identical to before this Tahap, same posture as every other RBAC feature
 in this app. `/download/{filename}` is NOT session-scoped (no session_id
 in the request at all) — a separate, still-open gap, not silently folded
 into this one.
+
+Agent Workspace Context (Bab 69.5, Tahap 23): `ChatRequest.workspace_id`,
+checked once per request via `_check_workspace_access` — resolves the
+caller's Project role (`api/routes/projects.py::_role_for`, same helper
+`api/routes/workspace.py` reuses) and requires "read" — *before*
+`StreamingResponse` is returned, same reasoning as session ownership above.
+No `Depends(get_session)` on this route: a DB session is opened manually,
+only inside the check, so a normal chat request that never uses Workspace
+pays zero extra DB round-trips.
 """
 import os
 import json
@@ -39,6 +48,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     model: Optional[str] = None
     files: List[str] = Field(default_factory=list)  # filenames previously uploaded
+    workspace_id: Optional[str] = None
 
 
 def _require_session_owner(session_id: str, principal: Principal) -> None:
@@ -49,6 +59,28 @@ def _require_session_owner(session_id: str, principal: Principal) -> None:
     session = chat_engine.sessions.get(session_id)
     if session is not None and session.owner is not None and session.owner != principal.api_key:
         raise HTTPException(status_code=403, detail="Sesi ini milik pengguna lain")
+
+
+async def _check_workspace_access(workspace_id: str, principal: Principal) -> None:
+    """404 if the Workspace doesn't exist, 403 if the caller's Project role
+    lacks "read" (Tahap 23). Opens its own session — see module docstring
+    on why this isn't a route-level `Depends(get_session)`."""
+    from db.connection import AsyncSessionFactory
+    from db.models import Project, Workspace
+    from security.permissions import require_workspace_permission
+    from api.routes.projects import _role_for
+
+    async with AsyncSessionFactory() as db:
+        workspace = await db.get(Workspace, workspace_id)
+        if workspace is None or workspace.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        project = await db.get(Project, workspace.project_id)
+        role = await _role_for(db, project, principal) if project is not None else None
+
+    try:
+        require_workspace_permission(role, "read")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 @router.post("/upload")
@@ -80,12 +112,15 @@ async def stream(req: ChatRequest, principal: Principal = Depends(get_current_pr
     Chat now apply. When ``API_KEYS`` is unset (dev default), ``principal``
     is always ``role="admin"`` — every gate is a no-op, same as today.
 
-    Session ownership (Tahap 22) is checked here, before ``StreamingResponse``
-    is returned — raising inside ``event_source()`` after streaming has
-    already started would surface as a broken 200 body, not a clean 403.
+    Session ownership (Tahap 22) and Workspace access (Tahap 23) are both
+    checked here, before ``StreamingResponse`` is returned — raising inside
+    ``event_source()`` after streaming has already started would surface as
+    a broken 200 body, not a clean 403.
     """
     session_id = req.session_id or uuid.uuid4().hex
     _require_session_owner(session_id, principal)
+    if req.workspace_id:
+        await _check_workspace_access(req.workspace_id, principal)
     file_paths = [os.path.join(UPLOADS_DIR, os.path.basename(f)) for f in req.files]
 
     async def event_source():
@@ -94,7 +129,7 @@ async def stream(req: ChatRequest, principal: Principal = Depends(get_current_pr
         async for event in chat_engine.stream_run(
             session_id=session_id, user_text=req.message,
             new_files=file_paths, model=req.model, role=principal.role,
-            owner=principal.api_key,
+            owner=principal.api_key, workspace_id=req.workspace_id,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 

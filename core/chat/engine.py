@@ -37,6 +37,17 @@ route does authorization" split `api/routes/workspace.py` already uses.
 `owner=None` (no caller opts in) behaves exactly as before every Tahap 20/22
 change: unowned, anyone can touch it — matches every RBAC feature in this
 app being a no-op when its caller doesn't opt in.
+
+Agent Workspace Context (Bab 69.5, Tahap 23): `Session.workspace_id`, same
+first-non-null-wins shape as `owner`. `api/routes/chat.py` checks the
+caller's Project role against the target Workspace *once per HTTP request*
+(not per tool call) before passing `workspace_id` in — this module trusts
+that check the same way it trusts `owner`. The two new tools
+(`workspace_list_files`/`workspace_read_file`, `agent/tools/workspace_reader.py`)
+never receive `workspace_id` from the model — `_run_tool` injects
+`session.workspace_id` into their arguments, overriding anything the model
+supplied, so a hallucinated or prompt-injected ID can never reach a
+Workspace this session wasn't authorized for.
 """
 import os
 import json
@@ -68,6 +79,9 @@ INLINE_SNIPPET_CHARS = 8000
 IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"}
 TEXT_READERS = {"pdf": read_pdf, "docx": read_docx, "csv": read_csv,
                 "txt": read_txt, "md": read_txt, "json": read_json}
+# Tools whose workspace_id arg is always injected from the session, never
+# the model (Bab 69.5, Tahap 23) — see _run_tool.
+WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file"}
 
 SYSTEM_PROMPT = """Kamu adalah asisten AI lokal untuk pekerjaan file & GIS, berjalan dengan model Gemma.
 Kamu bisa membaca dan membuat/mengonversi file: PDF, DOCX, TXT, CSV, JSON, gambar (JPG/PNG/TIFF), dan GIS (KML/GeoJSON/SHP).
@@ -83,13 +97,15 @@ ATURAN:
 - Untuk hasil GIS, buat laporan mencakup: jumlah bidang/poligon (`polygon_count`), total luas, rata-rata luas, poligon terbesar & terkecil beserta namanya, lalu TABEL rincian tiap bidang yang tersedia (Nama | Luas (Ha) | Centroid). Bila `polygons_truncated` true, sebutkan bahwa hanya `polygons_shown` dari `polygon_count` bidang yang dirinci sedangkan agregat sudah mencakup semua.
 - Bila informasi yang ditanyakan sudah ada di hasil tool sebelumnya pada percakapan ini, jawab langsung tanpa memanggil tool lagi.
 - Kamu TIDAK bisa membuat/menggambar gambar baru; untuk gambar hanya bisa baca, konversi, resize, crop, rotate, kompres.
+- Bila sesi ini terhubung ke sebuah Project Workspace (lihat catatan "[Project Workspace terhubung]" di pesan pengguna), dan permintaan pengguna merujuk pekerjaan/dokumen pada Project itu (bukan file yang diunggah langsung), PANGGIL `workspace_list_files` dulu untuk melihat daftar filenya, lalu `workspace_read_file` untuk membaca isi salah satu file sebelum menjawab. Jangan mengarang isi file Workspace.
 """
 
 
 class Session:
-    def __init__(self, session_id: str, owner: Optional[str] = None):
+    def __init__(self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None):
         self.id = session_id
         self.owner = owner  # Principal.api_key of whoever created it (Tahap 22); None if unset
+        self.workspace_id = workspace_id  # bound Project Workspace (Tahap 23); None if unset
         self.messages: List[Dict[str, Any]] = []   # Ollama-format chat history
         self.history: List[Dict[str, Any]] = []     # display items for the UI
         self.files: List[str] = []  # absolute paths of uploaded files
@@ -107,13 +123,22 @@ class ChatEngine:
         self.sessions: Dict[str, Session] = {}
 
     # ── Session helpers ──
-    def get_session(self, session_id: str, owner: Optional[str] = None) -> Session:
+    def get_session(
+        self, session_id: str, owner: Optional[str] = None, workspace_id: Optional[str] = None
+    ) -> Session:
         """Fetch or create a session. ``owner`` is only recorded at creation —
         an existing session's owner never changes (Tahap 22: first caller to
         touch a session_id owns it; api/routes/chat.py enforces this before
-        calling here, this method itself doesn't check anything)."""
+        calling here, this method itself doesn't check anything). ``workspace_id``
+        is first-non-null-wins (Tahap 23): binds on creation, or on a later
+        call if the session didn't have one yet — never overwrites an
+        already-bound value."""
         if session_id not in self.sessions:
-            self.sessions[session_id] = Session(session_id, owner=owner)
+            self.sessions[session_id] = Session(session_id, owner=owner, workspace_id=workspace_id)
+        else:
+            session = self.sessions[session_id]
+            if session.workspace_id is None and workspace_id is not None:
+                session.workspace_id = workspace_id
         return self.sessions[session_id]
 
     def list_sessions(self, owner: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -191,6 +216,11 @@ class ChatEngine:
             parts.append(f"\n\nFile terlampir (pakai path ini untuk argumen file_path):\n{listing}")
         if context_blocks:
             parts.append("\n\n" + "\n\n".join(context_blocks))
+        if session.workspace_id:
+            parts.append(
+                "\n\n[Project Workspace terhubung — pakai tool workspace_list_files/"
+                "workspace_read_file untuk membaca isinya bila relevan dengan permintaan ini.]"
+            )
 
         msg: Dict[str, Any] = {"role": "user", "content": "".join(parts)}
         if images_b64:
@@ -223,7 +253,9 @@ class ChatEngine:
                     yield json.loads(line)
 
     # ── Execute one tool call, normalising args + paths ──
-    async def _run_tool(self, registry, name: str, args: Any, role: Optional[str] = None) -> Dict[str, Any]:
+    async def _run_tool(
+        self, registry, name: str, args: Any, role: Optional[str] = None, workspace_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         if isinstance(args, str):
             try:
                 args = json.loads(args)
@@ -231,6 +263,13 @@ class ChatEngine:
                 args = {"input": args}
         if not isinstance(args, dict):
             args = {"input": args}
+        if name in WORKSPACE_TOOL_NAMES:
+            # Never trust a model-supplied workspace_id (Tahap 23) — this is
+            # the actual boundary preventing a hallucinated/injected ID from
+            # reaching a Workspace this session wasn't authorized for.
+            if not workspace_id:
+                return {"error": "Sesi ini belum terhubung ke Project Workspace.", "success": False}
+            args["workspace_id"] = workspace_id
         # Resolve any path-ish argument against uploads/reports.
         for key in ("file_path", "path", "source"):
             if key in args and isinstance(args[key], str):
@@ -253,9 +292,10 @@ class ChatEngine:
                          new_files: Optional[List[str]] = None,
                          model: Optional[str] = None,
                          role: Optional[str] = None,
-                         owner: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
+                         owner: Optional[str] = None,
+                         workspace_id: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
         model = model or self.default_model
-        session = self.get_session(session_id, owner=owner)
+        session = self.get_session(session_id, owner=owner, workspace_id=workspace_id)
         new_files = [self.resolve_path(f) for f in (new_files or [])]
         for f in new_files:
             session.add_file(f)
@@ -308,7 +348,7 @@ class ChatEngine:
                             continue
                         any_tool_called = True
                         yield {"type": "tool_start", "name": name, "args": args}
-                        result = await self._run_tool(registry, name, args, role)
+                        result = await self._run_tool(registry, name, args, role, session.workspace_id)
                         ok = not (isinstance(result, dict) and (result.get("success") is False or
                                   ("error" in result and "success" not in result)))
                         summary = self._summarize_result(result)
@@ -336,7 +376,7 @@ class ChatEngine:
 
             # Optional deterministic fallback when the model ignored tools.
             if not any_tool_called and not produced_files:
-                async for ev in self._fallback(session, user_text, new_files, model, role):
+                async for ev in self._fallback(session, user_text, new_files, model, role, session.workspace_id):
                     if ev.get("type") == "file":
                         produced_files.append(ev.get("_path", ""))
                     yield {k: v for k, v in ev.items() if not k.startswith("_")}
@@ -348,7 +388,9 @@ class ChatEngine:
         yield {"type": "done"}
 
     # ── Heuristic fallback (small models that don't emit tool_calls) ──
-    async def _fallback(self, session, user_text, new_files, model, role: Optional[str] = None) -> AsyncIterator[dict]:
+    async def _fallback(
+        self, session, user_text, new_files, model, role: Optional[str] = None, workspace_id: Optional[str] = None
+    ) -> AsyncIterator[dict]:
         g = user_text.lower()
         registry = self._registry(model)
         # Only acts on an obvious "convert/create file" intent with an uploaded file.
@@ -364,7 +406,7 @@ class ChatEngine:
             return
         name, args = target
         yield {"type": "tool_start", "name": name, "args": args}
-        result = await self._run_tool(registry, name, args, role)
+        result = await self._run_tool(registry, name, args, role, workspace_id)
         ok = not (isinstance(result, dict) and result.get("success") is False)
         yield {"type": "tool_result", "name": name, "ok": ok, "summary": self._summarize_result(result)}
         if ok and isinstance(result, dict) and result.get("file"):

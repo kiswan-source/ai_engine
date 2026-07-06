@@ -100,6 +100,13 @@ TOOL_SCHEMAS = [
     _fn("mcp_call_tool", "Panggil satu tool di MCP server (pakai mcp_list_tools dulu untuk lihat nama & argumennya).",
         {"server": _STR, "tool_name": _STR, "arguments": {"type": "object"}},
         ["server", "tool_name"]),
+
+    # ── Agent Workspace Context (Bab 69.5) ── no workspace_id property on
+    # either — ChatEngine injects it from the session, never from the model.
+    _fn("workspace_list_files", "Daftar semua file di Project Workspace yang terhubung ke sesi chat ini (folder lokal yang diregistrasikan). Panggil ini dulu sebelum membaca file dari Workspace.",
+        {}, []),
+    _fn("workspace_read_file", "Baca isi satu file dokumen (pdf/txt/docx/csv/json) dari Project Workspace. Pakai folder_id dan relative_path PERSIS dari hasil workspace_list_files.",
+        {"folder_id": _STR, "relative_path": _STR}, ["folder_id", "relative_path"]),
 ]
 
 # Quick lookup of which tools we expose to the model.

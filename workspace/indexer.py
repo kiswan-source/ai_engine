@@ -41,7 +41,11 @@ _READERS = {
 }
 
 
-def _extract_text(adapter: FilesystemAdapter, relative_path: str) -> str | None:
+def extract_text(adapter: FilesystemAdapter, relative_path: str) -> str | None:
+    """Dispatch to the right `agent/tools/readers.py` parser by extension;
+    ``None`` for an unsupported extension or a file that failed to parse.
+    Public (Tahap 23) — also used by `agent/tools/workspace_reader.py`'s
+    `workspace_read_file` tool, not just `index_folder` below."""
     ext = os.path.splitext(relative_path)[1].lower().lstrip(".")
     reader = _READERS.get(ext)
     if reader is None:
@@ -71,7 +75,7 @@ async def index_folder(
     for f in scan.files:
         if f.category != "document":
             continue
-        text = _extract_text(adapter, f.relative_path)
+        text = extract_text(adapter, f.relative_path)
         if not text:
             continue
         chunk_ids = await retriever.index_document(

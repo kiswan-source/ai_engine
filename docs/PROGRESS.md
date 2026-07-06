@@ -34,6 +34,7 @@
 | 20* | Sambungkan RBAC ke ChatEngine — tutup gap yang diakui sejak Tahap 10/16/17/18 | ✅ SELESAI |
 | 21* | Dockerfile multi-stage (Bab 37 rule 2) — `docker/Dockerfile.api`/`Dockerfile.worker` + `.dockerignore` baru | ✅ SELESAI |
 | 22* | Kepemilikan sesi Chat — tutup gap yang sengaja ditinggalkan Tahap 20 | ✅ SELESAI |
+| 23* | Agent Workspace Context ke ChatEngine (Bab 69.5) — Chat bisa baca Project Workspace, bukan cuma Uploaded Files | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1212,9 +1213,112 @@ orang lain bisa membaca riwayatnya, melanjutkannya, atau menghapusnya.
   sama sekali → sesi bisa dibaca tanpa auth, persis perilaku sebelum
   Tahap ini (nol regresi ke alur dev normal).
 
+**Tahap 23 — Agent Workspace Context ke ChatEngine (Bab 69.5)**
+
+Dipilih lewat `AskUserQuestion` dari 4 kandidat (MCP Server / kepemilikan
+file download / Agent Workspace Context / loose ends Docker). Menutup gap
+yang dicatat sejak Tahap 19: Project Workspace dibangun penuh di
+backend/API tapi `core/chat/engine.py` tak pernah punya cara membacanya —
+Chat cuma tahu Uploaded Files.
+
+- **RBAC dicek SEKALI per HTTP request di rute, bukan per panggilan tool**
+  — `ChatRequest.workspace_id` baru; kalau diisi, `api/routes/chat.py`
+  meresolusi role Project pemanggil (pakai ulang `_role_for` milik
+  `projects.py`, helper yang sama dipakai `workspace.py`) dan mewajibkan
+  `require_workspace_permission(role, "read")` — 403 SEBELUM
+  `StreamingResponse` dikembalikan (alasan sama seperti Tahap 22: raise di
+  dalam generator SSE cuma jadi body 200 rusak). Pendekatan cek-di-tiap-
+  panggilan-tool dipertimbangkan lalu ditolak: itu berarti `agent/tools/`
+  harus mengimpor dari `api/routes/`, arah dependensi yang salah (lihat
+  aturan yang sama di docstring `workspace/indexer.py`). Trade-off yang
+  diterima & didokumentasikan: kalau frontend terus mengirim ulang
+  `workspace_id` tiap pesan (hal wajar untuk UI yang menampilkan "terhubung
+  ke Project X"), cek berjalan ulang tiap pesan; kalau tidak, nilai yang
+  sudah terikat di sesi dipercaya untuk sisa sesi itu — pola kepercayaan
+  yang sama dipakai kepemilikan sesi (Tahap 22). Tidak ada
+  `Depends(get_session)` di rute ini — sesi DB dibuka manual, cuma di
+  dalam cabang `if req.workspace_id`, supaya chat biasa yang tak pakai
+  Workspace tidak menanggung round-trip DB tambahan.
+- **`core/chat/engine.py` (folder fondasi, aditif murni)**: `Session` dapat
+  `workspace_id`, pola first-non-null-wins sama seperti `owner`. Model
+  TIDAK PERNAH boleh memberi `workspace_id` sendiri — `_run_tool`
+  menyuntikkan `session.workspace_id`, menimpa apa pun yang disodorkan
+  model. Inilah batas keamanan sesungguhnya (mencegah ID yang dihalusinasi
+  atau hasil prompt injection menjangkau Workspace yang tak diotorisasi
+  untuk sesi ini) — pola yang sama seperti `_run_tool` sudah menormalkan
+  `file_path`/`path`/`source` lewat `resolve_path`, cuma satu kasus
+  sanitasi argumen lagi. `SYSTEM_PROMPT` + `_build_user_message` dapat
+  catatan singkat saat `workspace_id` terikat, supaya model tak lupa
+  sepanjang percakapan.
+- **Dua tool baru, sync wrapper di atas kerja DB/file async** — pola PERSIS
+  `mcp_list_tools`/`mcp_call_tool` (Tahap 17): `workspace_list_files()`
+  (nol argumen dari model) dan `workspace_read_file(folder_id,
+  relative_path)` (baca teks dokumen — pdf/txt/docx/csv/json, kategori
+  yang sama dipakai indexer Tahap 19; gambar/GIS di Workspace sengaja
+  BELUM disentuh, itu baris "Vision" Bab 69.5, integrasi terpisah karena
+  hasil tool hari ini teks JSON bukan input vision). File baru
+  `agent/tools/workspace_reader.py` (sejajar `readers.py`/`writers.py`/
+  `gis_io.py`/`images.py`) — `agent/tools/registry.py` sendiri cuma dapat
+  satu import + dua `registry.register(...)`, pola yang sama dipakai
+  Plugin/MCP Tahap 16/17. `extract_text` di `workspace/indexer.py`
+  dipromosikan dari privat (`_extract_text`) jadi publik supaya dipakai
+  ulang, bukan diimplementasi ulang ketiga kalinya. Ungated di
+  `TOOL_RISK_ACTIONS` — read-only, postur sama seperti `read_*`/
+  `mcp_list_tools`; gerbang sungguhan sudah terjadi sekali di rute.
+- **Bug nyata ketemu lewat verifikasi live sungguhan, bukan asumsi
+  dari desain** — percobaan live PERTAMA gagal dengan
+  `Future ... attached to a different loop` dari Postgres asli.
+  Akar masalah: `db.connection.AsyncSessionFactory` (engine global,
+  dibangun sekali di event loop utama uvicorn) TIDAK BISA dipakai ulang
+  dari dalam `asyncio.run()` yang dijalankan `_run_tool`'s
+  `asyncio.to_thread` — thread baru itu bikin event loop BARU, dan koneksi
+  asyncpg terikat ke loop tempat ia dibuat. Pola `asyncio.run()`-di-dalam-
+  `asyncio.to_thread` yang sama dipakai `mcp_list_tools` AMAN untuk MCP
+  (semua state dibuat baru tiap panggilan) tapi TIDAK aman untuk resource
+  async yang sudah ada sebelumnya seperti connection pool global. **Fix**:
+  `workspace_list_files`/`workspace_read_file` membangun engine BARU dari
+  `settings.DATABASE_URL` tiap panggilan (dibuang setelah), bukan memakai
+  ulang factory global — `_list_files`/`_read_file` sendiri tetap punya
+  default ke factory global untuk pemanggil di loop yang sama (mis. test).
+- **Sengaja TIDAK disentuh**: `/api/v1/chat/download/{filename}` (gap
+  terpisah dari Tahap 22, belum ditutup); Workspace gambar/GIS lewat Chat
+  (baris Vision Bab 69.5, integrasi lebih besar, follow-up terpisah).
+- **15 test baru** (504/504 total, stabil 2x berturut-turut): 8 unit
+  `test_workspace_reader.py` (baca sungguhan, workspace/folder tak
+  ditemukan, ekstensi tak didukung, source_type non-Local, plumbing
+  sync-wrapper via `asyncio.run`), 5 unit
+  `test_chat_engine_workspace_context.py` (`_run_tool` menimpa
+  `workspace_id` palsu dari model, error "belum terhubung" tanpa
+  `workspace_id`, `stream_run` mempertahankan ikatan lintas pesan), 2
+  integrasi `test_chat_workspace_context_api.py` — REGISTRY SUNGGUHAN
+  (bukan fake), Project+Workspace+folder sungguhan (sqlite berbasis file,
+  bukan `:memory:`, persis alasan yang sama dengan bug cross-loop di
+  atas), model palsu memanggil `workspace_list_files` lalu
+  `workspace_read_file` dengan `workspace_id` PALSU sengaja disisipkan di
+  argumen tool call → dikonfirmasi tetap berhasil (bukti penimpaan
+  bekerja), plus non-anggota Project ditolak 403 sebelum streaming mulai.
+- **Diverifikasi live sungguhan lewat model asli** (dua putaran, putaran
+  pertama menemukan bug cross-loop di atas, putaran kedua setelah fix):
+  Project+Workspace+folder sungguhan dibuat via API, folder berisi file
+  `.txt` dengan fakta unik (kadar Cu 1.85%, Ag 45 g/t). Ditanya lewat
+  `/api/v1/chat/stream` dengan `workspace_id` terikat — `gemma4:e2b` BENAR
+  memanggil `workspace_list_files` lalu `workspace_read_file` dengan
+  `folder_id`/`relative_path` yang diambil TEPAT dari hasil panggilan
+  pertama, jawaban akhir mengutip **1.85% dan 45 g/t PERSIS** dari isi
+  file sungguhan (bukan halusinasi). RBAC live: `API_KEYS` sementara
+  diisi, pemilik Project baru → chat dengan `workspace_id` itu sukses
+  (200); "stranger" (bukan anggota Project) → 403 sungguhan
+  (`"project role None lacks workspace permission 'read'"`) SEBELUM
+  streaming dimulai. `.env` dikembalikan persis, service di-restart,
+  folder scratch + Project/Workspace test dihapus (satu baris tersisa
+  soft-deleted+yatim dari sesi RBAC sementara — tak berbahaya, konsisten
+  dengan pola pembersihan Tahap-Tahap sebelumnya).
+
 ## Test
-- **Backend: 489/489 lulus** (`pytest -q`, stabil berturut-turut) — naik
-  dari 481 lewat 8 test kepemilikan sesi Chat (Tahap 22, lihat detail di
+- **Backend: 504/504 lulus** (`pytest -q`, stabil 2x berturut-turut) —
+  naik dari 489 lewat 15 test Agent Workspace Context (Tahap 23, lihat
+  detail di atas). Sebelumnya naik dari 481 lewat 8 test kepemilikan sesi
+  Chat (Tahap 22, lihat detail di
   atas: `test_chat_session_ownership.py`). Sebelumnya naik dari 474 lewat 7
   test RBAC ChatEngine (Tahap 20, lihat detail di atas: 4
   unit `test_chat_engine_rbac.py`, 3 integrasi `test_chat_api_rbac.py`;
@@ -1252,7 +1356,7 @@ orang lain bisa membaca riwayatnya, melanjutkannya, atau menghapusnya.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-22, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-23, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1260,11 +1364,16 @@ orang lain bisa membaca riwayatnya, melanjutkannya, atau menghapusnya.
   **Kepemilikan sesi Chat SELESAI juga (Tahap 22)** — `session_id` kini
   terikat `Principal.api_key` yang pertama menyentuhnya; orang lain
   ditolak 403 baca/lanjut/hapus/upload, `GET /sessions` cuma tampilkan
-  milik sendiri. Yang masih terbuka: `/download/{filename}` tetap tak
-  terikat sesi/identitas sama sekali (gap terpisah, sengaja tak digabung
-  ke Tahap 22 — lihat detail di atas). Rute API selain yang sudah opt-in
-  RBAC (chat, agent/run, projects, workspace) masih terbuka tanpa
-  autentikasi.
+  milik sendiri. **Agent Workspace Context ke ChatEngine SELESAI juga
+  (Tahap 23)** — Chat kini bisa `workspace_list_files`/`workspace_read_file`
+  dari Project Workspace (Tahap 19), digerbang RBAC Project-role sekali di
+  rute, `workspace_id` selalu disuntik dari sesi (tak pernah dari model).
+  Yang masih terbuka: `/download/{filename}` tetap tak terikat
+  sesi/identitas sama sekali (gap terpisah, sengaja tak digabung ke Tahap
+  22/23 — lihat detail di atas); gambar/GIS di Workspace belum bisa dibaca
+  lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute API selain
+  yang sudah opt-in RBAC (chat, agent/run, projects, workspace) masih
+  terbuka tanpa autentikasi.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1453,28 +1562,29 @@ Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 `write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
 ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
 hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
-multi-stage (Tahap 21, ADR-0011 gap ditutup), dan kepemilikan sesi Chat
-(Tahap 22) semua selesai 2026-07-06. **Seluruh 5 area Phase 3
+multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
+(Tahap 22), dan Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5)
+semua selesai 2026-07-06. **Seluruh 5 area Phase 3
 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
 Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
-satu-satunya jalur yang mengeksekusi tool (Chat) DAN sesi Chat kini
-terikat identitas pemiliknya, dan image Docker turun 2.83GB→699MB dengan
-bug keamanan nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) MCP Server
-(sisi Bab 60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX
-(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
-butuh API >1 replika di produksi; (3) Bab 68 Enterprise Architecture
-Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
-dimulai; (4) `/api/v1/chat/download/{filename}` belum terikat
-sesi/identitas — gap yang Tahap 22 sengaja tidak tutup (beda dari
-kepemilikan sesi yang sudah tertutup), file produksi siapa pun bisa
-diunduh siapa saja yang tahu namanya; (5) sambungkan Agent Workspace
-Context (Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari
-Project Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
-Tahap 19; (6) instal `tesseract-ocr` di Dockerfile (gap pra-ada ditemukan
-tak sengaja Tahap 21 — `pytesseract` ada di `requirements.txt` tapi
-binary-nya tak pernah diinstal, OCR lewat `read_image` kemungkinan gagal
-senyap di Docker); (7) `HEALTHCHECK` eksplisit di
+satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat kini terikat
+identitas pemiliknya, Chat kini bisa membaca Project Workspace bukan cuma
+Uploaded Files, dan image Docker turun 2.83GB→699MB dengan bug keamanan
+nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat prioritas
+berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab 60
+yang sengaja ditunda Tahap 17); (2) solusi storage RWX (StorageClass
+NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
+replika di produksi; (3) Bab 68 Enterprise Architecture Backlog (20
+prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4)
+`/api/v1/chat/download/{filename}` belum terikat sesi/identitas — gap
+yang Tahap 22/23 sengaja tidak tutup, file produksi siapa pun bisa
+diunduh siapa saja yang tahu namanya; (5) gambar/GIS di Workspace belum
+bisa dibaca lewat Chat — baris Vision Bab 69.5, gap yang Tahap 23 sengaja
+tinggalkan (hasil tool hari ini teks JSON, bukan input vision, integrasi
+lebih besar); (6) instal `tesseract-ocr` di Dockerfile (gap pra-ada
+ditemukan tak sengaja Tahap 21 — `pytesseract` ada di `requirements.txt`
+tapi binary-nya tak pernah diinstal, OCR lewat `read_image` kemungkinan
+gagal senyap di Docker); (7) `HEALTHCHECK` eksplisit di
 `Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
 menambahkannya, di luar cakupan saat itu).
 
