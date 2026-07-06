@@ -38,6 +38,7 @@
 | 24* | Kepemilikan file download Chat — tutup gap yang sengaja ditinggalkan Tahap 22/23 | ✅ SELESAI |
 | 25* | Autentikasi + fix path traversal `api/routes/files.py` — tutup bypass nyata yang ditemukan Tahap 24 | ✅ SELESAI |
 | 26* | Autentikasi `memory.py`/`monitoring.py`/`knowledge.py` — pola gap sama seperti `files.py` sebelum Tahap 25 | ✅ SELESAI |
+| 27* | Loose ends Docker — `tesseract-ocr`/`tesseract-ocr-ind` + `HEALTHCHECK` di `Dockerfile.api`/`Dockerfile.worker` (gap dicatat Tahap 21) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1491,9 +1492,74 @@ yang punya `<a href>` biasa.
   perilaku dev normal (tanpa `API_KEYS`) dikonfirmasi tak berubah di
   ketiga rute.
 
+**Tahap 27 — Loose ends Docker (`tesseract-ocr` + `HEALTHCHECK`)**
+
+Dipilih lewat `AskUserQuestion` sebagai yang termurah dari 4 kandidat.
+Menutup dua gap yang sama-sama dicatat eksplisit di Tahap 21 sebagai
+"ditemukan tak sengaja, di luar cakupan saat itu" — bukan regresi baru,
+dua celah lama yang sengaja ditunda.
+
+- **`tesseract-ocr` + `tesseract-ocr-ind` ditambahkan ke stage runtime
+  kedua Dockerfile** (`docker/Dockerfile.api` dan `docker/Dockerfile.worker`
+  — worker ikut disentuh karena keduanya menjalankan `agent/tools/registry.py`
+  yang sama, sebuah job bisa memanggil `read_image()` persis seperti
+  panggilan tool Chat). `agent/tools/readers.py::read_image()` memanggil
+  `pytesseract.image_to_string(img, lang="eng+ind")` — `pytesseract` cuma
+  wrapper Python murni di sekitar binary CLI `tesseract` (ada di
+  `requirements.txt`, tapi binary-nya sendiri tak pernah diinstal di image
+  manapun), dan paket Debian `tesseract-ocr` defaultnya cuma membawa data
+  bahasa Inggris — `tesseract-ocr-ind` adalah paket terpisah untuk separuh
+  "ind" dari `"eng+ind"`, wajib karena ini alat dokumen pertambangan
+  Indonesia.
+- **`HEALTHCHECK` ditambahkan ke keduanya, dengan mekanisme berbeda**:
+  `Dockerfile.api` pakai `curl -f http://localhost:8000/health/` (endpoint
+  liveness murah, BUKAN `/health/ready` — `/health/ready` memanggil
+  `check_readiness()` yang menghubungi Ollama + tiap provider cloud
+  sungguhan, diukur Tahap 26 makan 9-32 detik; menjadikannya healthcheck
+  tiap 30 detik berarti API bisa ditandai "unhealthy" cuma karena Ollama
+  sedang lambat sesaat). `Dockerfile.worker` tidak punya server HTTP sama
+  sekali (RQ worker) — dipakai `python -c "...redis.from_url(...).ping()"`
+  sebagai gantinya, satu-satunya dependency nyata yang dibutuhkan
+  `worker_ai`/`worker_gis` (image sama, `command:` beda di
+  `docker-compose.yml`) untuk bisa maju; tidak membuktikan loop kerja RQ
+  itu sendiri tak macet, cuma bahwa proses masih bisa menjangkau antrian —
+  batas yang lebih longgar dari API, diakui sadar (bukan false-precision).
+- **Diverifikasi live penuh, bukan cuma review**: `docker compose build
+  --no-cache` ketiga image → `tesseract --list-langs` di dalam image
+  mengonfirmasi `eng`+`ind`+`osd` tersedia → **`read_image()` yang
+  SESUNGGUHNYA dipanggil di dalam container** (bukan cuma binary
+  `tesseract` langsung) terhadap gambar PNG buatan sendiri berisi teks
+  `"Izin Usaha Pertambangan Wilayah Kalimantan"` → OCR mengembalikan teks
+  itu persis, `has_ocr_text: true` — membuktikan jalur kode nyata, bukan
+  cuma paket terinstal. `docker compose up -d --no-deps api worker_ai
+  worker_gis` merecreate ketiga container dari image baru →
+  `docker ps`/`docker inspect .State.Health` ketiganya `healthy` dalam
+  <20 detik, log health check API menunjukkan probe HTTP sungguhan
+  (`{"status":"ok","service":"AI Engine"}`, exit 0), log worker
+  menunjukkan `redis.ping()` sukses (exit 0).
+- **Koreksi catatan basi ditemukan saat menulis Tahap ini** (pola sama
+  seperti koreksi `projects.py` di Tahap 26): bagian "Gap kumulatif" masih
+  menyimpan kalimat lama dari Tahap 19 yang bilang "`core/chat/engine.py`
+  belum workspace-aware... ChatEngine masih hanya tahu Uploaded Files" —
+  ini sudah salah sejak Tahap 23 (Agent Workspace Context) menutupnya.
+  Diperbaiki di bagian yang sama, bukan dibiarkan kontradiksi dengan
+  paragraf Tahap 20-26 tepat di atasnya.
+- **Tidak ada test Python baru** — perubahan murni Docker/infrastruktur,
+  tak ada logika Python yang berubah. `pytest -q` penuh tetap 539/539,
+  dijalankan ulang untuk konfirmasi nol regresi tak terduga.
+- **Gap yang diakui**: `HEALTHCHECK` worker cuma menjamin konektivitas
+  Redis, bukan bahwa loop `worker.work()` benar-benar memproses job (mis.
+  proses bisa saja hidup+terhubung Redis tapi macet di satu job) — heartbeat
+  RQ yang lebih tepat (`rq info`/`Worker.all()`) di luar cakupan tugas
+  kecil ini, dicatat sebagai kandidat lanjutan kalau pernah jadi masalah
+  nyata di produksi.
+
 ## Test
 - **Backend: 539/539 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~13 detik total) — naik dari 521 lewat 20 test autentikasi
+  ~13 detik total) — tetap 539 di Tahap 27 (loose ends Docker, murni
+  infrastruktur, nol test Python baru; diverifikasi live lewat rebuild
+  image + `docker inspect` alih-alih pytest, lihat detail di atas).
+  Sebelumnya naik dari 521 lewat 20 test autentikasi
   `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26, lihat detail di
   atas). Sebelumnya naik dari 510 lewat 11 test autentikasi+traversal
   `files.py` (Tahap 25, lihat detail di atas). Sebelumnya naik dari 504
@@ -1539,7 +1605,7 @@ yang punya `<a href>` biasa.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-26, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-27, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1571,14 +1637,26 @@ yang punya `<a href>` biasa.
   bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
-  makin sedikit yang tersisa.
+  makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
+  — `tesseract-ocr`/`tesseract-ocr-ind` terinstal (OCR `read_image` yang
+  sebelumnya kemungkinan gagal senyap di Docker sejak awal kini
+  diverifikasi live benar-benar bekerja di dalam container) dan
+  `HEALTHCHECK` eksplisit ada di kedua Dockerfile (API via `/health/`,
+  worker via ping Redis). Gap tersisa: healthcheck worker cuma menjamin
+  konektivitas Redis, bukan bahwa `worker.work()` benar-benar memproses
+  job.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
-  menerima. `core/chat/engine.py` belum workspace-aware — Agent Workspace
-  Context (Bab 69.5) baru ada di backend/API, belum ada tool Chat yang
-  membaca dari Workspace, jadi ChatEngine masih hanya tahu Uploaded Files
-  seperti sebelumnya. Tidak ada cache counts persisten — `workspace_dashboard()`
+  menerima. **Koreksi catatan basi (ditemukan saat menulis Tahap 27,
+  pola sama seperti koreksi `projects.py` Tahap 26)**: kalimat di sini dulu
+  bilang "`core/chat/engine.py` belum workspace-aware... ChatEngine masih
+  hanya tahu Uploaded Files" — itu sudah salah sejak Tahap 23 menutupnya
+  (lihat paragraf Tahap 23 di atas: `workspace_list_files`/
+  `workspace_read_file` sungguhan tersambung, RBAC Project-role sekali di
+  rute). Gap yang MASIH benar: hanya dokumen (pdf/txt/docx/csv/json) yang
+  bisa dibaca lewat Chat dari Workspace — gambar/GIS Workspace masih baris
+  Vision Bab 69.5 terpisah. Tidak ada cache counts persisten — `workspace_dashboard()`
   dan `GET .../status` re-scan filesystem tiap dipanggil (O(files on disk)),
   bukan baca dari kolom ter-materialisasi. Tidak ada interactive browser
   drive (tidak ada Playwright/Cypress di repo ini) — WorkspacePage.tsx
@@ -1763,34 +1841,36 @@ hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
 multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
 (Tahap 22), Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5),
 kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
-`api/routes/files.py` (Tahap 25), dan autentikasi
-`memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26) semua selesai
+`api/routes/files.py` (Tahap 25), autentikasi
+`memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), dan loose ends
+Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27) semua selesai
 2026-07-06. **Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini
 punya kode nyata**, ditambah kapabilitas Workspace baru di atasnya, gate
 RBAC kini benar-benar hidup di satu-satunya jalur yang mengeksekusi tool
 (Chat), sesi Chat DAN file hasil kerjanya (di kedua rute yang
 menyajikannya) DAN memori/monitoring/knowledge kini terikat autentikasi,
-Chat kini bisa membaca Project Workspace bukan cuma Uploaded Files, dan
-image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
-ter-bake ke image) tertutup sekalian. **Dicek ulang sebelum ditulis di sini** (bukan
-diasumsikan dari catatan lama): `projects.py` TERNYATA sudah punya
-`Depends(get_current_principal)` di SETIAP rute sejak Tahap 13 —
-catatan gap lama yang bilang "endpoint projects.py masih terbuka" sudah
-basi, diperbaiki di bagian "Untuk lanjutan frontend" di bawah. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) MCP Server
-(sisi Bab 60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX
-(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
-butuh API >1 replika di produksi; (3) Bab 68 Enterprise Architecture
-Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
-dimulai; (4) gambar/GIS di Workspace belum bisa dibaca lewat Chat —
-baris Vision Bab 69.5, gap yang Tahap 23 sengaja tinggalkan (hasil tool
-hari ini teks JSON, bukan input vision, integrasi lebih besar); (5)
-instal `tesseract-ocr` di Dockerfile (gap pra-ada ditemukan tak sengaja
-Tahap 21 — `pytesseract` ada di `requirements.txt` tapi binary-nya tak
-pernah diinstal, OCR lewat `read_image` kemungkinan gagal senyap di
-Docker); (6) `HEALTHCHECK` eksplisit di
-`Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
-menambahkannya, di luar cakupan saat itu).
+Chat kini bisa membaca Project Workspace bukan cuma Uploaded Files, image
+Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
+image) tertutup sekalian, dan OCR+HEALTHCHECK Docker kini nyata bekerja
+(diverifikasi live, bukan cuma paket terinstal). **Dicek ulang sebelum
+ditulis di sini** (bukan diasumsikan dari catatan lama): `projects.py`
+TERNYATA sudah punya `Depends(get_current_principal)` di SETIAP rute
+sejak Tahap 13 — catatan gap lama yang bilang "endpoint projects.py masih
+terbuka" sudah basi, diperbaiki di bagian "Untuk lanjutan frontend" di
+bawah; dan bagian "Gap kumulatif" Tahap 19 masih menyimpan klaim basi
+"ChatEngine belum workspace-aware" yang sudah salah sejak Tahap 23 —
+dikoreksi Tahap 27. Kandidat prioritas berikutnya, dari yang paling murah
+dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja ditunda Tahap 17);
+(2) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (3) Bab 68
+Enterprise Architecture Backlog (20 prioritas di
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4) gambar/GIS di
+Workspace belum bisa dibaca lewat Chat — baris Vision Bab 69.5, gap yang
+Tahap 23 sengaja tinggalkan (hasil tool hari ini teks JSON, bukan input
+vision, integrasi lebih besar); (5) heartbeat RQ yang lebih tepat untuk
+`HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas Redis, bukan
+bahwa `worker.work()` sungguh memproses job) — kandidat kecil, cuma
+relevan kalau pernah jadi masalah nyata di produksi.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

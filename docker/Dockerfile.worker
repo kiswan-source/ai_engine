@@ -21,9 +21,16 @@ FROM python:3.12-slim
 # libexpat1: see docker/Dockerfile.api's comment on the same line — fiona's
 # wheel doesn't bundle it, and it stopped arriving transitively once
 # libgdal-dev left this stage.
+#
+# tesseract-ocr + tesseract-ocr-ind: see docker/Dockerfile.api's comment on
+# the same line. Workers run the same agent/tools/registry.py tool set as
+# the API (a job can invoke read_image() just like a chat tool call can), so
+# they need the identical OCR binary + language data.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libexpat1 \
+    tesseract-ocr \
+    tesseract-ocr-ind \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -34,3 +41,13 @@ COPY . .
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
+
+# No HTTP server to curl (RQ workers, unlike the API, don't expose one) —
+# checked via Redis reachability instead, the one dependency both
+# worker_ai and worker_gis (same image, different `command:` in
+# docker-compose.yml) actually need to make progress. Doesn't prove the RQ
+# work loop itself hasn't wedged, only that the process can still reach its
+# queue — a lighter bar than the API's check, but the only one available
+# without adding an RQ-specific heartbeat mechanism (out of scope here).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import redis; from api.config import settings; redis.from_url(settings.REDIS_URL).ping()" || exit 1

@@ -33,9 +33,21 @@ FROM python:3.12-slim
 # "ImportError: libexpat.so.1: cannot open shared object file" the first
 # time this stage dropped libgdal-dev (which used to pull it in
 # transitively via apt, masking the real dependency).
+#
+# tesseract-ocr + tesseract-ocr-ind — agent/tools/readers.py::read_image()
+# calls pytesseract.image_to_string(img, lang="eng+ind"). pytesseract is a
+# pure-Python wrapper around the `tesseract` CLI binary (already in
+# requirements.txt, but the binary itself was never installed here, so OCR
+# failed silently/errored at runtime, never caught because no test exercises
+# a real Tesseract binary). tesseract-ocr's default Debian package only
+# ships English trained data — tesseract-ocr-ind is the separate package for
+# the Indonesian half of "eng+ind", required since this is an Indonesian
+# mining-document tool.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libexpat1 \
+    tesseract-ocr \
+    tesseract-ocr-ind \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -49,4 +61,14 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
+
+# /health/ (not /health/ready) — deliberately the cheap liveness check, not
+# the deep readiness one. /health/ready calls check_readiness(), which makes
+# real network calls to Ollama + every configured cloud provider — Tahap 26
+# measured that at 9-32s live. Polling that every 30s as a container
+# healthcheck would mark the API "unhealthy" (and get restarted by an
+# orchestrator) on nothing more than Ollama being briefly slow.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health/ || exit 1
+
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
