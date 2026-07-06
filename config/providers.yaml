@@ -1,0 +1,44 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — provider endpoints,
+# active models, and provider-layer resilience tuning. NO SECRETS HERE —
+# API keys (OPENAI_API_KEY/ANTHROPIC_API_KEY/GOOGLE_API_KEY) stay in .env
+# (Bab 58 Secrets Management). See api/config.py for the authoritative
+# field list and per-field explanation comments.
+
+# OpenAI (ChatGPT) — orchestration, planning, review, QA.
+OPENAI_BASE_URL: "https://api.openai.com/v1"
+OPENAI_MODEL: "gpt-4o"
+OPENAI_EMBED_MODEL: "text-embedding-3-small"
+
+# Anthropic (Claude) — analysis, writing, coding, critique.
+ANTHROPIC_BASE_URL: "https://api.anthropic.com"
+ANTHROPIC_VERSION: "2023-06-01"
+CLAUDE_MODEL: "claude-sonnet-5"
+
+# Google (Gemini) — research, vision, documents.
+GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_MODEL: "gemini-pro-latest"
+GEMINI_EMBED_MODEL: "gemini-embedding-001"
+
+# Ollama / Gemma (local, always available)
+OLLAMA_BASE_URL: "http://localhost:11434"
+GEMMA_MODEL: "gemma4:e2b"
+OLLAMA_TIMEOUT: 600
+OLLAMA_MAX_RETRIES: 3
+OLLAMA_NUM_CTX: 16384
+
+# Shared provider-layer resilience (Bab 9, 54)
+PROVIDER_TIMEOUT: 120
+PROVIDER_MAX_RETRIES: 2
+PROVIDER_RETRY_BACKOFF: 1.0
+
+# Circuit Breaker (Bab 55)
+ENABLE_CIRCUIT_BREAKER: true
+CIRCUIT_FAILURE_THRESHOLD: 5
+CIRCUIT_RECOVERY_TIMEOUT: 30.0
+CIRCUIT_TRIAL_REQUESTS: 1
+CIRCUIT_PROVIDER_OVERRIDES: ""
+CIRCUIT_STATE_BACKEND: "memory"
+
+# RAG embedding source (Bab 29) — which provider/model backs embeddings.
+RAG_EMBEDDING_PROVIDER: "openai"
+RAG_EMBEDDING_DIM: 1536

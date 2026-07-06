@@ -1,0 +1,22 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — Reflection/
+# Consensus/Confidence/Human Approval tuning (Bab 25-28, 57, 61). NO
+# SECRETS HERE. See api/config.py for the authoritative field list.
+
+# Reflection Engine (Bab 25): max self-review rounds before escalating.
+REFLECTION_MAX_ITERATIONS: 3
+
+# Confidence Scoring (Bab 28): per-domain thresholds — high-risk domains
+# are stricter.
+CONFIDENCE_THRESHOLD_DEFAULT: 0.6
+CONFIDENCE_THRESHOLD_HIGH_RISK: 0.85
+
+# Consensus Engine (Bab 26): structured-debate rounds before arbitration.
+CONSENSUS_DEBATE_ROUNDS: 1
+
+# Feature flags (Bab 57).
+ENABLE_CONSENSUS_VOTING: true
+ENABLE_HUMAN_APPROVAL: true
+
+# Human In The Loop (Bab 61.3): SLA before a pending approval counts as
+# overdue.
+APPROVAL_SLA_SECONDS: 3600

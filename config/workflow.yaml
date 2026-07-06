@@ -1,0 +1,19 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — task/approval state
+# backends, messaging, scheduler, MCP identity defaults. NO SECRETS HERE.
+# See api/config.py for the authoritative field list.
+
+# Messaging & task/approval state (Bab 22-23, 38, 49).
+MESSAGE_BROKER: "memory"
+TASK_STATE_BACKEND: "memory"
+TASK_STATE_TTL: 86400
+APPROVAL_STATE_BACKEND: "memory"
+
+# Automation / Scheduler (Bab 68 Prioritas 5).
+ENABLE_SCHEDULER: true
+SCHEDULER_TICK_SECONDS: 30
+
+# MCP — Model Context Protocol (Bab 60, Bab 57.1 standard flag).
+ENABLE_MCP: true
+MCP_SERVER_ROLE: "user"
+MCP_SERVER_WORKSPACE_ID: null
+MCP_SERVER_WORKSPACE_ROLE: "viewer"

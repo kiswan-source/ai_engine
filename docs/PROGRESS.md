@@ -2305,7 +2305,7 @@ Management, Configuration Center). Direncanakan lewat Plan Mode dulu.
   `worker/pipeline/jobs_pipeline.py`) TAK disentuh — mereka cuma pernah
   melihat `PromptTemplate.X.value`, tak peduli string itu datang dari
   mana.
-- **10 test baru (612/612 total, stabil 2x berturut-turut)**: 4 unit
+- **8 test baru (602/602 total, stabil 2x berturut-turut)**: 4 unit
   `test_prompt_loader.py` (frontmatter terpotong benar, file hilang
   melempar `PromptNotFoundError`/`FileNotFoundError`, file tanpa
   frontmatter tetap termuat), 4 unit `test_prompt_content_unchanged.py`
@@ -2329,9 +2329,120 @@ Management, Configuration Center). Direncanakan lewat Plan Mode dulu.
   nyata untuk dikelola versi — kalau nanti ada yang menambahkan satu,
   pola `prompts/loader.py` sudah siap dipakai tanpa desain ulang.
 
+**Tahap 38 — Configuration Center (Bab 68 Backlog Prioritas 7)**
+
+Item KEEMPAT dari Bab 68 Enterprise Architecture Backlog. Teks Prioritas
+7: "Mengurangi ketergantungan terhadap `.env` dengan sentralisasi
+konfigurasi." Folder `config/` dengan komponen minimal `providers.yaml`,
+`agents.yaml`, `workflow.yaml`, `security.yaml`, `memory.yaml`,
+`budget.yaml`. Prinsip eksplisit di teks roadmap: YAML ini MELENGKAPI
+(bukan menggantikan) Secrets Management (Bab 58) — data sensitif tetap
+lewat mekanisme secrets, `config/` cuma untuk parameter non-sensitif.
+Dipilih via `AskUserQuestion` (dari 4 kandidat: Configuration Center,
+storage RWX, item kecil lain, item Backlog lain pilihan Claude).
+Direncanakan lewat Plan Mode dulu.
+
+- **Riset dulu**: `api/config.py` adalah SATU class `Settings`
+  (`pydantic-settings`) ~70 field, dibaca SELURUHNYA cuma dari env
+  var/`.env` hari ini, dipakai `settings.FIELD` di 40+ file lintas
+  `core/`/`agents/`/`orchestrator/`/`telemetry/`/`security/`/
+  `api/routes/`/`mcp_server/`. Dicek LANGSUNG (bukan diasumsikan):
+  `pydantic-settings==2.6.1` (sudah di `requirements.txt`) TERNYATA sudah
+  membawa `YamlConfigSettingsSource` bawaan — cara resmi menambah sumber
+  YAML dengan urutan prioritas benar terhadap env var/`.env`/init kwargs,
+  bukan loader buatan sendiri. `PyYAML` 6.0.3 TERNYATA sudah terpasang di
+  venv sebagai dependency transitif (lewat `uvicorn[standard]`) tapi
+  belum dideklarasikan eksplisit — dicek via `pip show pyyaml`.
+  `_read_files()` (internal sumber itu) menerima LIST path, menggabung
+  key level-atas, dan DIAM-DIAM MELEWATI file yang tak ada — aman kalau
+  `config/` suatu saat sebagian hilang. Dicek juga: TAK ADA test yang
+  mengonstruksi `Settings()` baru atau bergantung pada perilaku override
+  env var — semua test yang menyentuh settings pakai
+  `monkeypatch.setattr("api.config.settings.FIELD", ...)` di singleton
+  yang SUDAH dibangun, jadi perubahan prioritas sumber ini rendah risiko.
+  `docker/Dockerfile.api`/`Dockerfile.worker` sama-sama `COPY . .` polos,
+  `.dockerignore` tak mengecualikan apa pun relevan — folder `config/`
+  baru otomatis terbawa ke image, sama seperti `prompts/` di Tahap 37,
+  nol perubahan Dockerfile dibutuhkan.
+- **Triase field**: TETAP env-only (tak pernah masuk YAML): `SECRET_KEY`,
+  `DATABASE_URL`, `REDIS_URL` (connection string bisa memuat kredensial),
+  `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GOOGLE_API_KEY`, `API_KEYS`. Juga
+  dibiarkan env-only (di luar 6 bucket roadmap, nilai migrasi rendah):
+  `APP_NAME`/`APP_ENV`/`DEBUG`/`LOG_LEVEL`/`LOG_FORMAT`/
+  `RQ_QUEUE_AI/GIS/PIPELINE` — `APP_ENV`/`DEBUG` khususnya klasik flag
+  per-lingkungan yang justru SEBAIKNYA tetap di-set lewat env, bukan
+  dibagi lewat satu file YAML yang sama di semua lingkungan. ~55 field
+  sisanya dipindah ke salah satu 6 file sesuai tema (mengikuti komentar
+  Bab yang sudah ada di `api/config.py`): `providers.yaml` (base URL/
+  model/embed model provider — BUKAN API key-nya — timeout/retry, circuit
+  breaker, sumber embedding RAG), `agents.yaml` (Reflection/Confidence/
+  Consensus/Approval), `workflow.yaml` (backend task/approval state,
+  messaging, scheduler, identitas MCP), `security.yaml` (ambang prompt
+  guard, toggle PII/output validation, path audit log, rate limit, CORS),
+  `memory.yaml` (backend/TTL tier memori, tuning RAG, cache TTL),
+  `budget.yaml` (budget biaya, ambang alert, backend/cap telemetry).
+- **Default class-body DIPERTAHANKAN, bukan dihapus** — jaring pengaman
+  kalau `config/*.yaml` suatu saat hilang/rusak/tak ikut ter-deploy, app
+  tetap boot dengan nilai lama yang sudah terbukti benar, bukan crash saat
+  import (`settings = Settings()` jalan di level modul — gagal di situ
+  menjatuhkan seluruh app). Urutan prioritas (tertinggi ke terendah): init
+  kwargs > env var > `.env` > `config/*.yaml` > default class-body.
+  `config/*.yaml` jadi sumber kebenaran sehari-hari (edit file, restart,
+  selesai — tak perlu `.env`), env var tetap escape hatch prioritas lebih
+  tinggi untuk override darurat (tak menghapus kapabilitas yang sudah
+  ada), default class-body jadi jaring pengaman terakhir yang TAK PERNAH
+  jadi sumber aktif selama `config/` ada (yang memang dibuat+di-commit
+  Tahap ini).
+- **Mekanisme**: `Settings.model_config` dapat key `yaml_file` (list 6
+  path) + classmethod `settings_customise_sources()` (titik ekstensi
+  RESMI `pydantic-settings` v2, dicek ada di versi terpasang — bukan
+  loader buatan sendiri) mengembalikan urutan `(init_settings,
+  env_settings, dotenv_settings, YamlConfigSettingsSource(settings_cls),
+  file_secret_settings)`. `class Config:` gaya pydantic v1 (dipakai
+  sebelumnya untuk `env_file`/`env_file_encoding`/`extra`) dikonversi ke
+  `model_config = SettingsConfigDict(...)` — konversi mekanis, perilaku
+  sama, cuma bentuk baru yang bisa menerima key `yaml_file`. TIDAK ADA
+  anotasi field yang berubah — setiap `settings.FIELD` di seluruh kode
+  TAK disentuh sama sekali.
+- **`PyYAML==6.0.3` ditambah eksplisit ke `requirements.txt`** — sudah
+  ada transitif lewat `uvicorn[standard]` di versi persis yang sama, jadi
+  pin ini nol risiko, bukan dependency baru sungguhan; dideklarasikan
+  eksplisit supaya tak bergantung diam-diam pada dependency transitif
+  yang bisa hilang kalau `uvicorn[standard]`'s extras berubah nanti.
+- **11 test baru (613/613 total, stabil 2x berturut-turut)** di
+  `test_config_center.py`: env var menang atas YAML (prioritas benar);
+  YAML BENAR dikonsultasi untuk field tanpa env var; file YAML hilang tak
+  bikin crash, jatuh ke default class-body; `CONFIG_DIR` menunjuk ke 6
+  file nyata; tripwire regresi — field asli di singleton `settings` masih
+  sama persis nilai lama (`CONFIDENCE_THRESHOLD_DEFAULT=0.6`,
+  `RAG_CHUNK_SIZE=800`, `COST_BUDGET_DAILY=50.0`,
+  `CIRCUIT_PROVIDER_OVERRIDES=""`); tripwire keamanan — parse YAML
+  sungguhan (bukan cuma cari substring string mentah, yang kena
+  false-positive dari komentar header sendiri yang menyebut nama field
+  rahasia sebagai penjelasan) memastikan tak ada key `SECRET_KEY`/
+  `DATABASE_URL`/`REDIS_URL`/`API_KEYS`/`*_API_KEY` di keenam file.
+- **Diverifikasi live sungguhan, edit-restart-edit balik**: `python -c
+  "from api.config import settings; print(...)"` sebelum restart
+  mengonfirmasi nilai IDENTIK dengan sebelum refactor (0.6/800/50.0/16384).
+  `sudo systemctl restart ai-engine` → sehat. `config/agents.yaml`'s
+  `CONFIDENCE_THRESHOLD_DEFAULT` diubah 0.6→0.777 di file NYATA, restart
+  lagi → import BENAR menunjukkan 0.777 (nilai baru genuinely hidup, bukan
+  file mati di samping kode yang masih baca `.env` doang), lalu
+  dikembalikan ke 0.6 dan restart sekali lagi → BENAR kembali 0.6, nol
+  regresi ke perilaku semula.
+- **Gap yang diakui**: 16 dari 20 item Bab 68 Backlog masih belum
+  disentuh; `APP_ENV`/`DEBUG`/nama antrean RQ sengaja tetap env-only
+  (lihat triase di atas); belum ada validasi skema/tipe di level YAML itu
+  sendiri (kesalahan ketik di YAML baru ketahuan lewat error pydantic
+  saat startup, bukan lint terpisah) — dianggap cukup untuk sesi ini
+  karena `pytest`/restart manual sudah jadi langkah verifikasi standar
+  tiap perubahan config di alur kerja ini.
+
 ## Test
-- **Backend: 602/602 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~26-28 detik total) — naik dari 594 lewat 8 test Prompt Management
+- **Backend: 613/613 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~24-25 detik total) — naik dari 602 lewat 11 test Configuration Center
+  (Tahap 38, lihat detail di atas, semua di `test_config_center.py`).
+  Sebelumnya naik dari 594 lewat 8 test Prompt Management
   (Tahap 37, lihat detail di atas: 4 unit `test_prompt_loader.py`, 4 unit
   `test_prompt_content_unchanged.py`). Sebelumnya naik dari 584 lewat 10
   test Simulation Mode
@@ -2406,7 +2517,7 @@ Management, Configuration Center). Direncanakan lewat Plan Mode dulu.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-37, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-38, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2709,8 +2820,9 @@ Write Access (Tahap 33), Security + Audit Dashboards (Tahap 34, Bab
 68 Backlog Prioritas 13 — item PERTAMA dari Backlog 20-item yang
 dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
 35), Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
-KEDUA), dan Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
-item KETIGA) semua selesai 2026-07-06. **Seluruh 5 area
+KEDUA), Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
+item KETIGA), dan Configuration Center (Tahap 38, Bab 68 Backlog
+Prioritas 7 — item KEEMPAT) semua selesai 2026-07-06. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2790,14 +2902,21 @@ prompt inline nyata jauh lebih banyak dari perkiraan awal (LIMA konstanta,
 bukan cuma `SYSTEM_PROMPT` Chat), sekaligus menemukan bahwa 15 peran
 Orchestrator TERNYATA nol punya system prompt bawaan sama sekali —
 pemetaan folder Bab 68.8 disesuaikan ke kenyataan kode, bukan dipaksakan
-mengikuti pohon ilustratif roadmap (lihat detail Tahap 37 di atas). Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
-storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
-kalau memang butuh API >1 replika di produksi; (2) item lain di Bab 68
-Backlog (17 dari 20 tersisa — Prioritas 7 Configuration Center adalah
-kandidat lain yang sudah disaring genuinely bounded; sisanya sebagian
-besar terlalu besar/spekulatif untuk pola Tahap kecil sesi ini, lihat
-detail Tahap 34); (3) satu proses MCP
+mengikuti pohon ilustratif roadmap (lihat detail Tahap 37 di atas).
+**Tahap 38 kembali lewat `AskUserQuestion`** (item Bab 68 Backlog
+KEEMPAT, dipilih dari kandidat yang sama) — riset dulu menemukan
+`pydantic-settings==2.6.1` (sudah terpasang) TERNYATA sudah membawa
+`YamlConfigSettingsSource` bawaan, jadi Configuration Center murni
+pemasangan sumber config resmi yang sudah ada, bukan loader buatan
+sendiri; ~55 dari ~70 field `Settings` dipindah default-nya ke 6 file
+YAML bertema, sisanya (secret + flag per-lingkungan macam
+`APP_ENV`/`DEBUG`) sengaja tetap env-only (lihat detail Tahap 38 di
+atas). Kandidat prioritas berikutnya, dari yang paling murah dieksekusi:
+(1) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (2) item lain di
+Bab 68 Backlog (16 dari 20 tersisa — sisanya sebagian besar terlalu
+besar/spekulatif untuk pola Tahap kecil sesi ini, lihat detail Tahap 34);
+(3) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
 perlu beberapa entri server terkonfigurasi terpisah); (4) pesan error
@@ -2812,10 +2931,9 @@ SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
 jaringan butuh tinjauan auth+path-sandboxing sendiri); (8) `run_single()`
 sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
 memanggilnya); (9) `agent/tools/analyzers.py`'s prompt generate_code
-dinamis (Tahap 37) belum masuk sistem versi prompt — bisa diubah jadi
-template `$language` di `prompts/templates/` kalau nanti dianggap
-bernilai, tapi ditunda karena folder itu terproteksi Bab 45.1 dan nilai
-migrasinya rendah — item 3-9 kecil/menengah, cuma relevan kalau ada
+dinamis (Tahap 37) belum masuk sistem versi prompt; (10) belum ada
+validasi skema/tipe di level `config/*.yaml` selain error pydantic saat
+startup (Tahap 38) — item 3-10 kecil/menengah, cuma relevan kalau ada
 kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini

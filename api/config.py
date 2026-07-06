@@ -1,6 +1,25 @@
-"""Application configuration via environment variables."""
-from typing import List, Optional
-from pydantic_settings import BaseSettings
+"""Application configuration.
+
+Non-secret parameters (thresholds, budgets, timeouts, active models,
+feature flags) are centralized as versionable YAML under config/ (Bab 68
+Backlog Prioritas 7, Configuration Center) — edit those files and restart
+to change behavior without touching .env. Secrets (API keys, DB/Redis
+connection strings) stay in .env / the deployment's secrets mechanism
+(Bab 58 Secrets Management) and are never written to config/. Priority,
+highest to lowest: init kwargs > env vars > .env > config/*.yaml >
+the class-body default below (a fallback if config/ is ever missing).
+"""
+from pathlib import Path
+from typing import List, Optional, Tuple, Type
+
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    YamlConfigSettingsSource,
+)
+
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
 class Settings(BaseSettings):
@@ -209,9 +228,36 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     RATE_LIMIT_BURST: int = 10
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        yaml_file=[
+            CONFIG_DIR / "providers.yaml",
+            CONFIG_DIR / "agents.yaml",
+            CONFIG_DIR / "workflow.yaml",
+            CONFIG_DIR / "security.yaml",
+            CONFIG_DIR / "memory.yaml",
+            CONFIG_DIR / "budget.yaml",
+        ],
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: Type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            YamlConfigSettingsSource(settings_cls),
+            file_secret_settings,
+        )
+
 
 settings = Settings()

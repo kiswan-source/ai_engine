@@ -1,0 +1,24 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — prompt guard/PII/
+# output-validation toggles, rate limiting, CORS. NO SECRETS HERE —
+# AUDIT_LOG_PATH is a filesystem path, not a credential; API_KEYS stays
+# in .env (Bab 58). See api/config.py for the authoritative field list.
+
+ALLOWED_ORIGINS: ["http://localhost:3000"]
+
+# Prompt Injection detection (Bab 30): "neutralize" per rule 1 — above the
+# suspicious threshold the prompt is sanitized (not blocked); only above
+# the block threshold does the dispatch fail outright.
+ENABLE_PROMPT_GUARD: true
+PROMPT_GUARD_SUSPICIOUS_THRESHOLD: 0.4
+PROMPT_GUARD_BLOCK_THRESHOLD: 0.8
+
+# PII redaction before a prompt leaves the system to an external provider.
+ENABLE_PII_REDACTION: true
+ENABLE_OUTPUT_VALIDATION: true
+
+# Append-only audit trail (Bab 30).
+AUDIT_LOG_PATH: "security_audit.log"
+
+# Rate limiting
+RATE_LIMIT_PER_MINUTE: 60
+RATE_LIMIT_BURST: 10

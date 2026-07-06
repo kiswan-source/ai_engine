@@ -6,6 +6,9 @@ python-multipart==0.0.12
 # ─── Config ───────────────────────────────────────────────────────────────────
 pydantic==2.13.4        # bumped from 2.10.3 — mcp==1.28.1 requires pydantic>=2.11
 pydantic-settings==2.6.1
+PyYAML==6.0.3           # config/*.yaml (Configuration Center, Bab 68 Prioritas 7) —
+                        # already transitive via uvicorn[standard], pinned explicitly
+                        # since api/config.py now imports it directly
 starlette==0.41.3       # pinned explicitly — mcp pulls starlette with no upper
                         # bound and would otherwise resolve to a version FastAPI
                         # 0.115.5 (<0.42) rejects

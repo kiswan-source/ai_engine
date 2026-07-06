@@ -1,0 +1,21 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — memory tier
+# backends/TTLs, RAG chunking/retrieval tuning, cache TTLs. NO SECRETS
+# HERE. See api/config.py for the authoritative field list.
+
+# Memory tiers (Bab 22-23).
+MEMORY_BACKEND: "memory"
+MEMORY_PERSISTENT_BACKEND: "memory"
+WORKING_MEMORY_TTL: 3600
+
+# RAG (Bab 29).
+VECTOR_BACKEND: "memory"
+RAG_CHUNK_SIZE: 800
+RAG_CHUNK_OVERLAP: 100
+RAG_TOP_K: 5
+RAG_HYBRID_ALPHA: 0.5
+RAG_RERANK_ENABLED: true
+RAG_MAX_CONTEXT_CHARS: 4000
+
+# Cache TTL (seconds)
+AI_CACHE_TTL: 3600
+GIS_CACHE_TTL: 86400
