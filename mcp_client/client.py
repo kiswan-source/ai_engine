@@ -27,8 +27,11 @@ def _normalize_result(result) -> dict[str, Any]:
 class MCPClient:
     """Talks to one MCP server, launched via `command` (Bab 60.1's MCP Server)."""
 
-    def __init__(self, command: list[str]) -> None:
-        self._params = StdioServerParameters(command=command[0], args=command[1:])
+    def __init__(self, command: list[str], env: dict[str, str] | None = None) -> None:
+        # `env` (Tahap 28) is merged on top of a safe default environment by
+        # stdio_client itself, not a replacement — used by tests to launch
+        # mcp_server/server.py under a specific MCP_SERVER_ROLE.
+        self._params = StdioServerParameters(command=command[0], args=command[1:], env=env)
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Tool Discovery (Bab 60.1)."""

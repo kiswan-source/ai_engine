@@ -1,0 +1,65 @@
+"""Unit tests for the MCP Server (Bab 60, Tahap 28) — the opposite direction
+from mcp_client/: exposing AI_ENGINE's own tools to external MCP clients.
+
+Uses a fake ToolRegistry (same pattern as test_tool_registry_rbac.py) so
+these stay fast/hermetic — no real file I/O, no real subprocess. The real
+protocol round trip against a real subprocess lives in
+tests/integration/test_mcp_server_e2e.py.
+"""
+import pytest
+
+from agent.tools.registry import ToolRegistry
+from mcp_server.server import _allowed_schemas, dispatch_tool_call
+
+
+def _fake_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register("read_txt", lambda **kw: {"text": "isi file", **kw}, "unrelated, ungated tool")
+    reg.register("write_txt", lambda **kw: {"success": True, "file": "x.txt", **kw}, "pilot high-risk tool")
+    return reg
+
+
+def test_allowed_schemas_excludes_workspace_and_mcp_meta_tools():
+    names = {s["function"]["name"] for s in _allowed_schemas()}
+    assert "workspace_list_files" not in names
+    assert "workspace_read_file" not in names
+    assert "mcp_list_tools" not in names
+    assert "mcp_call_tool" not in names
+
+
+def test_allowed_schemas_includes_known_tools():
+    names = {s["function"]["name"] for s in _allowed_schemas()}
+    assert "read_txt" in names
+    assert "write_pdf" in names
+
+
+async def test_dispatch_unknown_tool_raises():
+    reg = _fake_registry()
+    with pytest.raises(ValueError):
+        await dispatch_tool_call(reg, "admin", "does_not_exist", {})
+
+
+async def test_dispatch_excluded_tool_raises_even_if_in_registry():
+    reg = ToolRegistry()
+    reg.register("workspace_list_files", lambda **kw: {"files": []}, "excluded")
+    with pytest.raises(ValueError):
+        await dispatch_tool_call(reg, "admin", "workspace_list_files", {})
+
+
+async def test_dispatch_denies_write_for_default_user_role():
+    reg = _fake_registry()
+    with pytest.raises(PermissionError):
+        await dispatch_tool_call(reg, "user", "write_txt", {"filename": "a.txt", "content": "hi"})
+
+
+async def test_dispatch_allows_write_for_operator_role():
+    reg = _fake_registry()
+    result = await dispatch_tool_call(reg, "operator", "write_txt", {"filename": "a.txt", "content": "hi"})
+    assert result["success"] is True
+    assert result["file"] == "x.txt"
+
+
+async def test_dispatch_read_tool_unaffected_by_role():
+    reg = _fake_registry()
+    result = await dispatch_tool_call(reg, "user", "read_txt", {"file_path": "a.txt"})
+    assert result["text"] == "isi file"

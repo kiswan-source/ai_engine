@@ -39,6 +39,7 @@
 | 25* | Autentikasi + fix path traversal `api/routes/files.py` — tutup bypass nyata yang ditemukan Tahap 24 | ✅ SELESAI |
 | 26* | Autentikasi `memory.py`/`monitoring.py`/`knowledge.py` — pola gap sama seperti `files.py` sebelum Tahap 25 | ✅ SELESAI |
 | 27* | Loose ends Docker — `tesseract-ocr`/`tesseract-ocr-ind` + `HEALTHCHECK` di `Dockerfile.api`/`Dockerfile.worker` (gap dicatat Tahap 21) | ✅ SELESAI |
+| 28* | MCP Server (Bab 60) — ekspos tool registry AI_ENGINE ke client MCP eksternal, arah sebaliknya dari Client Tahap 17 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1554,12 +1555,109 @@ dua celah lama yang sengaja ditunda.
   kecil ini, dicatat sebagai kandidat lanjutan kalau pernah jadi masalah
   nyata di produksi.
 
+**Tahap 28 — MCP Server (Bab 60), arah sebaliknya dari Client Tahap 17**
+
+Dipilih lewat `AskUserQuestion` dari 4 kandidat (MCP Server / gambar-GIS
+Workspace via Chat / heartbeat RQ / Bab 68 Backlog). Menutup item #1 yang
+tersisa di "Titik mulai sesi berikutnya" sejak Tahap 17 sengaja menunda
+sisi Server: `mcp_client/` bisa mengonsumsi MCP server pihak ketiga, tapi
+tak ada yang membuat AI_ENGINE sendiri BISA dikonsumsi client MCP
+eksternal (mis. Claude Desktop). Rencana lengkap (5 keputusan desain +
+implementasi + test) ditulis dulu lewat Plan Mode dan disetujui sebelum
+coding — perubahan arsitektural dengan beberapa keputusan konsekuensial
+(transport, subset tool, model RBAC), bukan sekadar tambah baris ke modul
+yang sudah ada.
+
+- **Transport: stdio saja** (`mcp_server/server.py` baru, sejajar
+  `mcp_client/`) — sama seperti `mcp_client/demo_server.py`, dan
+  sengaja BUKAN SSE/HTTP: server jaringan berarti pemanggil tak dikenal
+  bisa memberi `file_path` sembarang ke tool baca/tulis, butuh tinjauan
+  keamanan sandboxing path tersendiri yang di luar cakupan tugas ini.
+  Dijalankan `python -m mcp_server.server`, digerbang `ENABLE_MCP` (Bab
+  57.1, flag yang sama dipakai sisi Client) — mati eksplisit di startup
+  kalau `false`, bukan menggantung di stdio.
+- **API rendah (`mcp.server.Server`), bukan `FastMCP`'s decorator** —
+  `demo_server.py` cocok untuk 2 tool tetap dengan signature Python tetap;
+  di sini tool datang dinamis dari `core/chat/tool_schemas.py::TOOL_SCHEMAS`
+  (skema JSON yang SUDAH ADA, dipakai ulang apa adanya, bukan ditulis
+  baru) + `agent/tools/registry.py`'s `ToolRegistry.execute()` yang sama
+  dipakai tiap jalur lain di app ini.
+- **Subset tool yang diekspos = `TOOL_SCHEMAS` dikurangi 4 tool yang tak
+  masuk akal dipanggil di luar pemanggil normalnya**: `workspace_list_files`/
+  `workspace_read_file` (Tahap 23) — gerbang keamanan sesungguhnya untuk
+  keduanya adalah `_run_tool` MENYUNTIKKAN `session.workspace_id` dari
+  sesi ChatEngine, bukan model; panggil `registry.execute()` langsung dari
+  sini tak punya sesi sama sekali untuk disuntikkan, mengeksposnya berarti
+  entah selalu gagal atau (lebih buruk) menerima `workspace_id` polos dari
+  pemanggil luar tanpa cek keanggotaan Project apa pun. `mcp_list_tools`/
+  `mcp_call_tool` (Tahap 17) — jembatan proxy ke MCP server LAIN yang kami
+  konsumsi; mengekspos "client MCP kami" sebagai tool lewat "server MCP
+  kami sendiri" pola proxy membingungkan tanpa use-case jelas. Sisa ~23
+  tool (reader/writer/GIS/transform gambar/`analyze_text`/`plugin_weather`)
+  diekspos apa adanya.
+- **RBAC: pakai ulang `security/permissions.py` PERSIS seperti Bab 60.1
+  mewajibkan** ("MCP tidak memiliki jalur pintas keamanan") — stdio tak
+  punya identitas pemanggil per-request (tak ada header `X-API-Key`), jadi
+  seluruh proses server jalan sebagai SATU role tetap sepanjang hidupnya:
+  setting baru `MCP_SERVER_ROLE` (default `"user"`, pilihan konservatif —
+  semua tool baca tetap ungated, semua tool tulis/convert/generate
+  ditolak `PermissionError` sungguhan sampai operator eksplisit set
+  `MCP_SERVER_ROLE=operator` di environment yang menjalankan proses ini).
+  Gate yang dipakai SAMA PERSIS `registry.execute(name, args, role=...)`
+  yang dipakai `agent/core.py`/`core/chat/engine.py`.
+- **Bug nyata ditemukan saat verifikasi live PERTAMA, bukan lewat
+  pytest**: `logging.info(...)` lewat `core/utils/logger.py` (structlog,
+  `PrintLoggerFactory()` → default ke stdout) — pada transport stdio,
+  stdout ADALAH kanal protokol JSON-RPC itu sendiri. Baris log apa pun ke
+  situ merusak stream, dikonfirmasi nyata: client MCP sungguhan (skrip
+  verifikasi manual di bawah) gagal parse frame JSON-RPC dengan error
+  pydantic literal. **Fix**: `mcp_server/server.py` sengaja TIDAK memakai
+  `core.utils.logger.get_logger()` (shared, protected secara de-facto oleh
+  dipakai di mana-mana) — dipakai `logging` standar dikonfigurasi eksplisit
+  ke `sys.stderr`, kanal yang memang disediakan MCP SDK untuk ini
+  (`stdio_client`'s `errlog=sys.stderr` di sisi client). **Pelajaran
+  ditulis di komentar kode** (hidden constraint yang akan mengejutkan
+  pembaca lain yang menambah modul stdio baru nanti).
+- **10 test baru (549/549 total, stabil 2x berturut-turut)**:
+  `tests/unit/test_mcp_server.py` (7, fake `ToolRegistry` pola
+  `test_tool_registry_rbac.py` — filter skema, tool tak dikenal/dikecualikan
+  ditolak, RBAC user vs operator, tool baca tak terpengaruh role) +
+  `tests/integration/test_mcp_server_e2e.py` (3, **dogfooding** — pakai
+  `mcp_client.client.MCPClient` KITA SENDIRI melawan `mcp_server/server.py`
+  KITA SENDIRI sebagai subprocess sungguhan, mirror persis pola
+  `test_mcp_client.py` terhadap `demo_server.py` tapi membuktikan sisi
+  Server: `list_tools()` menampilkan tool asli+bukan 4 yang dikecualikan;
+  role `operator` menulis+membaca file SUNGGUHAN di `reports/`; role
+  `user` (default) ditolak nyata pada PROSES SUNGGUHAN, bukan cuma fake
+  registry unit-level). `mcp_client/client.py`'s `MCPClient.__init__` dapat
+  parameter opsional `env` (aditif, dipakai test untuk set
+  `MCP_SERVER_ROLE` per subprocess) — satu-satunya sentuhan ke kode Tahap
+  17 yang sudah ada.
+- **Diverifikasi live sungguhan DI LUAR pytest juga** (skrip ad-hoc,
+  dihapus setelah selesai): role `user` → `list_tools()` menampilkan 23
+  tool nyata (bukan 27 — 4 dikecualikan terbukti benar-benar tak muncul);
+  `write_txt` → ditolak nyata (`"role 'user' lacks permission
+  'tool:write_txt'"`); role `operator` → `write_txt` lalu `read_txt`
+  BENAR menulis+membaca file nyata di `~/ai_engine/reports/` (isi cocok
+  persis); `ENABLE_MCP=false` → proses keluar langsung (exit 0) alih-alih
+  menggantung di stdio. Log startup tampil bersih di stderr, nol frame
+  JSON-RPC rusak lagi setelah fix logger di atas.
+- **Gap yang diakui, didokumentasikan eksplisit sebagai tindak lanjut**:
+  transport SSE/HTTP (server jaringan, butuh auth+path-sandboxing sendiri)
+  belum ada; gambar/GIS Workspace via MCP tetap tak terjangkau (sama
+  seperti lewat Chat, Bab 69.5); baru satu role tetap per PROSES server
+  (bukan per-panggilan seperti HTTP `X-API-Key`) — wajar untuk stdio
+  tapi berarti satu server = satu tingkat akses tetap, bukan granular
+  per klien.
+
 ## Test
-- **Backend: 539/539 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~13 detik total) — tetap 539 di Tahap 27 (loose ends Docker, murni
-  infrastruktur, nol test Python baru; diverifikasi live lewat rebuild
-  image + `docker inspect` alih-alih pytest, lihat detail di atas).
-  Sebelumnya naik dari 521 lewat 20 test autentikasi
+- **Backend: 549/549 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~18-19 detik total) — naik dari 539 lewat 10 test MCP Server (Tahap 28,
+  lihat detail di atas: 7 unit `test_mcp_server.py`, 3 integrasi
+  `test_mcp_server_e2e.py` dogfooding subprocess sungguhan). Sebelumnya
+  tetap 539 di Tahap 27 (loose ends Docker, murni infrastruktur, nol test
+  Python baru; diverifikasi live lewat rebuild image + `docker inspect`
+  alih-alih pytest, lihat detail di atas). Sebelumnya naik dari 521 lewat 20 test autentikasi
   `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26, lihat detail di
   atas). Sebelumnya naik dari 510 lewat 11 test autentikasi+traversal
   `files.py` (Tahap 25, lihat detail di atas). Sebelumnya naik dari 504
@@ -1665,24 +1763,32 @@ dua celah lama yang sengaja ditunda.
   Snapshot/Multi Workspace/Remote Workspace/Collaboration/Workspace
   Permission Management UI granular — semua Backlog Prioritas 21-29, nol
   disentuh.
-- **MCP Client (Tahap 17) cuma Client, bukan Server** — keputusan skop
-  sadar (dipilih Boss lewat `AskUserQuestion`); AI_ENGINE tidak bisa
-  dikonsumsi client MCP eksternal (mis. Claude Desktop) sampai sisi Server
-  dibangun terpisah. **Baru satu server terkonfigurasi** (`demo`, fixture
-  dev murni untuk pembuktian) — belum tersambung ke MCP server pihak
-  ketiga sungguhan manapun; nambah server nyata baru tinggal satu baris
-  di `MCP_SERVERS` tapi belum ada yang dipilih/diverifikasi. **Session
-  Management minimal** — satu koneksi baru per panggilan (bukan
-  persisten/pooled), jadi tiap panggilan bayar biaya spawn subprocess;
-  untuk pemakaian intensif ini perlu ditinjau ulang. **RBAC `mcp:call`
-  inert dari Chat** (`core/chat/` tak mengirim role) — gap yang sama
-  persis dengan `write_pdf`/`plugin_weather`, bukan regresi baru. Tidak
-  ada rate-limit/timeout eksplisit di `MCPClient` di luar default SDK.
-  **Dependency `mcp` menaikkan `pydantic` (2.10.3→2.13.4) dan mengunci
-  `starlette==0.41.3`** — sudah diverifikasi 384 test lama tetap lulus dan
-  service live tetap sehat setelah bump, tapi ini transitive-dependency
-  footprint baru yang perlu diingat saat upgrade FastAPI/pydantic
-  berikutnya.
+- **MCP Client (Tahap 17) — sisi Server SELESAI juga (Tahap 28)**.
+  `mcp_server/server.py` baru mengekspos ~23 tool AI_ENGINE (dikurangi 4
+  tool session-bound/meta, lihat detail Tahap 28 di atas) ke client MCP
+  eksternal manapun lewat stdio, RBAC digerbang `MCP_SERVER_ROLE`. SSE/HTTP
+  transport tetap belum ada (keputusan skop sadar Tahap 28 — butuh
+  tinjauan auth+path-sandboxing sendiri untuk pemanggil jaringan tak
+  dikenal). **Baru satu server pihak ketiga terkonfigurasi di sisi Client**
+  (`demo`, fixture dev murni untuk pembuktian) — belum tersambung ke MCP
+  server pihak ketiga sungguhan manapun; nambah server nyata baru tinggal
+  satu baris di `MCP_SERVERS` tapi belum ada yang dipilih/diverifikasi.
+  **Session Management minimal di sisi Client** — satu koneksi baru per
+  panggilan (bukan persisten/pooled), jadi tiap panggilan bayar biaya
+  spawn subprocess; untuk pemakaian intensif ini perlu ditinjau ulang.
+  **Koreksi catatan basi ditemukan saat menulis Tahap 28** (pola sama
+  seperti koreksi `projects.py` Tahap 26 / ChatEngine-workspace-aware
+  Tahap 27): baris ini dulu bilang "RBAC `mcp:call` inert dari Chat" —
+  itu sudah salah sejak Tahap 20 (hari yang sama, beberapa Tahap
+  setelahnya) menyambungkan `role` ke SETIAP panggilan `registry.execute()`
+  dari ChatEngine secara generik, termasuk `mcp_call_tool`; dicek ulang
+  kodenya (`core/chat/engine.py`'s `_run_tool`), bukan diasumsikan dari
+  catatan lama. Tidak ada rate-limit/timeout eksplisit di `MCPClient` di
+  luar default SDK. **Dependency `mcp` menaikkan `pydantic` (2.10.3→2.13.4)
+  dan mengunci `starlette==0.41.3`** — sudah diverifikasi 384 test lama
+  tetap lulus dan service live tetap sehat setelah bump, tapi ini
+  transitive-dependency footprint baru yang perlu diingat saat upgrade
+  FastAPI/pydantic berikutnya.
 
 - **Plugin (Tahap 16) enabled/disabled state in-memory saja** — restart
   proses API mengembalikan semua plugin ke enabled (default manifest),
@@ -1842,35 +1948,41 @@ multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
 (Tahap 22), Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5),
 kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
 `api/routes/files.py` (Tahap 25), autentikasi
-`memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), dan loose ends
-Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27) semua selesai
-2026-07-06. **Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini
-punya kode nyata**, ditambah kapabilitas Workspace baru di atasnya, gate
-RBAC kini benar-benar hidup di satu-satunya jalur yang mengeksekusi tool
-(Chat), sesi Chat DAN file hasil kerjanya (di kedua rute yang
-menyajikannya) DAN memori/monitoring/knowledge kini terikat autentikasi,
-Chat kini bisa membaca Project Workspace bukan cuma Uploaded Files, image
-Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
-image) tertutup sekalian, dan OCR+HEALTHCHECK Docker kini nyata bekerja
-(diverifikasi live, bukan cuma paket terinstal). **Dicek ulang sebelum
-ditulis di sini** (bukan diasumsikan dari catatan lama): `projects.py`
-TERNYATA sudah punya `Depends(get_current_principal)` di SETIAP rute
-sejak Tahap 13 — catatan gap lama yang bilang "endpoint projects.py masih
-terbuka" sudah basi, diperbaiki di bagian "Untuk lanjutan frontend" di
-bawah; dan bagian "Gap kumulatif" Tahap 19 masih menyimpan klaim basi
-"ChatEngine belum workspace-aware" yang sudah salah sejak Tahap 23 —
-dikoreksi Tahap 27. Kandidat prioritas berikutnya, dari yang paling murah
-dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja ditunda Tahap 17);
-(2) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (3) Bab 68
+`memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26), loose ends
+Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), dan MCP Server, Bab 60
+sisi sebaliknya dari Client (Tahap 28) semua selesai 2026-07-06. **Seluruh
+5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**,
+ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar
+hidup di satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN
+file hasil kerjanya (di kedua rute yang menyajikannya) DAN
+memori/monitoring/knowledge kini terikat autentikasi, Chat kini bisa
+membaca Project Workspace bukan cuma Uploaded Files, image Docker turun
+2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke image) tertutup
+sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja, dan AI_ENGINE kini
+bisa jadi MCP Server sungguhan (bukan cuma Client) untuk client eksternal
+manapun. **Dicek ulang sebelum ditulis di sini** (bukan diasumsikan dari
+catatan lama): `projects.py` TERNYATA sudah punya
+`Depends(get_current_principal)` di SETIAP rute sejak Tahap 13 — catatan
+gap lama yang bilang "endpoint projects.py masih terbuka" sudah basi,
+diperbaiki di bagian "Untuk lanjutan frontend" di bawah; bagian "Gap
+kumulatif" Tahap 19 masih menyimpan klaim basi "ChatEngine belum
+workspace-aware" yang sudah salah sejak Tahap 23 — dikoreksi Tahap 27; dan
+bagian "Gap kumulatif" Tahap 17 masih menyimpan klaim basi "RBAC mcp:call
+inert dari Chat" yang sudah salah sejak Tahap 20 — dikoreksi Tahap 28.
+Kandidat prioritas berikutnya, dari yang paling murah dieksekusi: (1)
+solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
+storage) kalau memang butuh API >1 replika di produksi; (2) Bab 68
 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4) gambar/GIS di
-Workspace belum bisa dibaca lewat Chat — baris Vision Bab 69.5, gap yang
-Tahap 23 sengaja tinggalkan (hasil tool hari ini teks JSON, bukan input
-vision, integrasi lebih besar); (5) heartbeat RQ yang lebih tepat untuk
-`HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas Redis, bukan
-bahwa `worker.work()` sungguh memproses job) — kandidat kecil, cuma
-relevan kalau pernah jadi masalah nyata di produksi.
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) gambar/GIS di
+Workspace belum bisa dibaca lewat Chat MAUPUN MCP Server — baris Vision
+Bab 69.5, gap yang Tahap 23 sengaja tinggalkan dan Tahap 28 mewarisi
+(hasil tool hari ini teks JSON, bukan input vision, integrasi lebih
+besar); (4) heartbeat RQ yang lebih tepat untuk `HEALTHCHECK` worker
+(Tahap 27 cuma menjamin konektivitas Redis, bukan bahwa `worker.work()`
+sungguh memproses job); (5) transport SSE/HTTP untuk MCP Server (Tahap 28
+sengaja stdio-saja, server jaringan butuh tinjauan auth+path-sandboxing
+sendiri) — kedua item terakhir kecil, cuma relevan kalau pernah jadi
+masalah nyata di produksi atau ada kebutuhan client MCP jarak jauh.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

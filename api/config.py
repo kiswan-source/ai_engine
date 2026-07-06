@@ -163,8 +163,17 @@ class Settings(BaseSettings):
     # MCP — Model Context Protocol client (Bab 60, Bab 57.1 standard flag).
     # Gates `mcp_list_tools`/`mcp_call_tool` (agent/tools/registry.py) at
     # call time — the tools stay registered either way, they just refuse to
-    # run when this is off (same pattern as the Bab 59 plugin toggle).
+    # run when this is off (same pattern as the Bab 59 plugin toggle). Also
+    # checked at startup by `mcp_server/server.py` (Tahap 28's MCP *Server*
+    # side, the opposite direction) — same flag covers both.
     ENABLE_MCP: bool = True
+    # Fixed role the MCP Server process runs as (Tahap 28) — stdio has no
+    # per-request caller identity like an HTTP X-API-Key, so every tool call
+    # through it is gated as this one role via security/permissions.py.
+    # Default "user" is conservative: all read tools stay ungated, every
+    # write/convert/generate tool is rejected until an operator explicitly
+    # sets this to "operator" in the environment that spawns the server.
+    MCP_SERVER_ROLE: str = "user"
 
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
