@@ -164,6 +164,50 @@ async def test_write_file_rejects_path_traversal(sqlite_session_factory, tmp_pat
     assert not (tmp_path.parent / "outside.txt").exists()
 
 
+# ─── PDF/DOCX Workspace writes (Tahap 33) ───────────────────────────────
+
+async def test_write_file_creates_real_pdf_in_workspace_folder(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "# Ringkasan\n\nKadar tembaga 1.85%.",
+        title="Laporan Survei", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["type"] == "pdf"
+    pdf_path = tmp_path / "laporan.pdf"
+    assert pdf_path.exists()
+    assert pdf_path.read_bytes().startswith(b"%PDF")  # real PDF, not a text stub
+    assert result["size"] > 500  # non-trivial ReportLab output, not an empty shell
+
+
+async def test_write_file_creates_real_docx_in_workspace_folder(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.docx", "Isi laporan lapangan.",
+        session_factory=sqlite_session_factory,  # title omitted -> default from filename
+    )
+
+    assert result["success"] is True
+    assert result["type"] == "docx"
+    docx_path = tmp_path / "laporan.docx"
+    assert docx_path.exists()
+    assert docx_path.read_bytes().startswith(b"PK")  # docx is a real zip container
+
+
+async def test_write_file_pdf_rejects_append_mode(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "isi", mode="append", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is False
+    assert not (tmp_path / "laporan.pdf").exists()
+
+
 async def test_read_file_folder_not_in_workspace(sqlite_session_factory, tmp_path):
     workspace_a, _ = await _seed(sqlite_session_factory, tmp_path)
     _, folder_b = await _seed(sqlite_session_factory, tmp_path)  # second workspace/folder pair

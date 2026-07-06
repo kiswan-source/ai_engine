@@ -44,6 +44,7 @@
 | 30* | Workspace Write Access (Bab 69.7 `write_output`) — agent bisa buat/edit file teks LANGSUNG di folder Project Workspace, bukan cuma ke `reports/` | ✅ SELESAI |
 | 31* | Tool-call resilience — satu tool call gagal (argumen kurang/exception apa pun) tak lagi merusak seluruh giliran chat | ✅ SELESAI |
 | 32* | Akses Workspace lewat MCP Server (Bab 60.1 + 69.5) — client MCP eksternal (mis. Claude Desktop) kini bisa baca/tulis Project Workspace | ✅ SELESAI |
+| 33* | PDF/DOCX Workspace Write Access — `workspace_write_file` kini bisa bikin dokumen PDF/DOCX sungguhan langsung di folder Workspace, lewat Chat maupun MCP | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1973,10 +1974,78 @@ Server karena tak ada sesi ChatEngine di sana untuk menyuntikkan
   akses BEBERAPA Project perlu beberapa entri server terkonfigurasi
   terpisah, bukan satu server serba bisa).
 
+**Tahap 33 — PDF/DOCX Workspace Write Access**
+
+Dipilih lewat `AskUserQuestion` (4 kandidat: perkuat Cowork lebih jauh
+vs Bab 68 Backlog vs storage RWX vs item kecil). Tahap 30 sengaja
+membatasi `workspace_write_file` ke format teks — PDF/DOCX perlu
+generator sungguhan (`agent/tools/writers.py`, ReportLab/python-docx),
+bukan tulis teks mentah. Karena Tahap 32 juga mengekspos tulis Workspace
+lewat MCP Server, gap ini kini relevan di DUA permukaan sekaligus. Cocok
+juga dengan domain aplikasi ini — laporan tambang formal biasanya
+PDF/DOCX, bukan `.txt` (CLAUDE.md §6). Direncanakan lewat Plan Mode dulu.
+
+- **Temuan kunci yang memperkecil scope tugas ini drastis**:
+  `agent/tools/writers.py`'s `_path(filename)` — dipakai SEMUA fungsi
+  `write_*` di modul itu — sudah menangani ini: `os.path.join(OUTPUT_DIR,
+  filename) if not os.path.dirname(filename) else filename`. Filename
+  yang SUDAH punya komponen direktori (path absolut) dipakai APA ADANYA,
+  melewati `OUTPUT_DIR` sama sekali. Jadi `write_pdf`/`write_docx` TIDAK
+  PERLU diubah sedikit pun — memanggilnya dengan path absolut yang sudah
+  diresolusi di dalam folder Workspace (lewat Root Restriction yang
+  sudah ada) otomatis membuatnya menulis ke situ, bukan ke `reports/`.
+- **`workspace_write_file` DIPERLUAS, bukan tool baru** — dispatch
+  ekstensi yang sudah ada untuk teks kini juga menangani `pdf`/`docx`.
+  Ini alasan Tahap ini jauh lebih kecil dari Tahap 30/32: **NOL** wiring
+  RBAC baru di `core/chat/engine.py` maupun `mcp_server/server.py` — dua
+  file itu sudah menggerbang nama tool ini persis terhadap
+  `write_output`; cuma satu properti skema baru + dispatch yang
+  diperluas, tak ada nama tool baru untuk disebarkan ke dua tempat.
+- **Parameter `title` baru, opsional** — cuma bermakna untuk pdf/docx
+  (`write_pdf`/`write_docx` mewajibkannya). Kalau tak diisi, diturunkan
+  dari nama file (`_default_title`: buang ekstensi, `_`/`-` jadi spasi,
+  title-case) — supaya pemanggil mode-teks yang sudah ada tak perlu
+  tiba-tiba mengisi field yang tak relevan buat mereka.
+- **`mode="append"` DITOLAK untuk pdf/docx** — ReportLab/python-docx tak
+  punya cara masuk akal menambah ke dokumen biner yang sudah ada (perlu
+  parse ulang seluruh file, di luar cakupan). Format teks tetap jalan
+  seperti biasa.
+- **Bentuk hasil dinormalisasi**, BUKAN dict mentah `write_pdf`/`write_docx`
+  (yang bocorkan path absolut filesystem lewat kunci `"file"`) —
+  `{"success", "path": relative_path, "action": "overwrite", "type", "size"}`,
+  konsisten dengan cabang teks yang sudah ada.
+- **7 test baru (578/578 total, stabil 2x berturut-turut)**: 3 unit
+  `test_workspace_reader.py` (PDF sungguhan — byte awal `%PDF`, ukuran
+  substansial, bukan cangkang kosong; DOCX sungguhan — byte awal `PK`
+  [docx = zip container]; `mode="append"` pada `.pdf` ditolak, nol file
+  ditulis), 1 integrasi `test_mcp_server_e2e.py` (DOCX sungguhan lewat
+  subprocess MCP asli — pola dogfooding yang sama).
+- **Diverifikasi live sungguhan lewat DUA permukaan**: **Chat** — Project+
+  Workspace+folder scratch nyata, diminta buat `laporan.pdf` isi kadar
+  tembaga+emas → PDF SUNGGUHAN muncul di folder Workspace (`file` command
+  konfirmasi "PDF document, version 1.4, 1 page(s)", byte `%PDF-1.4`
+  asli, 1815 byte) — BUKAN di `reports/`; lalu diminta baca ulang
+  `laporan.pdf` yang sama → `workspace_read_file` (kategori `document`,
+  sudah dukung `.pdf` sejak awal) BENAR mengekstrak isinya, model
+  menjawab kadar tembaga 1.85% dan emas 2.3 g/t PERSIS dari file nyata.
+  **MCP Server** — subprocess sungguhan role `editor` menulis
+  `laporan_mcp.docx` (36665 byte, byte awal `PK` asli) BENAR muncul di
+  disk; percobaan `mode="append"` pada `.docx` yang sama DITOLAK
+  (`"Mode 'append' tidak didukung untuk .docx"`) — pesan penolakan
+  muncul PERSIS di teks hasil tool (dikonfirmasi ulang setelah skrip
+  verifikasi awal salah cek level protokol vs level tool, bukan bug
+  kode). Project/Workspace/folder scratch dihapus setelah verifikasi.
+- **Gap yang diakui**: format lain (`.xlsx`, `.pptx`, dst.) tetap tak
+  didukung — di luar cakupan, `agent/tools/writers.py` memang belum
+  punya generator untuk format itu sama sekali, bukan spesifik gap
+  Workspace.
+
 ## Test
-- **Backend: 574/574 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~30-35 detik total — naik dari ~18s karena test e2e Tahap 32 spawn
-  beberapa subprocess MCP sungguhan) — naik dari 565 lewat 9 test akses
+- **Backend: 578/578 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~24-25 detik total) — naik dari 574 lewat 4 test PDF/DOCX Workspace
+  Write Access (Tahap 33, lihat detail di atas: 3 unit
+  `test_workspace_reader.py`, 1 integrasi `test_mcp_server_e2e.py`).
+  Sebelumnya naik dari 565 lewat 9 test akses
   Workspace lewat MCP Server (Tahap 32, lihat detail di atas: 5 unit
   `test_mcp_server.py`, 4 integrasi `test_mcp_server_e2e.py`). Sebelumnya
   naik dari 563 lewat 2 test tool-call resilience
@@ -2038,7 +2107,7 @@ Server karena tak ada sesi ChatEngine di sana untuk menyuntikkan
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-32, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-33, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2077,7 +2146,16 @@ Server karena tak ada sesi ChatEngine di sana untuk menyuntikkan
   cuma `reports/`), digerbang `write_output` yang dorman sejak Tahap 19;
   bug viewer terkunci dari Workspace Chat (`read` vs `read_only`) sekalian
   ditemukan+diperbaiki; diverifikasi live owner menulis file nyata,
-  viewer ditolak nyata (lihat detail Tahap 30 di atas). **Tool-call
+  viewer ditolak nyata (lihat detail Tahap 30 di atas). **PDF/DOCX
+  Workspace Write Access SELESAI juga (Tahap 33)** — `workspace_write_file`
+  kini bisa bikin dokumen PDF/DOCX SUNGGUHAN (bukan cuma teks) langsung
+  di Workspace, dengan memanggil ulang `write_pdf`/`write_docx` yang
+  sudah ada (nol perubahan ke modul itu) lewat path absolut yang
+  diresolusi Root Restriction — berlaku di Chat MAUPUN MCP Server (Tahap
+  32) tanpa wiring RBAC baru sama sekali, karena namanya tetap
+  `workspace_write_file`; diverifikasi live PDF sungguhan lewat Chat
+  (dibaca ulang, isinya cocok) dan DOCX sungguhan lewat MCP (lihat detail
+  Tahap 33 di atas). **Tool-call
   resilience SELESAI juga (Tahap 31)** — `_run_tool` kini menangkap
   exception APA PUN dari sebuah tool (bukan cuma `PermissionError`),
   jadi satu tool call gagal (argumen kurang, dll) tak lagi merusak
@@ -2309,19 +2387,22 @@ kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
 Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), MCP Server, Bab 60
 sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
 (Tahap 29, Bab 69.5 Vision), Workspace Write Access (Tahap 30, Bab 69.7
-`write_output`), tool-call resilience (Tahap 31), dan akses Workspace
-lewat MCP Server (Tahap 32, Bab 60.1 + 69.5) semua selesai 2026-07-06.
-**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
-nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
-benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat),
-sesi Chat DAN file hasil kerjanya (di kedua rute yang menyajikannya) DAN
-memori/monitoring/knowledge kini terikat autentikasi, Chat kini bisa
-membaca Project Workspace DAN melihat gambar/menghitung luas GIS-nya DAN
-membuat/mengedit file teks LANGSUNG di dalamnya, satu tool call gagal tak
-lagi merusak seluruh giliran, DAN client MCP eksternal sungguhan (bukan
-cuma Chat) kini juga bisa baca+tulis Project Workspace yang sama — inilah
-yang membuat pengalaman "Cowork" yang diminta Boss makin nyata dari dua
-arah sekaligus: Chat internal DAN agent eksternal (mis. Claude Desktop)
+`write_output`), tool-call resilience (Tahap 31), akses Workspace
+lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), dan PDF/DOCX Workspace
+Write Access (Tahap 33) semua selesai 2026-07-06. **Seluruh 5 area
+Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
+kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
+satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
+kerjanya (di kedua rute yang menyajikannya) DAN memori/monitoring/knowledge
+kini terikat autentikasi, Chat kini bisa membaca Project Workspace DAN
+melihat gambar/menghitung luas GIS-nya DAN membuat/mengedit file TEKS
+MAUPUN DOKUMEN PDF/DOCX SUNGGUHAN LANGSUNG di dalamnya, satu tool call
+gagal tak lagi merusak seluruh giliran, DAN client MCP eksternal
+sungguhan (bukan cuma Chat) kini juga bisa baca+tulis Project Workspace
+yang sama termasuk PDF/DOCX — inilah yang membuat pengalaman "Cowork"
+yang diminta Boss makin nyata dari dua arah sekaligus DAN untuk format
+dokumen yang sesungguhnya dipakai domain aplikasi ini (laporan tambang
+formal): Chat internal DAN agent eksternal (mis. Claude Desktop)
 sama-sama bisa kerja DI DALAM folder proyek, bukan di sampingnya — image
 Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
 image) tertutup sekalian, OCR+HEALTHCHECK Docker kini nyata bekerja.
@@ -2345,34 +2426,40 @@ sama sekali — celah itulah yang justru ditutup Tahap 32 belakangan. Tahap
 30 dan 31 bukan hasil `AskUserQuestion` dari daftar kandidat — Boss
 menyatakan langsung tujuan proyek (agent mandiri, buat/edit file, akses
 folder gaya Cowork) dan minta prioritas diputuskan sendiri dua kali
-berturut-turut; Tahap 32 kembali lewat `AskUserQuestion` (4 kandidat
-dipetakan dari tujuan yang sama) — dipilih sebagai interpretasi PALING
-LITERAL "seperti Claude Cowork": client MCP eksternal sungguhan, bukan
-cuma Chat internal. **Bug nyata ketemu tak sengaja saat menulis test e2e
-Tahap 32**: `db/connection.py`'s engine level-modul memaksa
+berturut-turut; Tahap 32 dan 33 kembali lewat `AskUserQuestion` (kandidat
+dipetakan dari tujuan yang sama) — Tahap 32 dipilih sebagai interpretasi
+PALING LITERAL "seperti Claude Cowork" (client MCP eksternal sungguhan),
+Tahap 33 dipilih karena PDF/DOCX kini relevan di DUA permukaan sekaligus
+(Chat+MCP) sejak Tahap 32. **Bug nyata ketemu tak sengaja saat menulis
+test e2e Tahap 32**: `db/connection.py`'s engine level-modul memaksa
 `pool_size`/`max_overflow` (kwarg khusus Postgres) tanpa syarat, bikin
 proses apa pun yang mengimpornya transitif (termasuk subprocess MCP
 Server) crash total kalau `DATABASE_URL` diarahkan ke sqlite — diperbaiki
 sekalian (kwarg itu cuma ditambah kalau BUKAN sqlite), perilaku Postgres
-nol berubah. Kandidat prioritas berikutnya, dari yang paling murah
-dieksekusi: (1) solusi storage RWX (StorageClass NFS/Longhorn atau
-pindah ke object storage) kalau memang butuh API >1 replika di produksi;
-(2) Bab 68 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (3) PDF/DOCX baru
-langsung ke Workspace (Tahap 30 sengaja cuma format teks — generator
-`agent/tools/writers.py` masih hardcode ke `OUTPUT_DIR`, butuh parameter
-output-path baru; sekarang relevan juga untuk MCP Server sejak Tahap 32);
-(4) satu proses MCP = satu Workspace + satu role tetap (Tahap 32 sengaja
-config-bound, bukan multi-Workspace dinamis — Claude Desktop yang mau
-akses beberapa Project perlu beberapa entri server terkonfigurasi
-terpisah); (5) pesan error tool-call resilience (Tahap 31) masih
-representasi string exception Python mentah, belum diterjemahkan ke
-Bahasa Indonesia yang ramah seperti pesan RBAC; (6) heartbeat RQ yang
-lebih tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin
-konektivitas Redis, bukan bahwa `worker.work()` sungguh memproses job);
-(7) transport SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja,
-server jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 3-7
-kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
+nol berubah. **Temuan Tahap 33 yang memperkecil scope drastis**:
+`agent/tools/writers.py`'s `_path()` helper (dipakai SEMUA fungsi
+`write_*`) sudah menangani "tulis ke path absolut" — filename berkomponen
+direktori dipakai apa adanya, melewati `OUTPUT_DIR`. Jadi `write_pdf`/
+`write_docx` nol diubah; `workspace_write_file` diperluas (bukan tool
+baru), NOL wiring RBAC baru di dua file yang sudah menggerbangnya. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
+storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
+kalau memang butuh API >1 replika di produksi; (2) Bab 68 Enterprise
+Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
+satupun dimulai; (3) satu proses MCP = satu Workspace + satu role tetap
+(Tahap 32 sengaja config-bound, bukan multi-Workspace dinamis — Claude
+Desktop yang mau akses beberapa Project perlu beberapa entri server
+terkonfigurasi terpisah); (4) pesan error tool-call resilience (Tahap 31)
+masih representasi string exception Python mentah, belum diterjemahkan
+ke Bahasa Indonesia yang ramah seperti pesan RBAC; (5) format dokumen
+lain (`.xlsx`/`.pptx`/dst.) tetap tak didukung untuk ditulis ke Workspace
+— `agent/tools/writers.py` memang belum punya generator untuk itu sama
+sekali; (6) heartbeat RQ yang lebih tepat untuk `HEALTHCHECK` worker
+(Tahap 27 cuma menjamin konektivitas Redis, bukan bahwa `worker.work()`
+sungguh memproses job); (7) transport SSE/HTTP untuk MCP Server (Tahap
+28/32 sengaja stdio-saja, server jaringan butuh tinjauan
+auth+path-sandboxing sendiri) — item 3-7 kecil/menengah, cuma relevan
+kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

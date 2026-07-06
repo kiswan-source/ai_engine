@@ -49,18 +49,27 @@ too, reusing existing machinery rather than inventing new parsing:
   lesson: dumping full geometry buried the numbers the model needed).
 
 Workspace Write Access (Bab 69.7 `write_output`, Tahap 30): `workspace_write_file`
-creates/overwrites/appends a **plain-text** file (txt/md/log/csv/json/html
-— the same categories `TEXT_READERS` reads, minus pdf/docx/doc, which are
-binary formats `agent/tools/writers.py` generates through ReportLab/
-python-docx, not a raw text write) back into the Workspace folder itself,
-via `FilesystemAdapter.write_text()` — the actual "edit files in your
-project folder" capability the Bab 69.7 permission table anticipated but
-nothing implemented until now. RBAC for this one is NOT re-derived here
-(same "agent/tools/ must not import from api/" rule as `_read_file`) —
-`core/chat/engine.py._run_tool` checks the caller's Project role against
+creates/overwrites/appends a plain-text file (txt/md/log/csv/json/html —
+the same categories `TEXT_READERS` reads) back into the Workspace folder
+itself, via `FilesystemAdapter.write_text()` — the actual "edit files in
+your project folder" capability the Bab 69.7 permission table anticipated
+but nothing implemented until now. RBAC for this one is NOT re-derived
+here (same "agent/tools/ must not import from api/" rule as `_read_file`)
+— `core/chat/engine.py._run_tool` checks the caller's Project role against
 `write_output` *before* calling this, using the role `api/routes/chat.py`
 already resolved once at bind time (cached on `Session.workspace_role`,
 same shape as `Session.workspace_id`).
+
+PDF/DOCX Workspace writes (Tahap 33): reuses `agent/tools/writers.py`'s
+`write_pdf`/`write_docx` UNCHANGED rather than re-implementing document
+generation — those functions' `_path(filename)` helper already writes to
+`filename` as-is whenever it has a directory component (every `write_*`
+function in that module shares this), so calling them with the
+Workspace-resolved absolute path (instead of a bare filename) makes them
+land inside the Workspace folder instead of `~/ai_engine/reports/`, no
+changes to that module needed. `mode="append"` is rejected for these two
+extensions — ReportLab/python-docx have no sane way to append to an
+existing binary document.
 """
 from __future__ import annotations
 
@@ -78,10 +87,16 @@ from tools.adapters.filesystem import FilesystemAdapter, classify
 from tools.tool_validator import PathEscapesRootError
 from workspace.indexer import extract_text
 
-# Bab 69.7 Workspace Write Access is scoped to plain-text formats this pass
-# — pdf/docx/doc need their own generators (agent/tools/writers.py), not a
-# raw text write; documented as a follow-up, not attempted here.
+# Plain-text formats write raw content directly.
 WRITABLE_EXTENSIONS = {"txt", "md", "log", "csv", "json", "html"}
+# pdf/docx (Tahap 33) reuse agent/tools/writers.py's real generators
+# (ReportLab/python-docx) instead of a raw text write — see _write_file.
+WRITABLE_DOCUMENT_EXTENSIONS = {"pdf", "docx"}
+
+
+def _default_title(relative_path: str) -> str:
+    base = relative_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return base.replace("_", " ").replace("-", " ").title()
 
 
 async def _list_files(workspace_id: str, session_factory=None) -> Dict[str, Any]:
@@ -164,7 +179,7 @@ async def _read_file(
 
 async def _write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
-    mode: str = "overwrite", session_factory=None,
+    mode: str = "overwrite", title: str | None = None, session_factory=None,
 ) -> Dict[str, Any]:
     session_factory = session_factory or AsyncSessionFactory
     async with session_factory() as session:
@@ -177,16 +192,26 @@ async def _write_file(
         return {"success": False, "error": f"source_type={source_type!r} belum didukung."}
 
     ext = relative_path.rsplit(".", 1)[-1].lower() if "." in relative_path else ""
-    if ext not in WRITABLE_EXTENSIONS:
-        return {
-            "success": False,
-            "error": f"Hanya bisa menulis file teks ({'/'.join(sorted(WRITABLE_EXTENSIONS))}).",
-        }
+    if ext not in WRITABLE_EXTENSIONS and ext not in WRITABLE_DOCUMENT_EXTENSIONS:
+        supported = sorted(WRITABLE_EXTENSIONS | WRITABLE_DOCUMENT_EXTENSIONS)
+        return {"success": False, "error": f"Tipe file tidak didukung untuk menulis ({'/'.join(supported)})."}
     if mode not in ("overwrite", "append"):
         return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite' atau 'append')."}
+    if ext in WRITABLE_DOCUMENT_EXTENSIONS and mode == "append":
+        return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (cuma 'overwrite')."}
 
     try:
         adapter = FilesystemAdapter(folder_path)
+        if ext in WRITABLE_DOCUMENT_EXTENSIONS:
+            from agent.tools.writers import write_docx, write_pdf
+
+            abs_path = str(adapter.absolute_path(relative_path))
+            generator = write_pdf if ext == "pdf" else write_docx
+            result = generator(abs_path, title or _default_title(relative_path), content)
+            if not result.get("success"):
+                return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+            return {"success": True, "path": relative_path, "action": "overwrite",
+                     "type": ext, "size": result["size"]}
         path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
         return {"success": True, "path": relative_path, "action": mode, "size": path.stat().st_size}
     except PathEscapesRootError as e:
@@ -237,17 +262,21 @@ def workspace_read_file(workspace_id: str, folder_id: str, relative_path: str) -
 
 
 def workspace_write_file(
-    workspace_id: str, folder_id: str, relative_path: str, content: str, mode: str = "overwrite"
+    workspace_id: str, folder_id: str, relative_path: str, content: str,
+    mode: str = "overwrite", title: str | None = None,
 ) -> Dict[str, Any]:
-    """Tulis (buat/timpa/tambah) satu file teks di Project Workspace.
-    ``workspace_id`` selalu disuntik oleh `ChatEngine._run_tool`; izin
-    ``write_output`` dicek DI SANA sebelum fungsi ini pernah dipanggil —
-    lihat modul docstring."""
+    """Tulis (buat/timpa/tambah) satu file di Project Workspace — teks
+    apa adanya, atau PDF/DOCX sungguhan (Tahap 33) kalau ekstensinya
+    begitu (``title`` cuma dipakai untuk PDF/DOCX). ``workspace_id`` selalu
+    disuntik oleh `ChatEngine._run_tool`; izin ``write_output`` dicek DI
+    SANA sebelum fungsi ini pernah dipanggil — lihat modul docstring."""
 
     async def _run():
         engine, factory = _build_fresh_engine()
         try:
-            return await _write_file(workspace_id, folder_id, relative_path, content, mode, session_factory=factory)
+            return await _write_file(
+                workspace_id, folder_id, relative_path, content, mode, title, session_factory=factory
+            )
         finally:
             await engine.dispose()
 

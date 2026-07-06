@@ -138,6 +138,25 @@ async def test_editor_role_writes_a_real_file_into_the_real_workspace_folder(tmp
     assert (content_dir / "catatan.txt").read_text() == "ditulis via MCP"
 
 
+async def test_editor_role_writes_a_real_docx_into_the_real_workspace_folder(tmp_path):
+    """PDF/DOCX Workspace writes (Tahap 33) reuse agent/tools/writers.py's
+    real generators — proves that reuse works through a real MCP
+    subprocess too, not just ChatEngine."""
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    database_url, (workspace_id, folder_id) = await _setup_workspace_sqlite_file(tmp_path, content_dir)
+
+    client = _workspace_client(workspace_id, "editor", database_url)
+    result = await client.call_tool(
+        "workspace_write_file",
+        {"folder_id": folder_id, "relative_path": "laporan.docx", "content": "Isi laporan via MCP.", "title": "Laporan"},
+    )
+    assert result["success"] is True
+    docx_path = content_dir / "laporan.docx"
+    assert docx_path.exists()
+    assert docx_path.read_bytes().startswith(b"PK")  # real docx zip container
+
+
 async def test_viewer_role_can_read_but_not_write_real_workspace(tmp_path):
     content_dir = tmp_path / "content"
     content_dir.mkdir()
