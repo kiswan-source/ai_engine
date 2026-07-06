@@ -176,6 +176,60 @@ export default function MonitoringPage() {
           })}
         </div>
       </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-medium">Keamanan</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <StatTile label="Total kejadian" value={String(dashboard.security.total_security_events)} />
+          {Object.entries(dashboard.security.by_type).map(([type, count]) => (
+            <StatTile key={type} label={type} value={String(count)} />
+          ))}
+        </div>
+        {dashboard.security.recent.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {dashboard.security.recent
+              .slice()
+              .reverse()
+              .map((entry, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
+                >
+                  <span className="font-medium">{entry.event_type}</span>
+                  <span className="text-muted-foreground">
+                    {entry.actor} · {new Date(entry.timestamp * 1000).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-medium">Audit Trail</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <StatTile label="Total entri" value={String(dashboard.audit.total_entries)} />
+          <StatTile label="Aktor unik" value={String(dashboard.audit.unique_actors)} />
+        </div>
+        {dashboard.audit.recent.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {dashboard.audit.recent
+              .slice()
+              .reverse()
+              .map((entry, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
+                >
+                  <span className="font-medium">{entry.event_type}</span>
+                  <span className="text-muted-foreground">
+                    {entry.actor} · {new Date(entry.timestamp * 1000).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
     </div>
   )
 }

@@ -197,6 +197,60 @@ async def health_dashboard() -> dict:
     return await check_readiness()
 
 
+# Event types security_dashboard() considers "security-relevant" — a subset
+# of everything security/audit_log.py ever records (audit_dashboard() below
+# covers the full trail). Kept in one place so both stay in sync with what
+# agents/generic_agent.py actually records.
+_SECURITY_EVENT_TYPES = frozenset({
+    "prompt_guard.blocked", "prompt_guard.neutralized", "output_validator.violation", "pii.redacted",
+})
+
+
+def security_dashboard(limit: int = 500) -> dict:
+    """Bab 68 Backlog Prioritas 13 Security Dashboard (Tahap 34): counts of
+    prompt-injection blocks/neutralizations, output-validator violations,
+    and PII redactions — sourced from ``security/audit_log.py``'s
+    structured trail (Tahap 7), the one place ``agents/generic_agent.py``
+    already records every one of these (Bab 62's "one source of truth").
+    """
+    from dataclasses import asdict
+
+    from security import audit_log
+
+    entries = [e for e in audit_log.read_recent(limit) if e.event_type in _SECURITY_EVENT_TYPES]
+    by_type: dict[str, int] = {}
+    for e in entries:
+        by_type[e.event_type] = by_type.get(e.event_type, 0) + 1
+    return {
+        "total_security_events": len(entries),
+        "by_type": by_type,
+        "recent": [asdict(e) for e in entries[-20:]],
+    }
+
+
+def audit_dashboard(limit: int = 500) -> dict:
+    """Bab 68 Backlog Prioritas 13 Audit Dashboard (Tahap 34): a general
+    view of the full ``security/audit_log.py`` trail — every ``event_type``
+    it has ever recorded, not just the security-flavored subset
+    :func:`security_dashboard` filters to."""
+    from dataclasses import asdict
+
+    from security import audit_log
+
+    entries = audit_log.read_recent(limit)
+    by_type: dict[str, int] = {}
+    actors: set[str] = set()
+    for e in entries:
+        by_type[e.event_type] = by_type.get(e.event_type, 0) + 1
+        actors.add(e.actor)
+    return {
+        "total_entries": len(entries),
+        "by_event_type": by_type,
+        "unique_actors": len(actors),
+        "recent": [asdict(e) for e in entries[-20:]],
+    }
+
+
 async def queue_dashboard(queue_names: tuple[str, ...] = ("ai_queue", "gis_queue", "pipeline_queue")) -> dict:
     """Bab 62 Queue Dashboard: RQ (legacy pipeline) + TaskQueue (v4-native) lengths.
 

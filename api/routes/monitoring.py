@@ -24,6 +24,12 @@ is "must be authenticated when API_KEYS is configured", same posture as
 `api/routes/files.py`/`knowledge.py` — no role currently lacks
 `view_dashboard`, so this isn't a finer-grained gate yet, just the first
 real caller of the mechanism).
+
+Security + Audit Dashboards (Bab 68 Backlog Prioritas 13, Tahap 34):
+`monitoring.security_dashboard()`/`audit_dashboard()` read
+`security/audit_log.py`'s file-based trail directly (no orchestrator
+singleton involved, unlike every other dashboard here) — gated by the
+same `view_dashboard` permission, no new RBAC action needed.
 """
 from dataclasses import asdict
 
@@ -45,7 +51,8 @@ async def dashboard(
     principal: Principal = Depends(require_role("view_dashboard")),
 ):
     """Bab 62 dashboards — Agent, Workflow, Provider, Cost, Latency, Health,
-    Queue, Workspace (Bab 69.14, Tahap 19; Memory excluded, see module docstring)."""
+    Queue, Workspace (Bab 69.14, Tahap 19; Memory excluded, see module docstring),
+    plus Security/Audit (Bab 68 Backlog Prioritas 13, Tahap 34)."""
     await _orchestrator._ensure_telemetry_started()
     return {
         "agent": monitoring.agent_dashboard(_orchestrator.agents, _orchestrator.metrics),
@@ -56,6 +63,8 @@ async def dashboard(
         "health": await monitoring.health_dashboard(),
         "queue": await monitoring.queue_dashboard(),
         "workspace": await monitoring.workspace_dashboard(session),
+        "security": monitoring.security_dashboard(),
+        "audit": monitoring.audit_dashboard(),
     }
 
 

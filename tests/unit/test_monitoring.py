@@ -11,6 +11,7 @@ from db.models import Workspace, WorkspaceFolder
 from memory.vector_memory import VectorMemory
 from messaging import EventBus, InMemoryBroker
 from registry.agent_registry import AgentRegistry
+from security import audit_log
 from telemetry.cost_tracker import CostTracker
 from telemetry.metrics import MetricsCollector
 from telemetry import monitoring
@@ -223,3 +224,52 @@ async def test_workspace_dashboard_reports_missing_folder_as_error_not_fatal(sql
     dashboard = await monitoring.workspace_dashboard(session)
     assert dashboard["total_workspaces"] == 1
     assert len(dashboard["errors"]) == 1
+
+
+# ─── Security + Audit Dashboards (Bab 68 Backlog Prioritas 13, Tahap 34) ──
+# Audit log isolation is autouse (tests/conftest.py) — each test gets a
+# fresh, empty file, so entries here are exactly what each test writes.
+
+async def test_security_dashboard_counts_and_filters_security_events():
+    await audit_log.record("prompt_guard.blocked", actor="writer-agent", detail={})
+    await audit_log.record("prompt_guard.neutralized", actor="writer-agent", detail={})
+    await audit_log.record("pii.redacted", actor="writer-agent", detail={"categories": ["EMAIL"]})
+    await audit_log.record("tool_access.denied", actor="user", detail={})  # not a "security" type
+
+    dashboard = monitoring.security_dashboard()
+
+    assert dashboard["total_security_events"] == 3
+    assert dashboard["by_type"] == {
+        "prompt_guard.blocked": 1, "prompt_guard.neutralized": 1, "pii.redacted": 1,
+    }
+    assert len(dashboard["recent"]) == 3
+
+
+async def test_security_dashboard_empty_when_no_entries():
+    dashboard = monitoring.security_dashboard()
+    assert dashboard["total_security_events"] == 0
+    assert dashboard["by_type"] == {}
+    assert dashboard["recent"] == []
+
+
+async def test_audit_dashboard_counts_all_event_types_and_actors():
+    await audit_log.record("prompt_guard.blocked", actor="writer-agent", detail={})
+    await audit_log.record("tool_access.denied", actor="user", detail={})
+    await audit_log.record("tool_access.denied", actor="operator", detail={})
+
+    dashboard = monitoring.audit_dashboard()
+
+    assert dashboard["total_entries"] == 3
+    assert dashboard["by_event_type"] == {"prompt_guard.blocked": 1, "tool_access.denied": 2}
+    assert dashboard["unique_actors"] == 3
+    assert len(dashboard["recent"]) == 3
+
+
+async def test_audit_dashboard_recent_caps_at_20():
+    for i in range(25):
+        await audit_log.record("noise", actor=f"actor-{i}", detail={})
+
+    dashboard = monitoring.audit_dashboard()
+
+    assert dashboard["total_entries"] == 25
+    assert len(dashboard["recent"]) == 20

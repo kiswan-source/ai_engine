@@ -84,7 +84,11 @@ async def test_dashboard_accessible_with_any_authenticated_role(client):
     # be authenticated", not a finer-grained per-role gate yet.
     res = await client.get("/api/v1/monitoring/dashboard", headers={"X-API-Key": "anykey"})
     assert res.status_code == 200
-    assert "agent" in res.json()
+    body = res.json()
+    assert "agent" in body
+    # Security/Audit Dashboards (Bab 68 Backlog Prioritas 13, Tahap 34).
+    assert "security" in body
+    assert "audit" in body
 
 
 async def test_alerts_requires_auth(client):

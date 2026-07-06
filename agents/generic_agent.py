@@ -15,6 +15,14 @@ one choke point every role shares, so it's the one place these guardrails
 need wiring rather than duplicating checks per provider. PII redaction (Bab
 30 — "sebelum dikirim ke provider eksternal") only applies when the resolved
 provider isn't Ollama (local, never leaves the system).
+
+Tahap 34 (Bab 68 Prioritas 13, Security Dashboard): PII redaction now also
+calls ``security.audit_log.record("pii.redacted", ...)`` when
+``detect_pii()`` actually finds something — previously the only guardrail
+action here that never reached the audit trail at all, which would have
+left a Security Dashboard permanently blank for this category. Only
+logged when matches exist, so the trail doesn't fill with "redacted
+nothing" noise on every external-provider call.
 """
 from __future__ import annotations
 
@@ -58,7 +66,7 @@ class GenericLLMAgent(BaseAgent):
                 apply the Fallback Strategy (Bab 54); the agent does not swallow it.
         """
         from api.config import settings
-        from security import audit_log, check_prompt, redact_pii, validate
+        from security import audit_log, check_prompt, detect_pii, redact_pii, validate
 
         prompt = task.prompt
 
@@ -96,7 +104,15 @@ class GenericLLMAgent(BaseAgent):
                 prompt = guard.sanitized_text
 
         if settings.ENABLE_PII_REDACTION and self._provider.name != "ollama":
-            prompt = redact_pii(prompt)
+            pii_matches = detect_pii(prompt)
+            if pii_matches:
+                prompt = redact_pii(prompt)
+                await audit_log.record(
+                    "pii.redacted",
+                    actor=self.agent_id,
+                    detail={"categories": sorted({m.category for m in pii_matches}), "count": len(pii_matches), "role": self.role},
+                    trace_id=task.trace_id,
+                )
 
         # Vision (Bab 17.1 role): images travel via Task.payload rather than a
         # named Task field — it's already documented as the "arbitrary

@@ -65,6 +65,27 @@ export interface QueueEntry {
 
 export type QueueDashboard = Record<string, QueueEntry>
 
+export interface AuditEntry {
+  event_type: string
+  actor: string
+  detail: Record<string, unknown>
+  trace_id: string
+  timestamp: number
+}
+
+export interface SecurityDashboard {
+  total_security_events: number
+  by_type: Record<string, number>
+  recent: AuditEntry[]
+}
+
+export interface AuditDashboard {
+  total_entries: number
+  by_event_type: Record<string, number>
+  unique_actors: number
+  recent: AuditEntry[]
+}
+
 export interface MonitoringDashboard {
   agent: AgentDashboard
   workflow: WorkflowDashboard
@@ -73,6 +94,8 @@ export interface MonitoringDashboard {
   latency: LatencyDashboard
   health: HealthDashboard
   queue: QueueDashboard
+  security: SecurityDashboard
+  audit: AuditDashboard
 }
 
 export interface MonitoringAlert {

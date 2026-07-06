@@ -45,6 +45,7 @@
 | 31* | Tool-call resilience — satu tool call gagal (argumen kurang/exception apa pun) tak lagi merusak seluruh giliran chat | ✅ SELESAI |
 | 32* | Akses Workspace lewat MCP Server (Bab 60.1 + 69.5) — client MCP eksternal (mis. Claude Desktop) kini bisa baca/tulis Project Workspace | ✅ SELESAI |
 | 33* | PDF/DOCX Workspace Write Access — `workspace_write_file` kini bisa bikin dokumen PDF/DOCX sungguhan langsung di folder Workspace, lewat Chat maupun MCP | ✅ SELESAI |
+| 34* | Security + Audit Dashboards (Bab 68 Backlog Prioritas 13) — 2 dashboard baru melengkapi 8 dashboard Bab 62, item Backlog pertama yang dikerjakan | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -2040,10 +2041,90 @@ PDF/DOCX, bukan `.txt` (CLAUDE.md §6). Direncanakan lewat Plan Mode dulu.
   punya generator untuk format itu sama sekali, bukan spesifik gap
   Workspace.
 
+**Tahap 34 — Security + Audit Dashboards (Bab 68 Backlog Prioritas 13)**
+
+Item PERTAMA yang dikerjakan dari Bab 68 Enterprise Architecture Backlog
+(20 prioritas di `DEVELOPMENT_ROADMAP.md` §6, belum satupun tersentuh
+sebelum ini). Diaudit dulu seluruh 20 item — sebagian besar terlalu
+besar/spekulatif untuk satu Tahap (AI Governance, Multi-Tenant yang
+eksplisit "desain saja", Enterprise Integration ke SAP/ERP) atau butuh
+infra yang tak ada di dev box ini (Resource Management multi-GPU).
+**Prioritas 13 — AI Dashboard (Perluasan)** menonjol sebagai genuinely
+terbatas: cuma minta 2 dashboard lagi (Security, Audit) melengkapi 8
+dashboard Bab 62 yang sudah ada, dan datanya SEBAGIAN BESAR sudah ada —
+`security/audit_log.py` (Tahap 7) sudah menulis entri JSON terstruktur
+untuk `prompt_guard.blocked`/`prompt_guard.neutralized`/
+`output_validator.violation`. Dipilih via `AskUserQuestion` dari 4
+kandidat Backlog yang sudah disaring. Direncanakan lewat Plan Mode.
+
+- **Gap ditemukan saat riset**: redaksi PII (`security/pii_detector.py`,
+  disambung ke `agents/generic_agent.py` sejak Tahap 7) adalah SATU-SATUNYA
+  aksi guardrail yang diterapkan tapi TAK PERNAH dicatat ke audit trail —
+  Security Dashboard yang baru akan selalu nol permanen untuk kategori
+  itu. Ditutup sekalian, karena dashboard itulah alasan gap ini penting.
+  Fix: cabang PII di `generic_agent.py` sekarang panggil `detect_pii()`
+  dulu; kalau ADA yang ketemu, baru redaksi DAN `audit_log.record("pii.redacted",
+  ...)` — tak dicatat kalau nihil, supaya trail tak penuh noise "redaksi
+  nol" di setiap panggilan provider eksternal.
+- **Temuan lain, dicatat sebagai gap terpisah bukan diperbaiki di sini**:
+  `telemetry/monitoring.py::workspace_dashboard()` (Tahap 19) sudah ada di
+  respons API `/dashboard` sejak Tahap 19, tapi tipe TypeScript
+  `MonitoringDashboard` dan `MonitoringPage.tsx` di frontend TAK PERNAH
+  menampilkannya — drift backend/frontend nyata, di luar cakupan Tahap
+  ini.
+- **Dua fungsi dashboard baru murni fungsi (pola PERSIS 8 dashboard Bab 62
+  yang sudah ada)** di `telemetry/monitoring.py`: `security_dashboard()`
+  (filter `audit_log.read_recent()` ke 4 tipe event keamanan, hitung per
+  tipe + 20 entri terbaru) dan `audit_dashboard()` (SELURUH trail — hitung
+  per event_type apa pun, jumlah aktor unik, 20 entri terbaru — bukan
+  cuma yang keamanan). Keduanya sinkron (bukan async) — file JSON-lines
+  kecil, sama seperti `queue_dashboard()`'s redis client sinkron.
+- **Wiring ke `api/routes/monitoring.py`**: dua kunci baru (`security`,
+  `audit`) di `/dashboard`, digerbang `require_role("view_dashboard")`
+  yang SAMA sudah dipakai 8 dashboard lain — nol aksi RBAC baru.
+- **Frontend dapat perlakuan sama seperti Tahap 12/14/26** — `types/monitoring.ts`
+  dapat interface `SecurityDashboard`/`AuditDashboard`, `MonitoringPage.tsx`
+  dapat 2 section baru ("Keamanan", "Audit Trail") pakai `StatTile`/
+  `StatusBadge` yang sudah ada — nol komponen UI baru.
+- **10 test baru (584/584 total, stabil 2x berturut-turut)**: 2 unit
+  `test_generic_agent.py` (redaksi PII BENAR catat `pii.redacted` dengan
+  kategori yang tepat; prompt bersih TAK catat apa pun), 6 unit
+  `test_monitoring.py` (`security_dashboard`/`audit_dashboard` hitung+filter
+  benar, kosong saat nihil, `recent` dibatasi 20), 2 tambahan di
+  `test_monitoring_auth.py` (kunci `security`/`audit` muncul di respons).
+  Plus `npm run build`/`lint` hijau (0 error, 14 warning pra-ada tak
+  terkait), `npm test` 5/5 tetap lulus (tak ada test Vitest baru — pola
+  yang sama seperti Tahap 12/14 untuk fitur Monitoring, diverifikasi
+  visual bukan unit test komponen).
+- **Diverifikasi live sungguhan, sadar biaya**: deteksi prompt-injection
+  berlaku APA PUN providernya (beda dari redaksi PII yang digerbang
+  `!= "ollama"`), jadi entri `prompt_guard.blocked` NYATA dipicu GRATIS
+  lewat role `tool` (Ollama, nol biaya cloud) via
+  `POST /api/v1/orchestrator/run` dengan prompt injeksi sungguhan
+  ("Ignore all previous instructions...") → BENAR diblokir
+  (`"blocked by prompt_guard: ignore_instructions, prompt_exfiltration"`).
+  `GET /api/v1/monitoring/dashboard` BENAR merefleksikannya:
+  `security.by_type["prompt_guard.blocked"]` naik dari 0 ke 1,
+  `audit.total_entries` naik dari 5 ke 6. Redaksi PII TIDAK dipicu live
+  (butuh panggilan cloud berbayar untuk jalur kode yang sudah dites unit
+  secara deterministik — keputusan sadar tak mengeluarkan biaya untuk itu,
+  dicatat eksplisit bukan diam-diam dilewati). Screenshot browser Chromium
+  (Playwright) ke halaman Monitoring sungguhan mengonfirmasi kedua section
+  baru merender data NYATA dengan angka PERSIS cocok respons API (5 total
+  kejadian keamanan, 6 entri audit, 4 aktor unik), nol error console.
+- **Gap yang diakui**: 19 dari 20 item Bab 68 Backlog masih belum
+  disentuh — sebagian besar (AI Governance, Multi-Tenant, Enterprise
+  Integration, dll.) genuinely terlalu besar untuk pola Tahap kecil sesi
+  ini; drift `workspace_dashboard()` frontend (temuan di atas) belum
+  diperbaiki.
+
 ## Test
-- **Backend: 578/578 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~24-25 detik total) — naik dari 574 lewat 4 test PDF/DOCX Workspace
-  Write Access (Tahap 33, lihat detail di atas: 3 unit
+- **Backend: 584/584 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~25-29 detik total) — naik dari 578 lewat 10 test Security+Audit
+  Dashboards (Tahap 34, lihat detail di atas: 2 unit
+  `test_generic_agent.py`, 6 unit `test_monitoring.py`, 2 integrasi
+  `test_monitoring_auth.py`). Sebelumnya naik dari 574 lewat 4 test
+  PDF/DOCX Workspace Write Access (Tahap 33, lihat detail di atas: 3 unit
   `test_workspace_reader.py`, 1 integrasi `test_mcp_server_e2e.py`).
   Sebelumnya naik dari 565 lewat 9 test akses
   Workspace lewat MCP Server (Tahap 32, lihat detail di atas: 5 unit
@@ -2107,7 +2188,7 @@ PDF/DOCX, bukan `.txt` (CLAUDE.md §6). Direncanakan lewat Plan Mode dulu.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-33, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-34, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2160,7 +2241,13 @@ PDF/DOCX, bukan `.txt` (CLAUDE.md §6). Direncanakan lewat Plan Mode dulu.
   exception APA PUN dari sebuah tool (bukan cuma `PermissionError`),
   jadi satu tool call gagal (argumen kurang, dll) tak lagi merusak
   seluruh giliran SSE; diverifikasi live dengan reproduksi persis skenario
-  crash yang ditemukan Tahap 30 (lihat detail Tahap 31 di atas). Rute
+  crash yang ditemukan Tahap 30 (lihat detail Tahap 31 di atas). **Security
+  + Audit Dashboards SELESAI juga (Bab 68 Backlog Prioritas 13, Tahap
+  34)** — item PERTAMA dari 20 Backlog yang dikerjakan; 2 dashboard baru
+  melengkapi 8 Bab 62, gap redaksi PII tak pernah tercatat di audit trail
+  ditutup sekalian; diverifikasi live prompt-injection nyata (gratis lewat
+  Ollama) langsung terefleksi di dashboard, screenshot browser konfirmasi
+  UI merender data nyata (lihat detail Tahap 34 di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -2388,8 +2475,10 @@ Docker — `tesseract-ocr`/`HEALTHCHECK` (Tahap 27), MCP Server, Bab 60
 sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
 (Tahap 29, Bab 69.5 Vision), Workspace Write Access (Tahap 30, Bab 69.7
 `write_output`), tool-call resilience (Tahap 31), akses Workspace
-lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), dan PDF/DOCX Workspace
-Write Access (Tahap 33) semua selesai 2026-07-06. **Seluruh 5 area
+lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), PDF/DOCX Workspace
+Write Access (Tahap 33), dan Security + Audit Dashboards (Tahap 34, Bab
+68 Backlog Prioritas 13 — item PERTAMA dari Backlog 20-item yang
+dikerjakan) semua selesai 2026-07-06. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2430,7 +2519,11 @@ berturut-turut; Tahap 32 dan 33 kembali lewat `AskUserQuestion` (kandidat
 dipetakan dari tujuan yang sama) — Tahap 32 dipilih sebagai interpretasi
 PALING LITERAL "seperti Claude Cowork" (client MCP eksternal sungguhan),
 Tahap 33 dipilih karena PDF/DOCX kini relevan di DUA permukaan sekaligus
-(Chat+MCP) sejak Tahap 32. **Bug nyata ketemu tak sengaja saat menulis
+(Chat+MCP) sejak Tahap 32. **Tahap 34 kembali lewat `AskUserQuestion`**
+(4 kandidat Bab 68 Backlog yang sudah disaring dari 20 item, setelah
+audit menyeluruh menemukan sebagian besar item lain terlalu
+besar/spekulatif untuk pola Tahap kecil sesi ini — lihat detail Tahap 34
+di atas). **Bug nyata ketemu tak sengaja saat menulis
 test e2e Tahap 32**: `db/connection.py`'s engine level-modul memaksa
 `pool_size`/`max_overflow` (kwarg khusus Postgres) tanpa syarat, bikin
 proses apa pun yang mengimpornya transitif (termasuk subprocess MCP
@@ -2441,25 +2534,34 @@ nol berubah. **Temuan Tahap 33 yang memperkecil scope drastis**:
 `write_*`) sudah menangani "tulis ke path absolut" — filename berkomponen
 direktori dipakai apa adanya, melewati `OUTPUT_DIR`. Jadi `write_pdf`/
 `write_docx` nol diubah; `workspace_write_file` diperluas (bukan tool
-baru), NOL wiring RBAC baru di dua file yang sudah menggerbangnya. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
-storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
-kalau memang butuh API >1 replika di produksi; (2) Bab 68 Enterprise
-Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
-satupun dimulai; (3) satu proses MCP = satu Workspace + satu role tetap
-(Tahap 32 sengaja config-bound, bukan multi-Workspace dinamis — Claude
-Desktop yang mau akses beberapa Project perlu beberapa entri server
-terkonfigurasi terpisah); (4) pesan error tool-call resilience (Tahap 31)
-masih representasi string exception Python mentah, belum diterjemahkan
-ke Bahasa Indonesia yang ramah seperti pesan RBAC; (5) format dokumen
-lain (`.xlsx`/`.pptx`/dst.) tetap tak didukung untuk ditulis ke Workspace
-— `agent/tools/writers.py` memang belum punya generator untuk itu sama
-sekali; (6) heartbeat RQ yang lebih tepat untuk `HEALTHCHECK` worker
-(Tahap 27 cuma menjamin konektivitas Redis, bukan bahwa `worker.work()`
-sungguh memproses job); (7) transport SSE/HTTP untuk MCP Server (Tahap
-28/32 sengaja stdio-saja, server jaringan butuh tinjauan
-auth+path-sandboxing sendiri) — item 3-7 kecil/menengah, cuma relevan
-kalau ada kebutuhan konkret.
+baru), NOL wiring RBAC baru di dua file yang sudah menggerbangnya.
+**Gap redaksi PII tak pernah masuk audit trail ditemukan+ditutup Tahap
+34** — satu-satunya aksi guardrail yang diterapkan tapi tak pernah
+dicatat, akan bikin Security Dashboard baru selalu nol permanen untuk
+kategori itu kalau dibiarkan. Kandidat prioritas berikutnya, dari yang
+paling murah dieksekusi: (1) solusi storage RWX (StorageClass NFS/Longhorn
+atau pindah ke object storage) kalau memang butuh API >1 replika di
+produksi; (2) item lain di Bab 68 Backlog (19 dari 20 tersisa — Prioritas
+16 Simulation Mode, 8 Prompt Management, 7 Configuration Center adalah
+kandidat lain yang sudah disaring genuinely bounded saat Tahap 34
+disiapkan; sisanya sebagian besar terlalu besar/spekulatif untuk pola
+Tahap kecil sesi ini, lihat detail Tahap 34); (3) drift
+`workspace_dashboard()` (Tahap 19) yang sudah ada di API sejak lama tapi
+tak pernah muncul di frontend `MonitoringDashboard`/`MonitoringPage.tsx`
+— ditemukan saat Tahap 34, dicatat bukan diperbaiki; (4) satu proses MCP
+= satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
+multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
+perlu beberapa entri server terkonfigurasi terpisah); (5) pesan error
+tool-call resilience (Tahap 31) masih representasi string exception
+Python mentah, belum diterjemahkan ke Bahasa Indonesia yang ramah seperti
+pesan RBAC; (6) format dokumen lain (`.xlsx`/`.pptx`/dst.) tetap tak
+didukung untuk ditulis ke Workspace — `agent/tools/writers.py` memang
+belum punya generator untuk itu sama sekali; (7) heartbeat RQ yang lebih
+tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas
+Redis, bukan bahwa `worker.work()` sungguh memproses job); (8) transport
+SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
+jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 4-8
+kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

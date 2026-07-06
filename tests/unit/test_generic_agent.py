@@ -7,6 +7,7 @@ import pytest
 from agents.base_agent import Task
 from agents.generic_agent import GenericLLMAgent
 from providers.base_provider import ProviderResponse
+from security import audit_log
 
 
 class StubProvider:
@@ -75,6 +76,29 @@ async def test_does_not_redact_pii_for_ollama():
     await agent.execute(Task(role="writer", prompt="Hubungi saya di budi@example.com"))
 
     assert "budi@example.com" in provider.last_prompt
+
+
+async def test_pii_redaction_records_audit_entry():
+    """Tahap 34 (Bab 68 Prioritas 13): PII redaction previously never
+    reached the audit trail — a Security Dashboard would show a permanent
+    zero for it. (Audit log isolation is autouse, tests/conftest.py.)"""
+    provider = StubProvider()
+    agent = GenericLLMAgent("writer", provider=provider)
+
+    await agent.execute(Task(role="writer", prompt="Hubungi saya di budi@example.com"))
+
+    entries = [e for e in audit_log.read_recent() if e.event_type == "pii.redacted"]
+    assert len(entries) == 1
+    assert entries[0].detail["categories"] == ["EMAIL"]
+
+
+async def test_benign_prompt_records_no_pii_audit_entry():
+    provider = StubProvider()
+    agent = GenericLLMAgent("writer", provider=provider)
+
+    await agent.execute(Task(role="writer", prompt="Tulis ringkasan singkat tentang tambang."))
+
+    assert not [e for e in audit_log.read_recent() if e.event_type == "pii.redacted"]
 
 
 async def test_output_validation_scores_clean_output():
