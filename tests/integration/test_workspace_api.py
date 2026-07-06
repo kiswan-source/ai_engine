@@ -261,7 +261,9 @@ async def test_index_makes_content_searchable_via_knowledge_api(client, tmp_path
     assert index_res.json()["chunks_indexed"] >= 1
     assert index_res.json()["status"] == "Active"
 
-    search_res = await client.get("/api/v1/knowledge/search", params={"q": unique_phrase})
+    search_res = await client.get(
+        "/api/v1/knowledge/search", params={"q": unique_phrase}, headers=_as("ownerkey")
+    )
     assert search_res.status_code == 200
     hits = search_res.json()["hits"]
     assert any(unique_phrase in h["text"] for h in hits)

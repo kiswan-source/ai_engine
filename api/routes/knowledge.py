@@ -30,6 +30,13 @@ pure in-process state: a per-request `Retriever` would forget everything
 between requests. Only invisible in ad-hoc local testing because this dev
 box has `VECTOR_BACKEND=pgvector` configured, which persists to real
 Postgres regardless of which Python object touches it.
+
+Authentication (Tahap 26): every route now requires
+`Depends(get_current_principal)` — same posture as `api/routes/files.py`
+(Tahap 25): authentication, not per-user ownership. There's no owner
+concept for a `Document` (the knowledge base is shared across every
+caller, same as it always has been) — this closes "anyone, no key at all"
+without pretending to be a finer-grained model that doesn't exist yet.
 """
 from datetime import datetime
 
@@ -41,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.connection import get_session
 from db.models import Document
 from rag.retriever import Retriever
+from security.auth import Principal, get_current_principal
 
 router = APIRouter()
 
@@ -64,7 +72,11 @@ class DocumentSummary(BaseModel):
 
 
 @router.post("/documents")
-async def ingest_document(req: IngestRequest, session: AsyncSession = Depends(get_session)):
+async def ingest_document(
+    req: IngestRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
     doc = Document(
         filename=req.title,
         doc_type="knowledge",
@@ -81,7 +93,9 @@ async def ingest_document(req: IngestRequest, session: AsyncSession = Depends(ge
 
 
 @router.get("/documents")
-async def list_documents(session: AsyncSession = Depends(get_session)):
+async def list_documents(
+    session: AsyncSession = Depends(get_session), principal: Principal = Depends(get_current_principal)
+):
     result = await session.execute(select(Document).where(Document.doc_type == "knowledge").order_by(Document.created_at.desc()))
     docs = result.scalars().all()
     return {
@@ -93,7 +107,11 @@ async def list_documents(session: AsyncSession = Depends(get_session)):
 
 
 @router.delete("/documents/{document_id}")
-async def delete_document(document_id: str, session: AsyncSession = Depends(get_session)):
+async def delete_document(
+    document_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
     doc = await session.get(Document, document_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -103,6 +121,6 @@ async def delete_document(document_id: str, session: AsyncSession = Depends(get_
 
 
 @router.get("/search")
-async def search_knowledge(q: str):
+async def search_knowledge(q: str, principal: Principal = Depends(get_current_principal)):
     hits = await _retriever.retrieve(q)
     return {"hits": [{"entry_id": h.entry_id, "text": h.text, "score": h.score, "metadata": h.metadata} for h in hits]}

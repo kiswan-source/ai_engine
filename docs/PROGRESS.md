@@ -37,6 +37,7 @@
 | 23* | Agent Workspace Context ke ChatEngine (Bab 69.5) — Chat bisa baca Project Workspace, bukan cuma Uploaded Files | ✅ SELESAI |
 | 24* | Kepemilikan file download Chat — tutup gap yang sengaja ditinggalkan Tahap 22/23 | ✅ SELESAI |
 | 25* | Autentikasi + fix path traversal `api/routes/files.py` — tutup bypass nyata yang ditemukan Tahap 24 | ✅ SELESAI |
+| 26* | Autentikasi `memory.py`/`monitoring.py`/`knowledge.py` — pola gap sama seperti `files.py` sebelum Tahap 25 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1428,11 +1429,75 @@ terhadap perlindungan yang baru dibangun.
   service di-restart, dikonfirmasi perilaku dev normal (tanpa `API_KEYS`)
   tak berubah sama sekali.
 
+**Tahap 26 — Autentikasi `memory.py`/`monitoring.py`/`knowledge.py`**
+
+Dipilih lewat `AskUserQuestion` sebagai lanjutan pola yang sama persis
+dengan `files.py` sebelum Tahap 25: tiga rute ini terbuka tanpa
+autentikasi sama sekali, `memory.py` khususnya sudah lama dicatat berisiko
+(`docs/PROGRESS.md` sejak Tahap 12: "siapa pun yang tahu `session_id`
+orang lain bisa membaca/menghapus memori sesi itu tanpa otorisasi apa
+pun"). Tak ada perubahan frontend dibutuhkan — ketiga service
+(`monitoringService.ts`/`memoryService.ts`/`knowledgeService.ts`) sudah
+lewat `apiClient` (otomatis lampirkan `X-API-Key`), beda dari `files.py`
+yang punya `<a href>` biasa.
+
+- **`api/routes/memory.py`**: pakai ulang `_require_session_owner`
+  LANGSUNG dari `api/routes/chat.py` (bukan mekanisme baru) — `session_id`
+  di modul ini memang dimaksudkan sama dengan sesi `ChatEngine`, jadi
+  gerbang kepemilikan Tahap 22 berlaku apa adanya di kelima rute
+  (`GET`/`DELETE` per-tier). `session_id` yang belum pernah disentuh
+  ChatEngine (kasus umum hari ini, karena `core/chat/engine.py` belum
+  menulis ke `memory/` — gap lama yang tak berubah) tetap terbuka, cuma
+  sesi dengan *owner tercatat* yang menolak pemanggil lain.
+- **`api/routes/monitoring.py`**: `require_role("view_dashboard")` —
+  pemakai PERTAMA sungguhan dari action `view_dashboard` yang sudah ada di
+  `security/permissions.py` sejak Tahap 7 (ADR-0010) tapi tak pernah
+  dipasang ke rute mana pun. Semua role sudah punya `view_dashboard`, jadi
+  efeknya hari ini murni "wajib terautentikasi", belum jadi gerbang
+  per-role granular — tapi memakai mekanisme yang benar, bukan cuma
+  `Depends(get_current_principal)` telanjang.
+- **`api/routes/knowledge.py`**: `Depends(get_current_principal)` di
+  keempat rute — autentikasi, sama seperti `files.py`, bukan kepemilikan
+  per-pengguna (`Document` tak punya konsep pemilik, basis pengetahuan
+  tetap dibagi semua pemanggil, sama seperti sebelumnya).
+- **Temuan performa nyata ditemukan saat menulis test, di luar rencana**:
+  `GET /api/v1/monitoring/dashboard` — belum pernah ada test integrasi
+  HTTP untuk rute ini sama sekali sebelum Tahap ini — ternyata makan
+  **9+ detik** per panggilan karena `health_dashboard()`/
+  `provider_dashboard()` memanggil `check_readiness()` yang benar-benar
+  menghubungi Ollama/OpenAI/Claude/Gemini sungguhan (persis kerja
+  `/health/ready`), DITAMBAH `workspace_dashboard()` yang re-scan
+  filesystem tiap folder Workspace terdaftar (limitasi yang sudah dicatat
+  Tahap 19/21) — makin lambat karena ada baris `Workspace` yatim dari
+  sesi verifikasi manual sebelumnya yang menunjuk folder yang sudah tak
+  ada. Bukan regresi Tahap 26, tapi test baru untuk rute ini WAJIB
+  di-mock (DB via sqlite kosong + `check_readiness()` di-stub) supaya
+  tetap cepat dan aman-CI (Bab 12.3) — tanpa itu, satu test saja makan
+  10-30 detik.
+- **20 test baru** (539/539 total, stabil 2x berturut-turut, ~13 detik
+  total — bukan 10+ detik per test berkat mock di atas): 6
+  `test_memory_ownership.py` (pemilik baca sukses, orang lain ditolak
+  403 baca DAN hapus, sesi tak dikenal ChatEngine tetap terbuka, perilaku
+  tanpa `API_KEYS` tak berubah), 5 `test_monitoring_auth.py`, 7
+  `test_knowledge_auth.py`; plus satu baris `test_workspace_api.py` yang
+  sudah ada diperbarui (memanggil `/knowledge/search` tanpa header, kini
+  perlu kunci karena Tahap 26).
+- **Diverifikasi live sungguhan**: `API_KEYS` sementara diisi. Ketiga rute
+  tanpa header → 401 sungguhan. Dengan kunci valid → 200. Untuk memory:
+  kirim pesan chat sungguhan dapat `session_id` nyata, User A baca memori
+  sendiri → 200; **User B pakai `session_id` User A → 403 sungguhan**
+  (`"Sesi ini milik pengguna lain"`) — mekanisme Tahap 22 terbukti berlaku
+  apa adanya di rute baru ini. `.env` dikembalikan, service di-restart,
+  perilaku dev normal (tanpa `API_KEYS`) dikonfirmasi tak berubah di
+  ketiga rute.
+
 ## Test
-- **Backend: 521/521 lulus** (`pytest -q`, stabil 2x berturut-turut) —
-  naik dari 510 lewat 11 test autentikasi+traversal `files.py` (Tahap 25,
-  lihat detail di atas). Sebelumnya naik dari 504 lewat 6 test kepemilikan
-  file download Chat (Tahap 24,
+- **Backend: 539/539 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~13 detik total) — naik dari 521 lewat 20 test autentikasi
+  `memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26, lihat detail di
+  atas). Sebelumnya naik dari 510 lewat 11 test autentikasi+traversal
+  `files.py` (Tahap 25, lihat detail di atas). Sebelumnya naik dari 504
+  lewat 6 test kepemilikan file download Chat (Tahap 24,
   lihat detail di atas). Sebelumnya naik dari 489 lewat 15 test Agent
   Workspace Context (Tahap 23, lihat
   detail di atas). Sebelumnya naik dari 481 lewat 8 test kepemilikan sesi
@@ -1474,7 +1539,7 @@ terhadap perlindungan yang baru dibangun.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-25, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-26, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1496,10 +1561,17 @@ terhadap perlindungan yang baru dibangun.
   `os.path.basename()` tak pernah dipakai) diperbaiki sekalian. Autentikasi
   di sini BUKAN kepemilikan per-pengguna seperti Chat — tak ada konsep
   sesi, siapa pun yang terautentikasi tetap lihat file siapa pun (jaminan
-  lebih sempit, didokumentasikan sadar). Gambar/GIS di Workspace belum
+  lebih sempit, didokumentasikan sadar). **`memory.py`/`monitoring.py`/
+  `knowledge.py` SELESAI juga (Tahap 26)** — pola gap yang sama persis
+  dengan `files.py` sebelum Tahap 25 kini tertutup: `memory.py` pakai
+  ulang kepemilikan sesi Tahap 22 langsung (bukan mekanisme baru),
+  `monitoring.py` jadi pemakai pertama sungguhan `require_role("view_dashboard")`
+  (ada sejak Tahap 7, tak pernah dipasang), `knowledge.py` autentikasi
+  polos (tak ada konsep pemilik dokumen). Gambar/GIS di Workspace belum
   bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
-  files) masih terbuka tanpa autentikasi.
+  files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
+  makin sedikit yang tersisa.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1690,32 +1762,35 @@ ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
 hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
 multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
 (Tahap 22), Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5),
-kepemilikan file download Chat (Tahap 24), dan autentikasi+fix traversal
-`api/routes/files.py` (Tahap 25) semua selesai 2026-07-06. **Seluruh 5
-area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**,
-ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
-benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat),
-sesi Chat DAN file hasil kerjanya (di kedua rute yang menyajikannya) kini
-terikat autentikasi, Chat kini bisa membaca Project Workspace bukan cuma
-Uploaded Files, dan image Docker turun 2.83GB→699MB dengan bug keamanan
-nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat prioritas
-berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab
-60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX (StorageClass
-NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
-replika di produksi; (3) Bab 68 Enterprise Architecture Backlog (20
-prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4)
-gambar/GIS di Workspace belum bisa dibaca lewat Chat — baris Vision Bab
-69.5, gap yang Tahap 23 sengaja tinggalkan (hasil tool hari ini teks
-JSON, bukan input vision, integrasi lebih besar); (5) instal
-`tesseract-ocr` di Dockerfile (gap pra-ada ditemukan tak sengaja Tahap 21
-— `pytesseract` ada di `requirements.txt` tapi binary-nya tak pernah
-diinstal, OCR lewat `read_image` kemungkinan gagal senyap di Docker); (6)
-`HEALTHCHECK` eksplisit di `Dockerfile.api`/`Dockerfile.worker` sendiri
-(Tahap 21 tidak menambahkannya, di luar cakupan saat itu); (7)
-`monitoring.py`/`memory.py`/`knowledge.py` masih terbuka tanpa
-autentikasi endpoint-level (lihat butir (d) di bawah) — pola yang sama
-persis dengan `files.py` sebelum Tahap 25, kandidat berikutnya yang
-paling mirip untuk dikunci dengan cara yang sama.
+kepemilikan file download Chat (Tahap 24), autentikasi+fix traversal
+`api/routes/files.py` (Tahap 25), dan autentikasi
+`memory.py`/`monitoring.py`/`knowledge.py` (Tahap 26) semua selesai
+2026-07-06. **Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini
+punya kode nyata**, ditambah kapabilitas Workspace baru di atasnya, gate
+RBAC kini benar-benar hidup di satu-satunya jalur yang mengeksekusi tool
+(Chat), sesi Chat DAN file hasil kerjanya (di kedua rute yang
+menyajikannya) DAN memori/monitoring/knowledge kini terikat autentikasi,
+Chat kini bisa membaca Project Workspace bukan cuma Uploaded Files, dan
+image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
+ter-bake ke image) tertutup sekalian. **Dicek ulang sebelum ditulis di sini** (bukan
+diasumsikan dari catatan lama): `projects.py` TERNYATA sudah punya
+`Depends(get_current_principal)` di SETIAP rute sejak Tahap 13 —
+catatan gap lama yang bilang "endpoint projects.py masih terbuka" sudah
+basi, diperbaiki di bagian "Untuk lanjutan frontend" di bawah. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) MCP Server
+(sisi Bab 60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX
+(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
+butuh API >1 replika di produksi; (3) Bab 68 Enterprise Architecture
+Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
+dimulai; (4) gambar/GIS di Workspace belum bisa dibaca lewat Chat —
+baris Vision Bab 69.5, gap yang Tahap 23 sengaja tinggalkan (hasil tool
+hari ini teks JSON, bukan input vision, integrasi lebih besar); (5)
+instal `tesseract-ocr` di Dockerfile (gap pra-ada ditemukan tak sengaja
+Tahap 21 — `pytesseract` ada di `requirements.txt` tapi binary-nya tak
+pernah diinstal, OCR lewat `read_image` kemungkinan gagal senyap di
+Docker); (6) `HEALTHCHECK` eksplisit di
+`Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
+menambahkannya, di luar cakupan saat itu).
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
@@ -1725,10 +1800,13 @@ file/OCR, embedder sungguhan (ganti `hashed_bow_embedder` offline), dan
 delete-by-dokumen di `KnowledgeStore` semua masih terbuka; (c)
 Timeline/Approval versi penuh — butuh endpoint SSE canonical baru
 (`EVENT_CATALOG.md`) menggantikan polling `POST /run` sinkron saat ini; (d)
-RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py`/`projects.py`
-(endpoint-level; `projects.py` sudah punya RBAC per-resource internal,
-tapi endpoint-nya sendiri masih terbuka) — `memory.py` khususnya berisiko
-(baca/hapus data sesi tanpa otorisasi apa pun); (e) Project belum
+RBAC untuk `monitoring.py`/`memory.py`/`knowledge.py` SELESAI (Tahap 26,
+lihat detail di atas). **Koreksi catatan lama**: `projects.py` TERNYATA
+sudah punya `Depends(get_current_principal)` di setiap rute sejak Tahap
+13 (dicek ulang saat menulis Tahap 26, bukan diasumsikan) — klaim
+sebelumnya di sini bahwa "endpoint projects.py masih terbuka" salah/basi,
+RBAC per-resource internalnya SUDAH dijaga otentikasi endpoint-level
+juga, tak ada tindak lanjut dibutuhkan; (e) Project belum
 terhubung ke Conversation/File sungguhan (Tahap 13, keputusan lanjutan
 yang sengaja ditunda); (f) Vision (Tahap 14) belum diverifikasi live ke
 provider cloud sungguhan (Gemini/OpenAI/Claude) dengan gambar nyata — baru
