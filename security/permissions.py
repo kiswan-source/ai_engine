@@ -10,9 +10,9 @@ module existed).
 Tahap 10 (ADR-0013) adds the first real tool-call gate into ``agent/tools/``
 (a protected folder, Bab 45.1) via the strangler pattern: ``write_pdf`` is
 the pilot high-risk tool (Bab 30 rule 2's "write filesystem" category).
-``TOOL_RISK_ACTIONS`` is deliberately a single entry for now — the plan is
-to migrate the rest of the ``write_*``/``convert_geo`` tools one at a time
-in later sessions, not all at once.
+``TOOL_RISK_ACTIONS`` started as a single entry, migrated the rest of the
+``write_*``/``convert_geo``/``generate_code`` tools in Tahap 18 (same
+strangler pattern, one line per tool, no registry/engine changes needed).
 
 Tahap 16 (Plugin, Bab 59) adds ``plugin:weather`` the same way — gated via
 ``TOOL_RISK_ACTIONS`` when a caller passes a role (only ``/api/v1/agent/run``
@@ -29,6 +29,17 @@ action covers every MCP server/tool a caller might reach through
 premature for a client that talks to exactly one configured (demo) server
 today. ``mcp_list_tools`` (read-only discovery) stays ungated, same
 posture as ``ToolRegistry.list_tools()`` for internal tools.
+
+Tahap 18 finishes the ``write_*``/``convert_geo``/``generate_code`` migration
+Tahap 10's docstring promised: ``write_docx``, ``write_html``, ``write_txt``,
+``write_json``, ``write_geojson``, ``write_shp``, ``convert_geo``, and
+``generate_code`` all get a ``tool:<name>`` action, same shape as
+``tool:write_pdf``. Image tools (``image_*``, ``images_to_pdf``) are
+deliberately left out — they transform an existing file already on disk
+rather than writing new content from an arbitrary prompt, a materially
+different risk profile from "write filesystem" (Bab 30 rule 2). Read-only
+tools (``read_*``, ``calculate_area``) stay ungated for the same reason
+``mcp_list_tools`` does — no write, no risk category to gate.
 """
 from __future__ import annotations
 
@@ -36,17 +47,28 @@ from __future__ import annotations
 # doesn't need repeating per role).
 _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": frozenset({"*"}),
-    "operator": frozenset({"tool:write_pdf", "view_dashboard", "plugin:weather", "mcp:call"}),
+    "operator": frozenset({
+        "tool:write_pdf", "tool:write_docx", "tool:write_html", "tool:write_txt",
+        "tool:write_json", "tool:write_geojson", "tool:write_shp", "tool:convert_geo",
+        "tool:generate_code", "view_dashboard", "plugin:weather", "mcp:call",
+    }),
     "approver": frozenset({"approve_workflow", "view_dashboard"}),
     "user": frozenset({"view_dashboard"}),
 }
 
 # tool name -> permission action, for tools gated via ToolRegistry.execute()
 # (agent/tools/registry.py). A tool absent from this mapping is unaffected
-# regardless of role — this is a pilot for a couple of high-risk tools, not a
-# blanket policy over every tool in the registry.
+# regardless of role.
 TOOL_RISK_ACTIONS: dict[str, str] = {
     "write_pdf": "tool:write_pdf",
+    "write_docx": "tool:write_docx",
+    "write_html": "tool:write_html",
+    "write_txt": "tool:write_txt",
+    "write_json": "tool:write_json",
+    "write_geojson": "tool:write_geojson",
+    "write_shp": "tool:write_shp",
+    "convert_geo": "tool:convert_geo",
+    "generate_code": "tool:generate_code",
     "plugin_weather": "plugin:weather",
     "mcp_call_tool": "mcp:call",
 }

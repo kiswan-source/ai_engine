@@ -28,6 +28,7 @@
 | 15* | Automation — scheduler in-process untuk workflow terjadwal (Bab 68 Prioritas 5) | ✅ SELESAI |
 | 16* | Plugin — `PluginInterface` + plugin Weather nyata via Chat tool-calling (Bab 59) | ✅ SELESAI |
 | 17* | MCP Client — konsumsi MCP server nyata via SDK resmi, bridge ke Chat tool-calling (Bab 60) | ✅ SELESAI |
+| 18* | Selesaikan migrasi RBAC ke `write_*`/`convert_geo`/`generate_code` (janji ADR-0013) | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -838,8 +839,45 @@ dan scope-nya jauh lebih kecil/lebih cepat dibuktikan hidup.
   verifikasi ini untuk memastikan bump dependency `pydantic`/`starlette`
   di atas tidak diam-diam merusak API yang sedang berjalan.
 
+**Tahap 18 — selesaikan migrasi RBAC (janji ADR-0013)**
+
+Roadmap 8-tahap + Phase 3 sudah tuntas semua; ditanya `AskUserQuestion`
+prioritas berikutnya (4 opsi: lanjut RBAC / MCP Server / Dockerfile
+multi-stage / pilih dari Bab 68 Backlog) — **lanjut migrasi RBAC**
+dipilih, item termurah & risikonya paling rendah karena menggunakan
+mekanisme yang sudah terbukti hidup sejak Tahap 10, tinggal menambah
+entri.
+
+- **`security/permissions.py`**: `TOOL_RISK_ACTIONS` bertambah dari 1
+  entri (`write_pdf`, Tahap 10) jadi 9 — `write_docx`, `write_html`,
+  `write_txt`, `write_json`, `write_geojson`, `write_shp`, `convert_geo`,
+  `generate_code` semua dapat action `tool:<nama>` sendiri-sendiri, pola
+  identik `tool:write_pdf`. Role `operator` diberi akses ke semuanya.
+  **Sengaja TIDAK memasukkan tool image** (`image_convert`/`image_resize`/
+  dst./`images_to_pdf`) — alasan didokumentasikan di docstring: tool
+  gambar mentransformasi file yang sudah ada di disk, bukan menulis
+  konten baru dari prompt bebas, profil risiko yang berbeda dari "write
+  filesystem" (Bab 30 rule 2). Tool baca (`read_*`, `calculate_area`)
+  tetap tak digerbang untuk alasan yang sama seperti `mcp_list_tools`.
+  **Nol perubahan** di `agent/tools/registry.py`/`agent/core.py`/
+  `core/chat/engine.py` — mekanisme gate (`ToolRegistry.execute(...,
+  role=...)`) sudah generik sejak Tahap 10, migrasi ini murni menambah
+  baris di dict permission.
+- **25 test baru** (409/409 total): parametrized di
+  `test_auth_permissions.py` atas 8 tool yang dimigrasi (denied untuk
+  `user`, allowed untuk `operator`/`admin` — 24 test) + 1 test yang
+  mengonfirmasi tool gambar sengaja tetap ungated.
+- **Diverifikasi live** (bukan cuma unit test) — panggilan langsung ke
+  `ToolRegistry.execute("write_docx", ..., role=...)` via `build_registry()`
+  sungguhan: `role="user"` → `PermissionError` sungguhan; `role="operator"`
+  dan `role="admin"` → **file `.docx` sungguhan benar-benar tertulis ke
+  `reports/`** (hasil eksekusi punya `filename`/`size`/`type` nyata, bukan
+  mock), dihapus setelah verifikasi. Service live di-restart +
+  `/health/ready` dicek untuk memastikan tak ada regresi.
+
 ## Test
-- **Backend: 384/384 lulus** (`pytest -q`) — naik dari 372 lewat 12 test
+- **Backend: 409/409 lulus** (`pytest -q`) — naik dari 384 lewat 25 test
+  migrasi RBAC (Tahap 18, lihat detail di atas). Sebelumnya naik dari 372 lewat 12 test
   MCP Client (Tahap 17, lihat detail di atas): 4 unit MCPClient, 5 unit
   registry bridge, 3 unit permission. Sebelumnya naik dari 356 lewat 16 test
   Plugin (Tahap 16, lihat detail di atas): 5 unit registry, 3 unit
@@ -869,7 +907,7 @@ dan scope-nya jauh lebih kecil/lebih cepat dibuktikan hidup.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-17, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-18, diakui bukan disamarkan)
 - **MCP Client (Tahap 17) cuma Client, bukan Server** — keputusan skop
   sadar (dipilih Boss lewat `AskUserQuestion`); AI_ENGINE tidak bisa
   dikonsumsi client MCP eksternal (mis. Claude Desktop) sampai sisi Server
@@ -995,12 +1033,16 @@ dan scope-nya jauh lebih kecil/lebih cepat dibuktikan hidup.
   Monitoring (Tahap 12); ChatEngine (`core/chat/`) dan Orchestrator tetap
   dua sistem terpisah tanpa jembatan — pengguna memilih salah satu lewat
   tab, tools file (baca/tulis/GIS) tetap hanya ada di jalur Chat.
-- **RBAC ke `agent/tools/` dimulai** (Tahap 10, ADR-0013) tapi baru
-  `write_pdf`; `write_docx`/`write_html`/`write_txt`/`write_json`/
-  `write_geojson`/`write_shp`/`convert_geo`/`generate_code` masih terbuka
-  untuk role apa pun. `core/chat/engine.py` (ChatEngine) sama sekali belum
-  tersambung ke RBAC — tidak ada konsep identitas per sesi chat untuk
-  dipetakan ke role. Rute API selain `/api/v1/agent/run` masih terbuka
+- **RBAC ke `agent/tools/` SELESAI untuk semua tool `write_*`/`convert_geo`/
+  `generate_code`** (Tahap 10 pilot `write_pdf` + Tahap 18 menyelesaikan
+  sisanya) — gap lama ini sudah tertutup. Yang masih terbuka: tool image
+  (`image_*`/`images_to_pdf`, keputusan sadar — profil risiko beda, lihat
+  Tahap 18 di atas) dan tool baca (`read_*`). `core/chat/engine.py`
+  (ChatEngine) sama sekali belum tersambung ke RBAC — tidak ada konsep
+  identitas per sesi chat untuk dipetakan ke role, jadi gate ini masih
+  inert untuk semua panggilan dari Chat (satu-satunya jalur yang benar
+  eksekusi tool untuk plugin/MCP, lihat Tahap 16-17). Rute API selain
+  `/api/v1/agent/run` masih terbuka
   tanpa autentikasi.
 - **Circuit Breaker SELESAI untuk provider** (Tahap 9, ADR-0012); sasaran
   kedua Bab 55 (`tools/tool_executor.py`) belum ada foldernya di repo —
@@ -1033,18 +1075,20 @@ Roadmap `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya;
 Circuit Breaker (ADR-0012), RBAC pilot ke `agent/tools/` (ADR-0013), UI
 Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
 (Tahap 12), Projects (Tahap 13), Vision (Tahap 14), Automation (Tahap 15),
-Plugin (Tahap 16), dan MCP Client (Tahap 17) semua selesai 2026-07-05/06.
-**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
-nyata** — MCP baru sisi Client (bukan Server, keputusan skop sadar).
-Kandidat prioritas berikutnya, dari yang paling murah
-dieksekusi: (1) lanjutkan migrasi RBAC ke tool `write_*`/`convert_geo` lain
-satu per satu (pola sama seperti ADR-0013, tinggal tambah entri
-`TOOL_RISK_ACTIONS`); (2) Dockerfile multi-stage dengan rebuild+verifikasi
-live penuh (bukan cuma review kode) mengingat riwayat insiden ADR-0009;
-(3) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (4) Bab 68
-Enterprise Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`)
-— belum satupun dimulai.
+Plugin (Tahap 16), MCP Client (Tahap 17), dan migrasi RBAC penuh ke
+`write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
+ditutup) semua selesai 2026-07-05/06. **Seluruh 5 area Phase 3
+(`PROJECT_SPECIFICATION.md`) kini punya kode nyata** — MCP baru sisi
+Client (bukan Server, keputusan skop sadar). Kandidat prioritas
+berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab
+60 yang sengaja ditunda Tahap 17); (2) Dockerfile multi-stage dengan
+rebuild+verifikasi live penuh (bukan cuma review kode) mengingat riwayat
+insiden ADR-0009; (3) solusi storage RWX (StorageClass NFS/Longhorn atau
+pindah ke object storage) kalau memang butuh API >1 replika di produksi;
+(4) Bab 68 Enterprise Architecture Backlog (20 prioritas di
+`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (5) sambungkan RBAC ke
+`core/chat/` (ChatEngine) sendiri — gap yang kini jadi satu-satunya alasan
+`tool:*`/`plugin:*`/`mcp:call` masih inert untuk jalur Chat.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

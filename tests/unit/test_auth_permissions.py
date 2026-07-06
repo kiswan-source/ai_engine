@@ -118,6 +118,37 @@ def test_check_tool_permission_allows_operator_for_plugin_weather():
     check_tool_permission("operator", "plugin_weather")  # must not raise
 
 
+# ─── write_*/convert_geo/generate_code migration (Bab 30 rule 2, Tahap 18) ──
+
+_MIGRATED_TOOLS = [
+    "write_docx", "write_html", "write_txt", "write_json",
+    "write_geojson", "write_shp", "convert_geo", "generate_code",
+]
+
+
+@pytest.mark.parametrize("tool_name", _MIGRATED_TOOLS)
+def test_check_tool_permission_denies_user_for_migrated_tool(tool_name):
+    with pytest.raises(PermissionError):
+        check_tool_permission("user", tool_name)
+
+
+@pytest.mark.parametrize("tool_name", _MIGRATED_TOOLS)
+def test_check_tool_permission_allows_operator_for_migrated_tool(tool_name):
+    check_tool_permission("operator", tool_name)  # must not raise
+
+
+@pytest.mark.parametrize("tool_name", _MIGRATED_TOOLS)
+def test_check_tool_permission_allows_admin_for_migrated_tool(tool_name):
+    check_tool_permission("admin", tool_name)  # must not raise
+
+
+def test_check_tool_permission_noop_for_image_tools():
+    # Image transforms are deliberately left ungated (different risk profile
+    # from "write filesystem" — see security/permissions.py docstring).
+    check_tool_permission("user", "image_resize")
+    check_tool_permission("user", "images_to_pdf")
+
+
 async def test_require_role_manage_plugins_allows_admin():
     checker = require_role("manage_plugins")
     principal = Principal(api_key="k", role="admin")
