@@ -35,6 +35,7 @@
 | 21* | Dockerfile multi-stage (Bab 37 rule 2) — `docker/Dockerfile.api`/`Dockerfile.worker` + `.dockerignore` baru | ✅ SELESAI |
 | 22* | Kepemilikan sesi Chat — tutup gap yang sengaja ditinggalkan Tahap 20 | ✅ SELESAI |
 | 23* | Agent Workspace Context ke ChatEngine (Bab 69.5) — Chat bisa baca Project Workspace, bukan cuma Uploaded Files | ✅ SELESAI |
+| 24* | Kepemilikan file download Chat — tutup gap yang sengaja ditinggalkan Tahap 22/23 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1314,9 +1315,61 @@ Chat cuma tahu Uploaded Files.
   soft-deleted+yatim dari sesi RBAC sementara — tak berbahaya, konsisten
   dengan pola pembersihan Tahap-Tahap sebelumnya).
 
+**Tahap 24 — Kepemilikan file download Chat**
+
+Dipilih lewat `AskUserQuestion` dari 4 kandidat (kepemilikan file
+download / loose ends Docker / MCP Server / Bab 68 Backlog). Menutup gap
+yang dicatat eksplisit sejak Tahap 22/23: `/api/v1/chat/download/{filename}`
+tak punya konsep sesi sama sekali — siapa pun yang tahu nama file bisa
+mengunduh apa pun di `reports/`.
+
+- **Temuan penting SEBELUM coding, mengubah cakupan**: `GET
+  /reports/{filename}` (`api/routes/files.py`, rute lain, lebih lama,
+  menyajikan folder yang SAMA PERSIS) sudah terbuka penuh tanpa autentikasi
+  apa pun sejak awal — mengunci `chat.py` saja TIDAK menutup celah
+  sesungguhnya, siapa pun tetap bisa ambil file yang sama lewat rute itu.
+  Ditanya `AskUserQuestion`: perluas cakupan ke `files.py` sekalian, atau
+  tetap sempit + catat gap lebih luas sebagai prioritas terpisah — **tetap
+  sempit** dipilih (konsisten pola Tahap demi Tahap yang sudah dipakai
+  sesi ini: satu gap tertutup, bukti hidup, bukan mencoba menutup semuanya
+  sekaligus). Dicatat eksplisit sebagai prioritas baru di bawah, BUKAN
+  disembunyikan.
+- **`core/chat/engine.py` (folder fondasi, aditif murni)**: `Session` dapat
+  `produced_files: set[str]` — basename tiap file yang BENAR-BENAR
+  dihasilkan tool di sesi itu (diisi di loop tool-calling utama maupun
+  `_fallback`, dua tempat yang sama sebelumnya cuma isi `session.history`
+  tanpa menyimpan daftar terpisah untuk dicek kepemilikan).
+- **`api/routes/chat.py`**: `/download/{filename}` sekarang wajib
+  `session_id` (query param) — perubahan kontrak API yang disengaja (dulu
+  `filename` saja sudah cukup). Memakai ulang `_require_session_owner`
+  (Tahap 22) PLUS cek baru: `filename` harus ada di
+  `session.produced_files` milik `session_id` itu — bukan cuma "kamu
+  pemilik sesi ini", tapi juga "file ini memang lahir dari sesi ini", jadi
+  pemilik sesi A tidak bisa menebak nama file dari sesi B miliknya sendiri
+  yang lain dan mengunduhnya lewat sesi A.
+- **6 test baru** (510/510 total, stabil 2x berturut-turut):
+  `test_chat_download_ownership.py` — pemilik unduh sukses, orang lain
+  ditolak 403 walau tahu `session_id` yang benar, nama file yang tak
+  pernah dihasilkan di sesi itu → 404, sesi tak dikenal → 404, `session_id`
+  hilang → 422 validasi FastAPI, dan perilaku tanpa `API_KEYS` tak berubah.
+- **Diverifikasi live sungguhan**: `API_KEYS` sementara diisi, User A minta
+  `gemma4:e2b` membuat file sungguhan lewat `write_txt` (role `operator`,
+  bukan `user` — `write_txt` digerbang RBAC Tahap 20, dipilih role yang
+  benar-benar bisa menulis). User A unduh file sendiri → 200 isi persis.
+  **User B pakai `session_id` User A → 403 sungguhan**
+  (`"Sesi ini milik pengguna lain"`). User A minta nama file yang tak
+  pernah dibuat di sesi itu → 404. Tanpa `session_id` sama sekali → 422.
+  **Dikonfirmasi hidup (bukan diasumsikan)**: file yang SAMA lewat `GET
+  /reports/{filename}` tetap bisa diambil TANPA hambatan apa pun — bukti
+  nyata bahwa celah `files.py` yang dicatat di atas benar-benar masih
+  terbuka, bukan cuma teori. `.env` dikembalikan, service di-restart,
+  file test dihapus.
+
 ## Test
-- **Backend: 504/504 lulus** (`pytest -q`, stabil 2x berturut-turut) —
-  naik dari 489 lewat 15 test Agent Workspace Context (Tahap 23, lihat
+- **Backend: 510/510 lulus** (`pytest -q`, stabil 2x berturut-turut) —
+  naik dari 504 lewat 6 test kepemilikan file download Chat (Tahap 24,
+  lihat detail di atas). Sebelumnya naik dari 489 lewat 15 test Agent
+  Workspace Context (Tahap 23, lihat
   detail di atas). Sebelumnya naik dari 481 lewat 8 test kepemilikan sesi
   Chat (Tahap 22, lihat detail di
   atas: `test_chat_session_ownership.py`). Sebelumnya naik dari 474 lewat 7
@@ -1356,7 +1409,7 @@ Chat cuma tahu Uploaded Files.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-23, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-24, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1368,12 +1421,17 @@ Chat cuma tahu Uploaded Files.
   (Tahap 23)** — Chat kini bisa `workspace_list_files`/`workspace_read_file`
   dari Project Workspace (Tahap 19), digerbang RBAC Project-role sekali di
   rute, `workspace_id` selalu disuntik dari sesi (tak pernah dari model).
-  Yang masih terbuka: `/download/{filename}` tetap tak terikat
-  sesi/identitas sama sekali (gap terpisah, sengaja tak digabung ke Tahap
-  22/23 — lihat detail di atas); gambar/GIS di Workspace belum bisa dibaca
-  lewat Chat (baris Vision Bab 69.5, follow-up terpisah). Rute API selain
-  yang sudah opt-in RBAC (chat, agent/run, projects, workspace) masih
-  terbuka tanpa autentikasi.
+  **Kepemilikan file download Chat SELESAI juga (Tahap 24)** —
+  `/api/v1/chat/download/{filename}` kini wajib `session_id` + kepemilikan
+  + bukti file itu memang dihasilkan di sesi itu (`session.produced_files`).
+  **Ditemukan tapi SENGAJA belum ditutup**: `GET /reports/{filename}`
+  (`api/routes/files.py`, rute berbeda, folder sama) tetap terbuka penuh
+  tanpa autentikasi — dikonfirmasi hidup saat verifikasi Tahap 24, celah
+  bypass nyata terhadap perlindungan yang baru dibangun, prioritas
+  terpisah untuk sesi berikutnya (lihat di bawah). Gambar/GIS di Workspace
+  belum bisa dibaca lewat Chat (baris Vision Bab 69.5, follow-up
+  terpisah). Rute API selain yang sudah opt-in RBAC (chat, agent/run,
+  projects, workspace) masih terbuka tanpa autentikasi.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1563,30 +1621,33 @@ Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
 hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
 multi-stage (Tahap 21, ADR-0011 gap ditutup), kepemilikan sesi Chat
-(Tahap 22), dan Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5)
-semua selesai 2026-07-06. **Seluruh 5 area Phase 3
-(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
-Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
-satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat kini terikat
-identitas pemiliknya, Chat kini bisa membaca Project Workspace bukan cuma
-Uploaded Files, dan image Docker turun 2.83GB→699MB dengan bug keamanan
-nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat prioritas
-berikutnya, dari yang paling murah dieksekusi: (1) MCP Server (sisi Bab 60
-yang sengaja ditunda Tahap 17); (2) solusi storage RWX (StorageClass
+(Tahap 22), Agent Workspace Context ke ChatEngine (Tahap 23, Bab 69.5),
+dan kepemilikan file download Chat (Tahap 24) semua selesai 2026-07-06.
+**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
+nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
+benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat),
+sesi Chat DAN file hasil kerjanya kini terikat identitas pemiliknya, Chat
+kini bisa membaca Project Workspace bukan cuma Uploaded Files, dan image
+Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env` ter-bake ke
+image) tertutup sekalian. Kandidat prioritas berikutnya, dari yang paling
+murah dieksekusi: (1) **`GET /reports/{filename}` (`api/routes/files.py`)
+sama sekali tanpa autentikasi** — ditemukan+dikonfirmasi hidup saat
+verifikasi Tahap 24, bypass nyata terhadap perlindungan
+`/api/v1/chat/download` yang baru dibangun (folder yang sama disajikan
+dua rute, cuma satu yang dikunci); `/uploads`/`/upload` di file yang sama
+kemungkinan senasib, belum dicek; (2) MCP Server (sisi Bab 60 yang
+sengaja ditunda Tahap 17); (3) solusi storage RWX (StorageClass
 NFS/Longhorn atau pindah ke object storage) kalau memang butuh API >1
-replika di produksi; (3) Bab 68 Enterprise Architecture Backlog (20
-prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4)
-`/api/v1/chat/download/{filename}` belum terikat sesi/identitas — gap
-yang Tahap 22/23 sengaja tidak tutup, file produksi siapa pun bisa
-diunduh siapa saja yang tahu namanya; (5) gambar/GIS di Workspace belum
-bisa dibaca lewat Chat — baris Vision Bab 69.5, gap yang Tahap 23 sengaja
-tinggalkan (hasil tool hari ini teks JSON, bukan input vision, integrasi
-lebih besar); (6) instal `tesseract-ocr` di Dockerfile (gap pra-ada
-ditemukan tak sengaja Tahap 21 — `pytesseract` ada di `requirements.txt`
-tapi binary-nya tak pernah diinstal, OCR lewat `read_image` kemungkinan
-gagal senyap di Docker); (7) `HEALTHCHECK` eksplisit di
-`Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
-menambahkannya, di luar cakupan saat itu).
+replika di produksi; (4) Bab 68 Enterprise Architecture Backlog (20
+prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (5)
+gambar/GIS di Workspace belum bisa dibaca lewat Chat — baris Vision Bab
+69.5, gap yang Tahap 23 sengaja tinggalkan (hasil tool hari ini teks
+JSON, bukan input vision, integrasi lebih besar); (6) instal
+`tesseract-ocr` di Dockerfile (gap pra-ada ditemukan tak sengaja Tahap 21
+— `pytesseract` ada di `requirements.txt` tapi binary-nya tak pernah
+diinstal, OCR lewat `read_image` kemungkinan gagal senyap di Docker); (7)
+`HEALTHCHECK` eksplisit di `Dockerfile.api`/`Dockerfile.worker` sendiri
+(Tahap 21 tidak menambahkannya, di luar cakupan saat itu).
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

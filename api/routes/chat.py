@@ -12,9 +12,20 @@ listing everyone's. When `API_KEYS` is unset (dev default), every caller
 shares `Principal(api_key="", role="admin")` — every session's owner is
 that same empty string, so ownership checks are a no-op and behavior is
 identical to before this Tahap, same posture as every other RBAC feature
-in this app. `/download/{filename}` is NOT session-scoped (no session_id
-in the request at all) — a separate, still-open gap, not silently folded
-into this one.
+in this app. `/download/{filename}` is now session-scoped too (Tahap 24,
+below) — it was NOT when this docstring paragraph was first written.
+
+Download ownership (Tahap 24): `/download/{filename}` requires a
+`session_id` query param, the same `_require_session_owner` check, and
+that `filename` is in that session's `ChatEngine.Session.produced_files`
+(a file this session's tools actually generated) — previously anyone
+could fetch anything in `reports/` by filename alone, no session concept
+at all. **Not closed by this Tahap**: `GET /reports/{filename}`
+(`api/routes/files.py`, an older, separate route serving the same
+directory) still has zero authentication — a wider, still-open gap
+(also covers files from `/api/v1/agent/run`, which never touches a Chat
+Session), documented in `docs/PROGRESS.md` as a follow-up, not silently
+left implicit.
 
 Agent Workspace Context (Bab 69.5, Tahap 23): `ChatRequest.workspace_id`,
 checked once per request via `_check_workspace_access` — resolves the
@@ -141,12 +152,24 @@ async def stream(req: ChatRequest, principal: Principal = Depends(get_current_pr
 
 
 @router.get("/download/{filename}")
-async def download(filename: str):
-    """Download a produced file from the reports dir."""
-    path = os.path.join(REPORTS_DIR, os.path.basename(filename))
+async def download(
+    filename: str, session_id: str, principal: Principal = Depends(get_current_principal)
+):
+    """Download a file this session's Chat tools actually produced (Tahap 24).
+
+    ``session_id`` is required — this used to accept any filename in
+    ``reports/`` with no session concept at all. See module docstring for
+    the still-open ``GET /reports/{filename}`` gap this does not close.
+    """
+    _require_session_owner(session_id, principal)
+    safe_name = os.path.basename(filename)
+    session = chat_engine.sessions.get(session_id)
+    if session is None or safe_name not in session.produced_files:
+        raise HTTPException(status_code=404, detail="File not found for this session")
+    path = os.path.join(REPORTS_DIR, safe_name)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=os.path.basename(path))
+    return FileResponse(path, filename=safe_name)
 
 
 @router.get("/sessions")

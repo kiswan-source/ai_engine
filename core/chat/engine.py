@@ -48,6 +48,17 @@ never receive `workspace_id` from the model — `_run_tool` injects
 `session.workspace_id` into their arguments, overriding anything the model
 supplied, so a hallucinated or prompt-injected ID can never reach a
 Workspace this session wasn't authorized for.
+
+Download ownership (Tahap 24, closes the gap Tahap 22/23 explicitly left
+open): `Session.produced_files` records the basename of every file a
+tool actually generated in that session (both the main tool-calling loop
+and `_fallback`). `api/routes/chat.py`'s `/download/{filename}` now
+requires `session_id` + ownership *and* that `filename` is in that
+session's `produced_files` — previously any caller could fetch anything in
+`reports/` by filename alone, with no session concept at all. Note:
+`GET /reports/{filename}` (`api/routes/files.py`, a different, older route
+serving the same directory) still has no such check — a separate, wider
+gap this Tahap does not close, documented in `docs/PROGRESS.md`.
 """
 import os
 import json
@@ -109,6 +120,7 @@ class Session:
         self.messages: List[Dict[str, Any]] = []   # Ollama-format chat history
         self.history: List[Dict[str, Any]] = []     # display items for the UI
         self.files: List[str] = []  # absolute paths of uploaded files
+        self.produced_files: set = set()  # basenames this session's tools generated (Tahap 24)
 
     def add_file(self, path: str):
         if path not in self.files:
@@ -357,6 +369,7 @@ class ChatEngine:
                         if ok and isinstance(result, dict) and result.get("file"):
                             fpath = result["file"]
                             produced_files.append(fpath)
+                            session.produced_files.add(os.path.basename(fpath))
                             file_item = {"type": "file", "filename": os.path.basename(fpath),
                                          "ftype": result.get("type", ""),
                                          "size": result.get("size", 0)}
@@ -410,6 +423,7 @@ class ChatEngine:
         ok = not (isinstance(result, dict) and result.get("success") is False)
         yield {"type": "tool_result", "name": name, "ok": ok, "summary": self._summarize_result(result)}
         if ok and isinstance(result, dict) and result.get("file"):
+            session.produced_files.add(os.path.basename(result["file"]))
             item = {"type": "file", "filename": os.path.basename(result["file"]),
                     "ftype": result.get("type", ""), "size": result.get("size", 0)}
             session.history.append(item)
