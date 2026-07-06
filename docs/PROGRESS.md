@@ -2438,9 +2438,137 @@ Direncanakan lewat Plan Mode dulu.
   karena `pytest`/restart manual sudah jadi langkah verifikasi standar
   tiap perubahan config di alur kerja ini.
 
+**Tahap 39 — Solusi Storage RWX untuk Produksi**
+
+Kandidat non-Backlog-Bab-68 (dipilih via `AskUserQuestion` dari daftar
+"Titik mulai sesi berikutnya"). Gap ini tercatat sejak addendum K8s Tahap
+8: `k8s/base/api-deployment.yaml`'s PVC `ai-engine-uploads`/
+`ai-engine-reports` minta `ReadWriteMany` (supaya SETIAP replika API
+lihat file yang sama — `agent/tools/readers.py`/`writers.py`,
+`core/chat/engine.py`'s `UPLOADS_DIR`/`REPORTS_DIR` semua asumsikan
+filesystem lokal bersama), tapi `StorageClass` default kind (dan
+kebanyakan block storage cloud) cuma `ReadWriteOnce` — dikonfirmasi live
+dulu: PVC itu `Pending` selamanya (`ProvisioningFailed: NodePath only
+supports ReadWriteOnce...`). Catatan gap lama menyebut dua jalan: pilih
+`StorageClass` RWX (NFS/EFS/Filestore/Longhorn) atau pindah ke object
+storage — object storage eksplisit ditandai "perubahan lebih besar dari
+skop tahap" karena butuh menulis ulang I/O file di
+`agent/tools/readers.py`/`writers.py` (terproteksi Bab 45.1). Dipilih
+jalan `StorageClass` — nol perubahan kode aplikasi, murni manifest K8s.
+Direncanakan via Plan Mode.
+
+- **Riset dulu, termasuk mengetes batasan lingkungan LANGSUNG**: `sudo -n
+  true`/`sudo modprobe nfsd` dijalankan LANGSUNG di host, keduanya gagal
+  "a password is required" — memastikan modul kernel `nfsd` (NFS server
+  di-kernel) TAK BISA dimuat di host ini, dan karena node `kind` cuma
+  container yang berbagi kernel WSL2 yang sama, server NFS berbasis
+  kernel di dalam pod kemungkinan besar TAK AKAN jalan apa pun
+  privilege container-nya. Riset web mengonfirmasi **NFS-Ganesha**
+  (server NFS USERSPACE, tanpa modul kernel) sebagai jalan keluar
+  standar untuk masalah persis ini — dipakai image `janeczku/nfs-ganesha`
+  (cukup capability `SYS_ADMIN`+`DAC_READ_SEARCH`, bukan `privileged:
+  true` penuh). Riset web terpisah (termasuk isu GitHub `kind`)
+  mengonfirmasi **image node `kind` TAK membawa `nfs-common`** (paket
+  client penyedia `mount.nfs`/`mount.nfs4`) — solusi terdokumentasi:
+  `docker exec <node> apt-get install -y nfs-common` (node `kind` cuma
+  container Docker biasa, jadi ini TAK butuh `sudo` host sama sekali).
+- **Desain**: satu Deployment `nfs-server` (NFS-Ganesha) mengekspor DUA
+  subdirektori (`uploads/`, `reports/`) di bawah satu root export —
+  `initContainer` busybox `mkdir -p`+`chmod` dulu (NFS tak bisa mount
+  subpath yang belum ada) — bukan dua server terpisah, separuh jejak
+  resource untuk infra yang identik. Disk lokal server sendiri PVC RWO
+  biasa (RWX itu properti yang DIEKSPOR lewat jaringan, bukan properti
+  disk lokalnya). DUA `PersistentVolume` STATIS (bukan `StorageClass` +
+  provisioner dinamis — untuk dua path tetap yang sudah dikenal namanya,
+  static provisioning lebih sederhana+deterministik) diikat via
+  `volumeName:` eksplisit dari PVC yang SUDAH ADA di
+  `api-deployment.yaml` (cuma tambah `storageClassName: nfs-manual` +
+  `volumeName:` — TIDAK ADA baris lain berubah).
+- **Dua bug lingkungan NYATA ketemu+diperbaiki saat verifikasi live** —
+  BUKAN spekulasi, ketemu langsung waktu `kubectl apply` sungguhan di
+  `kind` segar: (1) kubelet me-mount PV bertipe `nfs:` dari NETWORK
+  NAMESPACE NODE sendiri, BUKAN network pod — nama DNS cluster
+  (`nfs-server.ai-engine.svc.cluster.local`) GAGAL di-resolve di situ
+  (`mount.nfs: Failed to resolve server ...: Name or service not
+  known`), karena node tak pakai CoreDNS sebagai resolver-nya. Fix:
+  pin `clusterIP` Service `nfs-server` (`10.96.0.200`) dan pakai IP
+  mentah itu langsung di kedua PV, bukan nama DNS. (2) Image
+  `janeczku/nfs-ganesha` OOMKilled berulang di bawah limit memori 1-3Gi
+  meski `crictl stats` menunjukkan pemakaian steady-state cuma ~8MB —
+  tampaknya skrip startup-nya mengukur ALOKASI internal dari RAM HOST
+  yang terdeteksi (31Gi di host tes ini), bukan kebutuhan sungguhan;
+  stabil di limit 8Gi. Kedua isu ini didokumentasikan di
+  `k8s/README.md` sebagai gotcha GENERIK untuk siapa pun yang
+  self-host NFS server di cluster, bukan spesifik manifest ini.
+- **Nol perubahan kode aplikasi** — 100% file `k8s/` (`storage-nfs.yaml`
+  baru, dua baris tambahan di `api-deployment.yaml`, satu baris di
+  `kustomization.yaml`) + dokumentasi `k8s/README.md`. `agent/tools/`,
+  `core/chat/`, dan setiap file Python lain TAK disentuh sama sekali —
+  nol test Python baru (613/613 tetap, dijalankan ulang untuk
+  konfirmasi tak ada regresi).
+- **Diverifikasi live sungguhan di `kind` segar** (bukan cuma dry-run):
+  `nfs-common` ter-install di node via `docker exec`; kedua PVC
+  (`ai-engine-uploads`/`ai-engine-reports`) BENAR pindah dari `Pending`
+  (temuan lama) ke `Bound`; **bukti RWX lintas-pod SUNGGUHAN**: dua Pod
+  `busybox` sekali pakai sama-sama mount PVC `ai-engine-uploads` — Pod A
+  tulis file, Pod B BENAR baca file yang sama, mengonfirmasi akses
+  konkuren genuine, independen dari apakah image API/worker sungguhan
+  sudah dibuild (pod `ai-engine-api` sendiri `ImagePullBackOff` seperti
+  diharapkan, tak ada image nyata yang di-push ke registry manapun untuk
+  sesi verifikasi khusus ini — di luar cakupan, PVC/PV binding + akses
+  RWX adalah lapisan yang diperbaiki, bukan pipeline image). Cluster
+  `kind` dibongkar setelah verifikasi (`kind delete cluster`) — sempat
+  macet karena mount NFS yang tersisa membuat container node tak mau mati
+  lewat `docker rm`/`docker kill` biasa (proses mount NFS macet di
+  kernel-space "D state" yang tak bisa di-SIGKILL); diselesaikan dengan
+  loop retry di background sampai akhirnya berhasil, bukan dipaksa lewat
+  cara destruktif ke host.
+- **Gap yang diakui**: pola ini referensi/demo — untuk produksi
+  sungguhan, `k8s/README.md` eksplisit merekomendasikan ganti dengan
+  backend RWX terkelola (AWS EFS, GCP Filestore, Azure Files) atau
+  Longhorn/Rook-Ceph yang terinstal benar, bukan menjalankan server NFS
+  buatan sendiri apa adanya (single point of failure); jalur object
+  storage (S3-compatible) tetap belum disentuh (perubahan lebih besar,
+  di luar skop); limit memori 8Gi untuk `nfs-ganesha` tinggi untuk
+  server demo — nilai persis-minimal belum di-profil lebih jauh (dicoba
+  1Gi/3Gi gagal, 8Gi stabil, tak dites nilai antara).
+- **Temuan SAMPING tak terduga, di luar skop Tahap ini**: dua kali
+  `pytest -q` dijalankan ULANG untuk verifikasi (setelah `kind` dibongkar)
+  masing-masing lambat tak wajar (401 detik dan 481 detik, biasanya
+  ~25 detik) dan GAGAL di 2 test acak berbeda tiap kali, SELALU di
+  `tests/integration/test_knowledge_api.py`/`test_knowledge_auth.py`.
+  Diselidiki via `ss -tnp` pada proses `pytest` sungguhan: KETEMU koneksi
+  HTTPS NYATA ke IP Cloudflare (bukan localhost/mock). Akar masalah,
+  dikonfirmasi lewat `rag/retriever.py`: fixture `_isolated_retriever` di
+  kedua file test itu cuma menukar `store=InMemoryKnowledgeStore()`, TAPI
+  TIDAK menukar `embedder=` — `Retriever.__init__`'s `embedder or
+  default_embedder()` jatuh ke `RAG_EMBEDDING_PROVIDER=openai` yang
+  SUNGGUHAN aktif di `.env` lingkungan dev ini (bukan CI, yang tanpa
+  API key sungguhan otomatis jatuh ke embedder `hashed` gratis — makanya
+  CI tak pernah kena ini). Jadi "test terisolasi" ini sebenarnya
+  memanggil API OpenAI SUNGGUHAN tiap kali dijalankan di lingkungan dev
+  manapun yang API key-nya aktif — kadang cepat/lulus, kadang lambat/gagal
+  tergantung kondisi jaringan nyata saat itu. **Bukan regresi dari Tahap
+  39** (nol file Python disentuh Tahap ini) — gap pra-ada yang baru
+  ketemu sekarang, dicatat di sini alih-alih diam-diam diabaikan, TIDAK
+  diperbaiki sekarang (di luar skop permintaan "selesaikan Tahap 39" saat
+  ini) — kandidat kecil untuk sesi berikutnya: tambah
+  `embedder=hashed_bow_embedder` (sudah ada di `rag/embeddings.py`)
+  eksplisit di kedua fixture itu.
+
 ## Test
-- **Backend: 613/613 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~24-25 detik total) — naik dari 602 lewat 11 test Configuration Center
+- **Backend: tetap 613/613** (Tahap 39 nol perubahan Python, jadi jumlah
+  test tak berubah) — TAPI dua kali `pytest -q` dijalankan ULANG demi
+  verifikasi (setelah `kind` dibongkar) masing-masing gagal 2 test acak
+  berbeda, keduanya SELALU di `test_knowledge_api.py`/
+  `test_knowledge_auth.py`, dan masing-masing lambat tak wajar
+  (401 detik, 481 detik, biasanya ~25 detik) — diselidiki dan
+  dikonfirmasi BUKAN regresi dari Tahap 39, melainkan gap pra-ada baru
+  ketemu (dua fixture itu diam-diam memanggil API OpenAI SUNGGUHAN lewat
+  jaringan nyata di lingkungan dev ini — lihat detail lengkap di bagian
+  Tahap 39 di atas). Terakhir kali `pytest -q` dijalankan SEBELUM
+  `kind`/verifikasi RWX (jadi tanpa gap ini terpicu): 613/613 lulus,
+  stabil 2x berturut-turut, ~24-25 detik total — naik dari 602 lewat 11 test Configuration Center
   (Tahap 38, lihat detail di atas, semua di `test_config_center.py`).
   Sebelumnya naik dari 594 lewat 8 test Prompt Management
   (Tahap 37, lihat detail di atas: 4 unit `test_prompt_loader.py`, 4 unit
@@ -2517,7 +2645,7 @@ Direncanakan lewat Plan Mode dulu.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-38, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-39, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2821,8 +2949,10 @@ Write Access (Tahap 33), Security + Audit Dashboards (Tahap 34, Bab
 dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
 35), Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
 KEDUA), Prompt Management (Tahap 37, Bab 68 Backlog Prioritas 8 —
-item KETIGA), dan Configuration Center (Tahap 38, Bab 68 Backlog
-Prioritas 7 — item KEEMPAT) semua selesai 2026-07-06. **Seluruh 5 area
+item KETIGA), Configuration Center (Tahap 38, Bab 68 Backlog
+Prioritas 7 — item KEEMPAT), dan Solusi Storage RWX untuk Produksi
+(Tahap 39, di luar Backlog Bab 68 — dari daftar "Titik mulai sesi
+berikutnya") semua selesai 2026-07-06/07. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2911,9 +3041,21 @@ pemasangan sumber config resmi yang sudah ada, bukan loader buatan
 sendiri; ~55 dari ~70 field `Settings` dipindah default-nya ke 6 file
 YAML bertema, sisanya (secret + flag per-lingkungan macam
 `APP_ENV`/`DEBUG`) sengaja tetap env-only (lihat detail Tahap 38 di
-atas). Kandidat prioritas berikutnya, dari yang paling murah dieksekusi:
-(1) solusi storage RWX (StorageClass NFS/Longhorn atau pindah ke object
-storage) kalau memang butuh API >1 replika di produksi; (2) item lain di
+atas). **Tahap 39 dipilih via `AskUserQuestion`** dari daftar "Titik
+mulai sesi berikutnya" (bukan Bab 68 Backlog) — solusi storage RWX
+`uploads`/`reports`, ditutup lewat NFS-Ganesha self-hosted + PV statis,
+diverifikasi live di `kind` segar termasuk bukti akses konkuren
+lintas-pod sungguhan (lihat detail Tahap 39 di atas); dua gotcha
+lingkungan generik (DNS dari mount namespace node, sizing memori
+Ganesha) didokumentasikan di `k8s/README.md` untuk siapa pun yang pakai
+pola ini lagi. Verifikasi Tahap 39 juga TAK SENGAJA menemukan gap
+pra-ada di test suite (`test_knowledge_api.py`/`test_knowledge_auth.py`
+diam-diam memanggil API OpenAI sungguhan lewat `default_embedder()` yang
+tak ter-mock di lingkungan dev — lihat detail lengkap di atas). Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) fix
+kecil test isolation — tambah `embedder=hashed_bow_embedder` eksplisit
+di fixture `_isolated_retriever` kedua file test itu, supaya `pytest`
+lokal tak pernah diam-diam memanggil API berbayar; (2) item lain di
 Bab 68 Backlog (16 dari 20 tersisa — sisanya sebagian besar terlalu
 besar/spekulatif untuk pola Tahap kecil sesi ini, lihat detail Tahap 34);
 (3) satu proses MCP
@@ -2933,8 +3075,12 @@ sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
 memanggilnya); (9) `agent/tools/analyzers.py`'s prompt generate_code
 dinamis (Tahap 37) belum masuk sistem versi prompt; (10) belum ada
 validasi skema/tipe di level `config/*.yaml` selain error pydantic saat
-startup (Tahap 38) — item 3-10 kecil/menengah, cuma relevan kalau ada
-kebutuhan konkret.
+startup (Tahap 38); (11) jalur object storage (S3-compatible) untuk
+`uploads`/`reports` (Tahap 39 sengaja tak menyentuh ini — perubahan lebih
+besar, butuh menulis ulang `agent/tools/readers.py`/`writers.py`
+terproteksi); (12) pola NFS-Ganesha Tahap 39 masih referensi/demo — perlu
+diganti backend RWX terkelola sebelum dipakai produksi sungguhan — item
+3-12 kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler

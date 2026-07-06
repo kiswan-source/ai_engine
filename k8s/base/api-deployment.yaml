@@ -87,6 +87,11 @@ metadata:
   namespace: ai-engine
 spec:
   accessModes: ["ReadWriteMany"]
+  # Bound to the static NFS-backed PV in storage-nfs.yaml — see
+  # k8s/README.md for the off-ramp to a managed RWX backend in real
+  # production.
+  storageClassName: nfs-manual
+  volumeName: ai-engine-uploads-pv
   resources:
     requests:
       storage: 5Gi
@@ -98,6 +103,8 @@ metadata:
   namespace: ai-engine
 spec:
   accessModes: ["ReadWriteMany"]
+  storageClassName: nfs-manual
+  volumeName: ai-engine-reports-pv
   resources:
     requests:
       storage: 5Gi

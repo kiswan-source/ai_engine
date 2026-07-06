@@ -1,0 +1,157 @@
+# RWX storage for uploads/reports (MASTER_INSTRUCTION.md Bab 38, Bab 68
+# Backlog "Solusi storage RWX untuk produksi"). Most default StorageClasses
+# (kind's local-path, most cloud block storage) only support
+# ReadWriteOnce, but ai-engine-api runs >1 replica and every replica needs
+# to see the same uploaded/generated files (agent/tools/readers.py/
+# writers.py, core/chat/engine.py's UPLOADS_DIR/REPORTS_DIR all assume a
+# shared local filesystem path) — see k8s/README.md's Gaps section for
+# the full history (this used to sit unsolved there).
+#
+# This is a reference implementation: a single userspace NFS-Ganesha
+# server (no kernel nfsd module needed — works in nested/containerized
+# runtimes where loading a kernel NFS server module isn't possible)
+# exporting two subdirectories, bound via static PersistentVolumes. Real
+# production deployments should swap this for a managed RWX backend (AWS
+# EFS, GCP Filestore, Azure Files) or a properly installed Longhorn/Rook
+# — point the two PersistentVolumes below at that backend's NFS endpoint
+# (or replace them with that backend's own StorageClass) and drop this
+# file entirely. This manifest exists to prove the pattern works, not as
+# a mandate to run a hand-rolled NFS server in production.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-server-data
+  namespace: ai-engine
+spec:
+  accessModes: ["ReadWriteOnce"]  # only the nfs-server pod itself ever mounts this directly
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-server
+  namespace: ai-engine
+  labels:
+    app.kubernetes.io/name: nfs-server
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # a rolling update would briefly run two servers against one RWO disk
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nfs-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nfs-server
+    spec:
+      # NFS won't let a client mount a subpath that doesn't exist yet —
+      # create both export subdirectories before Ganesha starts.
+      initContainers:
+        - name: init-exports
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "mkdir -p /export/uploads /export/reports && chmod 0777 /export/uploads /export/reports"
+          volumeMounts:
+            - name: data
+              mountPath: /export
+      containers:
+        - name: nfs-ganesha
+          image: janeczku/nfs-ganesha:latest
+          env:
+            - name: EXPORT_PATH
+              value: /data/nfs
+            - name: PSEUDO_PATH
+              value: /
+            - name: PROTOCOLS
+              value: "4"  # NFSv4-only: single port (2049), no rpcbind/mountd side-channels
+          securityContext:
+            capabilities:
+              add: ["SYS_ADMIN", "DAC_READ_SEARCH"]  # userspace server — no kernel nfsd module needed
+          ports:
+            - name: nfs
+              containerPort: 2049
+          volumeMounts:
+            - name: data
+              mountPath: /data/nfs
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              # Confirmed live: steady-state RSS is ~8MB (crictl stats), but
+              # this image's startup script gets OOMKilled below ~4-8Gi on
+              # this test host (31Gi RAM) — it appears to size an internal
+              # buffer/cache off *detected host memory* rather than actual
+              # need, a real quirk of this specific image, not a genuine
+              # workload requirement. Lower this once you've profiled your
+              # own node's actual behavior, or swap images (see
+              # k8s/README.md) if this is too wasteful for your cluster.
+              memory: "8Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nfs-server-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-server
+  namespace: ai-engine
+spec:
+  # Pinned (not left to auto-assignment): a PersistentVolume's `nfs.server`
+  # is mounted by the kubelet in the NODE's own network namespace, not the
+  # pod network — confirmed live (kind), the cluster-DNS name
+  # (nfs-server.ai-engine.svc.cluster.local) fails there with
+  # "mount.nfs: Failed to resolve server ...: Name or service not known"
+  # since the node doesn't use CoreDNS as its resolver. A raw IP needs no
+  # resolution, and pinning it keeps it stable across re-applies (an
+  # auto-assigned ClusterIP would only change if the Service object itself
+  # were deleted and recreated, but pinning removes that risk entirely).
+  # Pick a different address here if 10.96.0.200 collides with something
+  # else in your cluster's actual service CIDR.
+  clusterIP: 10.96.0.200
+  selector:
+    app.kubernetes.io/name: nfs-server
+  ports:
+    - name: nfs
+      port: 2049
+      targetPort: 2049
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ai-engine-uploads-pv
+  labels:
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual  # label only, matched explicitly by the PVC — no StorageClass object required for static binding
+  nfs:
+    server: 10.96.0.200  # nfs-server Service's pinned ClusterIP — see its comment above for why a DNS name doesn't work here
+    path: /uploads
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ai-engine-reports-pv
+  labels:
+    app.kubernetes.io/part-of: ai-engine
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  nfs:
+    server: 10.96.0.200  # nfs-server Service's pinned ClusterIP — see its comment above for why a DNS name doesn't work here
+    path: /reports
