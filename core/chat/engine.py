@@ -26,8 +26,17 @@ complete no-op, identical to behavior before this Tahap. A denied tool call
 does NOT raise — `_run_tool` catches `PermissionError` and returns it as a
 normal `{"error": ...}` result (same shape `_summarize_result`/`ok` already
 handle), so one denied call ends that tool call, not the whole SSE stream.
-Session ownership (whether a caller may address someone else's `session_id`)
-is a separate, still-open gap — this only gates *tool calls*, not *sessions*.
+
+Session ownership (Tahap 22, closes the gap Tahap 20 explicitly left open):
+`Session.owner` records the `Principal.api_key` of whoever first touches a
+`session_id` (via `get_session`/`stream_run`'s `owner=` kwarg) and never
+changes after that. This module does not enforce anything from it —
+`api/routes/chat.py` checks `owner` against the caller's `Principal` before
+letting a request through, the same "engine stays framework-agnostic, the
+route does authorization" split `api/routes/workspace.py` already uses.
+`owner=None` (no caller opts in) behaves exactly as before every Tahap 20/22
+change: unowned, anyone can touch it — matches every RBAC feature in this
+app being a no-op when its caller doesn't opt in.
 """
 import os
 import json
@@ -78,8 +87,9 @@ ATURAN:
 
 
 class Session:
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, owner: Optional[str] = None):
         self.id = session_id
+        self.owner = owner  # Principal.api_key of whoever created it (Tahap 22); None if unset
         self.messages: List[Dict[str, Any]] = []   # Ollama-format chat history
         self.history: List[Dict[str, Any]] = []     # display items for the UI
         self.files: List[str] = []  # absolute paths of uploaded files
@@ -97,14 +107,24 @@ class ChatEngine:
         self.sessions: Dict[str, Session] = {}
 
     # ── Session helpers ──
-    def get_session(self, session_id: str) -> Session:
+    def get_session(self, session_id: str, owner: Optional[str] = None) -> Session:
+        """Fetch or create a session. ``owner`` is only recorded at creation —
+        an existing session's owner never changes (Tahap 22: first caller to
+        touch a session_id owns it; api/routes/chat.py enforces this before
+        calling here, this method itself doesn't check anything)."""
         if session_id not in self.sessions:
-            self.sessions[session_id] = Session(session_id)
+            self.sessions[session_id] = Session(session_id, owner=owner)
         return self.sessions[session_id]
 
-    def list_sessions(self) -> List[Dict[str, Any]]:
+    def list_sessions(self, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+        """``owner=None`` (default, unchanged since before Tahap 22) lists
+        every session. Passing an owner filters to that caller's own —
+        api/routes/chat.py always passes one so a user only ever sees their
+        own sessions."""
         out = []
         for s in self.sessions.values():
+            if owner is not None and s.owner != owner:
+                continue
             first_user = next((h["content"] for h in s.history if h["type"] == "user"), "")
             out.append({"id": s.id, "title": (first_user or "Chat baru")[:60],
                         "message_count": len(s.history),
@@ -232,9 +252,10 @@ class ChatEngine:
     async def stream_run(self, session_id: str, user_text: str,
                          new_files: Optional[List[str]] = None,
                          model: Optional[str] = None,
-                         role: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
+                         role: Optional[str] = None,
+                         owner: Optional[str] = None) -> AsyncIterator[Dict[str, Any]]:
         model = model or self.default_model
-        session = self.get_session(session_id)
+        session = self.get_session(session_id, owner=owner)
         new_files = [self.resolve_path(f) for f in (new_files or [])]
         for f in new_files:
             session.add_file(f)

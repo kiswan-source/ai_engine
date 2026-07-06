@@ -33,6 +33,7 @@
 | 19* | Project Workspace & Folder Access — registrasi folder lokal sebagai sumber kerja Agent (Bab 69, ADR-0005) | ✅ SELESAI |
 | 20* | Sambungkan RBAC ke ChatEngine — tutup gap yang diakui sejak Tahap 10/16/17/18 | ✅ SELESAI |
 | 21* | Dockerfile multi-stage (Bab 37 rule 2) — `docker/Dockerfile.api`/`Dockerfile.worker` + `.dockerignore` baru | ✅ SELESAI |
+| 22* | Kepemilikan sesi Chat — tutup gap yang sengaja ditinggalkan Tahap 20 | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1158,9 +1159,64 @@ asyncpg/psycopg2/fiona/shapely/pyproj) langsung ke image final, single-stage.
   kemungkinan sudah gagal senyap di Docker sejak awal, di luar cakupan
   untuk diperbaiki sekarang).
 
+**Tahap 22 — Kepemilikan sesi Chat**
+
+Dipilih lewat `AskUserQuestion` dari 4 kandidat (MCP Server / loose ends
+Docker / kepemilikan sesi Chat / Agent Workspace Context). Menutup gap
+yang Tahap 20 catat eksplisit sebagai di luar cakupan: `session_id`
+ChatEngine tidak pernah terikat identitas — siapa pun yang tahu ID sesi
+orang lain bisa membaca riwayatnya, melanjutkannya, atau menghapusnya.
+
+- **`core/chat/engine.py` (folder fondasi, aditif murni)**: `Session` dapat
+  atribut `owner` (string `Principal.api_key`, diisi sekali saat sesi
+  pertama dibuat, tidak pernah berubah setelahnya — first-touch-owns,
+  bukan re-assignable). `get_session()`/`stream_run()` dapat parameter
+  opsional `owner=None`; `list_sessions()` dapat parameter opsional
+  `owner=None` yang jika diisi memfilter cuma sesi milik pemanggil itu.
+  **Nol pengecekan otorisasi di dalam `engine.py` sendiri** — sama seperti
+  pola `api/routes/workspace.py` (domain/engine tetap agnostik terhadap
+  HTTP, rute yang memutuskan boleh/tidak).
+- **`api/routes/chat.py`**: helper `_require_session_owner()` dipanggil di
+  awal setiap rute yang menyentuh `session_id` (`/upload`, `/stream`,
+  `GET`/`DELETE /sessions/{id}`) — 403 sebelum kerja apa pun dimulai,
+  BUKAN di dalam `event_source()` (raise di situ setelah
+  `StreamingResponse` mulai jalan cuma akan jadi body 200 yang rusak
+  separuh jalan, bukan 403 bersih). `GET /sessions` (list) kini memfilter
+  ke `owner=principal.api_key` — dulu mengembalikan SEMUA sesi ke SIAPA
+  PUN yang memanggil.
+- **Perilaku default dev (`API_KEYS` kosong) tidak berubah sama sekali** —
+  setiap pemanggil berbagi `Principal(api_key="", role="admin")` yang
+  identik, jadi setiap sesi ber-owner `""` yang sama, pengecekan
+  kepemilikan jadi no-op total. Pola yang sama persis dipakai setiap fitur
+  RBAC lain di app ini (Tahap 10/16/17/18/20).
+- **`/download/{filename}` sengaja TIDAK disentuh** — endpoint itu tidak
+  punya `session_id` dalam request sama sekali (file diambil lewat nama
+  file langsung dari `reports/`), jadi ini gap terpisah (file mana milik
+  sesi mana), bukan bagian dari kepemilikan sesi. Dicatat eksplisit, tidak
+  digabung diam-diam ke lingkup Tahap ini.
+- **8 test baru** (489/489 total): integrasi `test_chat_session_ownership.py`
+  — pemilik bisa baca/hapus sesi sendiri, orang lain ditolak baca/lanjut/
+  hapus (403 di ketiganya), upload ke sesi orang lain ditolak, daftar sesi
+  cuma tampilkan milik sendiri, dan perilaku tanpa `API_KEYS` sama sekali
+  tak berubah.
+- **Diverifikasi live sungguhan** (`API_KEYS` sementara di `.env`, service
+  di-restart, model asli): User A kirim pesan sungguhan lewat `gemma4:e2b`,
+  dapat `session_id` nyata. User A baca sesi sendiri → 200 riwayat lengkap.
+  **User B (`X-API-Key` berbeda) coba baca sesi User A → 403 sungguhan**
+  (`"Sesi ini milik pengguna lain"`); coba hapus → 403, dikonfirmasi sesi
+  User A TETAP UTUH (2 entri riwayat, tak terhapus); coba lanjutkan lewat
+  `/stream` dengan `session_id` User A → 403 (ditolak sebelum model
+  sempat dipanggil sama sekali); `GET /sessions` sebagai User B → daftar
+  kosong, tak melihat sesi User A. Setelah `.env` dikembalikan (tanpa
+  `API_KEYS`) dan service di-restart: kirim pesan tanpa header `X-API-Key`
+  sama sekali → sesi bisa dibaca tanpa auth, persis perilaku sebelum
+  Tahap ini (nol regresi ke alur dev normal).
+
 ## Test
-- **Backend: 481/481 lulus** (`pytest -q`, stabil 3x berturut-turut) — naik
-  dari 474 lewat 7 test RBAC ChatEngine (Tahap 20, lihat detail di atas: 4
+- **Backend: 489/489 lulus** (`pytest -q`, stabil berturut-turut) — naik
+  dari 481 lewat 8 test kepemilikan sesi Chat (Tahap 22, lihat detail di
+  atas: `test_chat_session_ownership.py`). Sebelumnya naik dari 474 lewat 7
+  test RBAC ChatEngine (Tahap 20, lihat detail di atas: 4
   unit `test_chat_engine_rbac.py`, 3 integrasi `test_chat_api_rbac.py`;
   plus perbaikan isolasi RAG pra-ada di `test_workspace_api.py` yang bikin
   suite penuh rapuh tergantung urutan file). Sebelumnya naik dari 409 lewat 65 test
@@ -1196,16 +1252,19 @@ asyncpg/psycopg2/fiona/shapely/pyproj) langsung ke image final, single-stage.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-21, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-22, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
-  yang benar eksekusi tool untuk `tool:*`/`plugin:*`/`mcp:call`. Yang masih
-  terbuka: **kepemilikan sesi** — `session_id` tetap tak terikat identitas,
-  siapa pun yang tahu ID sesi orang lain masih bisa membaca/melanjutkannya
-  (keputusan sadar di luar cakupan Tahap ini, beda dari gap ChatEngine↔RBAC
-  yang sekarang tertutup). Rute API selain yang sudah opt-in RBAC (chat,
-  agent/run, projects, workspace) masih terbuka tanpa autentikasi.
+  yang benar eksekusi tool untuk `tool:*`/`plugin:*`/`mcp:call`.
+  **Kepemilikan sesi Chat SELESAI juga (Tahap 22)** — `session_id` kini
+  terikat `Principal.api_key` yang pertama menyentuhnya; orang lain
+  ditolak 403 baca/lanjut/hapus/upload, `GET /sessions` cuma tampilkan
+  milik sendiri. Yang masih terbuka: `/download/{filename}` tetap tak
+  terikat sesi/identitas sama sekali (gap terpisah, sengaja tak digabung
+  ke Tahap 22 — lihat detail di atas). Rute API selain yang sudah opt-in
+  RBAC (chat, agent/run, projects, workspace) masih terbuka tanpa
+  autentikasi.
 - **Project Workspace (Tahap 19) baru sumber Local** — Network/Server/
   Cloud/SharePoint/OneDrive/GDrive/S3 belum ada adapternya (Bab 69.16,
   scope-sempit-sadar); `mount` menolak eksplisit, bukan diam-diam
@@ -1393,27 +1452,30 @@ Multi-Agent (Tahap 11), Frontend AI Workspace + Monitoring/Memory/Knowledge
 Plugin (Tahap 16), MCP Client (Tahap 17), migrasi RBAC penuh ke
 `write_*`/`convert_geo`/`generate_code` (Tahap 18, ADR-0013 selesai
 ditutup), Project Workspace & Folder Access (Tahap 19, Bab 69/ADR-0005,
-hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), dan Dockerfile
-multi-stage (Tahap 21, ADR-0011 gap ditutup) semua selesai 2026-07-06.
-**Seluruh 5 area Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode
-nyata**, ditambah kapabilitas Workspace baru di atasnya, gate RBAC kini
-benar-benar hidup di satu-satunya jalur yang mengeksekusi tool (Chat), dan
-image Docker turun 2.83GB→699MB dengan bug keamanan nyata (`.env`
-ter-bake ke image) tertutup sekalian. Kandidat prioritas berikutnya, dari
-yang paling murah dieksekusi: (1) MCP Server (sisi Bab 60 yang sengaja
-ditunda Tahap 17); (2) solusi storage RWX (StorageClass NFS/Longhorn atau
-pindah ke object storage) kalau memang butuh API >1 replika di produksi;
-(3) Bab 68 Enterprise Architecture Backlog (20 prioritas di
-`DEVELOPMENT_ROADMAP.md`) — belum satupun dimulai; (4) kepemilikan sesi
-Chat (`session_id` tak terikat identitas) — gap yang Tahap 20 sengaja
-tidak tutup, dicatat terpisah dari gerbang tool-call yang sudah tertutup;
-(5) sambungkan Agent Workspace Context (Bab 69.5) ke ChatEngine — tool
-Chat baru yang membaca dari Project Workspace, bukan cuma Uploaded Files,
-gap yang sengaja ditinggalkan Tahap 19; (6) instal `tesseract-ocr` di
-Dockerfile (gap pra-ada ditemukan tak sengaja Tahap 21 — `pytesseract`
-ada di `requirements.txt` tapi binary-nya tak pernah diinstal, OCR lewat
-`read_image` kemungkinan gagal senyap di Docker); (7) `HEALTHCHECK`
-eksplisit di `Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
+hand-off Cowork), sambungkan RBAC ke ChatEngine (Tahap 20), Dockerfile
+multi-stage (Tahap 21, ADR-0011 gap ditutup), dan kepemilikan sesi Chat
+(Tahap 22) semua selesai 2026-07-06. **Seluruh 5 area Phase 3
+(`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah kapabilitas
+Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
+satu-satunya jalur yang mengeksekusi tool (Chat) DAN sesi Chat kini
+terikat identitas pemiliknya, dan image Docker turun 2.83GB→699MB dengan
+bug keamanan nyata (`.env` ter-bake ke image) tertutup sekalian. Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) MCP Server
+(sisi Bab 60 yang sengaja ditunda Tahap 17); (2) solusi storage RWX
+(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
+butuh API >1 replika di produksi; (3) Bab 68 Enterprise Architecture
+Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
+dimulai; (4) `/api/v1/chat/download/{filename}` belum terikat
+sesi/identitas — gap yang Tahap 22 sengaja tidak tutup (beda dari
+kepemilikan sesi yang sudah tertutup), file produksi siapa pun bisa
+diunduh siapa saja yang tahu namanya; (5) sambungkan Agent Workspace
+Context (Bab 69.5) ke ChatEngine — tool Chat baru yang membaca dari
+Project Workspace, bukan cuma Uploaded Files, gap yang sengaja ditinggalkan
+Tahap 19; (6) instal `tesseract-ocr` di Dockerfile (gap pra-ada ditemukan
+tak sengaja Tahap 21 — `pytesseract` ada di `requirements.txt` tapi
+binary-nya tak pernah diinstal, OCR lewat `read_image` kemungkinan gagal
+senyap di Docker); (7) `HEALTHCHECK` eksplisit di
+`Dockerfile.api`/`Dockerfile.worker` sendiri (Tahap 21 tidak
 menambahkannya, di luar cakupan saat itu).
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
