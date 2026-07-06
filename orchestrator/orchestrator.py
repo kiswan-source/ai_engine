@@ -43,7 +43,7 @@ from api.config import settings
 from core.utils.logger import get_logger
 from messaging import EventBus
 from messaging.events import workflow_event
-from registry.agent_registry import AgentRegistry, build_default_agent_registry
+from registry.agent_registry import AgentRegistry, build_default_agent_registry, build_simulation_agent_registry
 from telemetry.cost_tracker import CostTracker
 from telemetry.metrics import MetricsCollector
 from telemetry.tracing import Tracer
@@ -117,6 +117,7 @@ class Orchestrator:
         max_tokens: int = 2048,
         trace_id: str | None = None,
         images: list[dict] | None = None,
+        simulate: bool = False,
     ) -> WorkflowResult:
         """Plan and execute a multi-agent workflow for ``prompt``.
 
@@ -127,6 +128,13 @@ class Orchestrator:
                 ``"consensus"`` (Bab 24).
             images: Optional ``{"data": ..., "mime_type": ...}`` dicts (Bab
                 17.1 Vision role), forwarded to every step's Task.
+            simulate: Bab 68 Backlog Prioritas 16 (Tahap 36) — when ``True``,
+                dispatches through a temporary, per-call registry of
+                :class:`providers.mock_provider.MockProvider`-backed agents
+                instead of ``self.agents``/``self.dispatcher``, so this call
+                never makes a real provider request. The real registry is
+                never touched, so a simulated and a real call can be
+                interleaved safely on the same ``Orchestrator``.
 
         Returns:
             WorkflowResult: Aggregated result across all steps.
@@ -168,7 +176,11 @@ class Orchestrator:
         # Planning -> Executing
         await self._transition(trace_id, State.EXECUTING)
         workflow = WORKFLOWS[mode]()
-        result = await workflow.run(plan.graph, self.dispatcher)
+        dispatcher = self.dispatcher
+        if simulate:
+            sim_agents = build_simulation_agent_registry(tuple(roles))
+            dispatcher = Dispatcher(RoutingEngine(sim_agents), event_bus=self.events)
+        result = await workflow.run(plan.graph, dispatcher)
 
         # Cost Optimization (Bab 27 rule 4, Bab 61.2): a task over budget needs
         # Human Approval exactly like a low-confidence result does.

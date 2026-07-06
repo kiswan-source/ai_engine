@@ -252,6 +252,41 @@ async def test_orchestrator_run_sequential_completes():
     assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
 
 
+# ─── Simulation Mode (Bab 68 Backlog Prioritas 16, Tahap 36) ────────────
+
+def test_build_simulation_agent_registry_backs_every_role_with_mock_provider():
+    from providers.mock_provider import MockProvider
+    from registry.agent_registry import build_simulation_agent_registry
+
+    reg = build_simulation_agent_registry(("writer", "research"))
+    writer = reg.get_for_role("writer")
+    assert isinstance(writer.provider, MockProvider)
+    assert reg.get_for_role("research").provider.name == "mock"
+
+
+async def test_orchestrator_run_simulate_true_ignores_real_registry():
+    """simulate=True must dispatch through a MockProvider-backed registry,
+    never the real (here: StubAgent-backed) one the Orchestrator was
+    constructed with — and must leave that real registry/dispatcher
+    completely untouched for subsequent non-simulated calls."""
+    reg = registry_with(StubAgent("writer", output="REAL OUTPUT, SHOULD NOT APPEAR"))
+    orch = Orchestrator(agent_registry=reg)
+
+    result = await orch.run("Halo dunia", ["writer"], mode="sequential", simulate=True)
+
+    assert "[SIMULASI]" in result.final_output
+    assert "REAL OUTPUT" not in result.final_output
+    assert orch.tasks.state_of(result.trace_id) == State.COMPLETED
+    assert orch.agents is reg  # real registry never swapped
+
+
+async def test_orchestrator_run_simulate_false_still_uses_real_registry():
+    reg = registry_with(StubAgent("writer", output="REAL OUTPUT"))
+    orch = Orchestrator(agent_registry=reg)
+    result = await orch.run("hello", ["writer"], mode="sequential", simulate=False)
+    assert result.final_output == "REAL OUTPUT"
+
+
 async def test_orchestrator_run_marks_failed(monkeypatch):
     reg = registry_with(StubAgent("writer", fail_times=99))
 

@@ -74,3 +74,22 @@ def build_default_agent_registry(roles: tuple[str, ...] = ROLES) -> AgentRegistr
     for role in roles:
         registry.register(GenericLLMAgent(role))
     return registry
+
+
+def build_simulation_agent_registry(roles: tuple[str, ...] = ROLES) -> AgentRegistry:
+    """Build a registry with one :class:`GenericLLMAgent` per role, every one
+    backed by :class:`providers.mock_provider.MockProvider` (Bab 68 Backlog
+    Prioritas 16, Tahap 36 Simulation Mode) — same shape as
+    :func:`build_default_agent_registry`, just with every real vendor call
+    swapped out. Guardrails/confidence scoring inside ``GenericLLMAgent.execute``
+    still run for real; only the provider call itself is mocked, so a
+    simulated run still proves the workflow's routing and guardrail
+    behavior, not just "did it return text."
+    """
+    from agents.generic_agent import GenericLLMAgent
+    from providers.mock_provider import MockProvider
+
+    registry = AgentRegistry()
+    for role in roles:
+        registry.register(GenericLLMAgent(role, provider=MockProvider()))
+    return registry

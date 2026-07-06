@@ -111,6 +111,31 @@ async def test_run_sequential_completes(client, stub_orchestrator):
     assert data["results"][0]["role"] == "writer"
 
 
+async def test_run_simulate_true_uses_mock_provider_not_stub_agent(client, stub_orchestrator):
+    """Simulation Mode (Bab 68 Backlog Prioritas 16, Tahap 36) — "simulate":
+    true must route through providers.mock_provider.MockProvider, never the
+    real (here: stub) agent registry installed for this Orchestrator."""
+    stub_orchestrator(StubAgent("writer", output="REAL OUTPUT, SHOULD NOT APPEAR"))
+    res = await client.post(
+        "/api/v1/orchestrator/run",
+        json={"prompt": "tulis laporan", "roles": ["writer"], "mode": "sequential", "simulate": True},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["state"] == "completed"
+    assert "[SIMULASI]" in data["final_output"]
+    assert "REAL OUTPUT" not in data["final_output"]
+
+
+async def test_run_simulate_defaults_to_false(client, stub_orchestrator):
+    stub_orchestrator(StubAgent("writer", output="hasil nyata"))
+    res = await client.post(
+        "/api/v1/orchestrator/run", json={"prompt": "tulis", "roles": ["writer"], "mode": "sequential"}
+    )
+    assert res.status_code == 200
+    assert res.json()["final_output"] == "hasil nyata"
+
+
 async def test_run_with_images_reaches_task_payload(client, stub_orchestrator):
     """Vision (Bab 17.1 role) — data: URI parsed and attached to the Task the agent actually receives."""
     agent = StubAgent("vision", output="ada kucing")

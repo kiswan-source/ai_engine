@@ -16,6 +16,7 @@ from .exceptions import (
     UnknownProviderError,
 )
 from .gemini_provider import GeminiProvider
+from .mock_provider import MockProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 from .provider_factory import create_for_role, create_provider
@@ -32,6 +33,7 @@ __all__ = [
     "GeminiProvider",
     "GenerationParams",
     "ImageInput",
+    "MockProvider",
     "OllamaProvider",
     "OpenAIProvider",
     "ProviderCapabilityError",

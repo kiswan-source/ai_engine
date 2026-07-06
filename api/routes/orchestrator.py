@@ -41,6 +41,11 @@ class WorkflowRunRequest(BaseModel):
     # the frontend. Parsed into {"data", "mime_type"} dicts before reaching
     # the Orchestrator, which knows nothing about the wire format.
     images: list[str] = []
+    # Simulation Mode (Bab 68 Backlog Prioritas 16, Tahap 36) — dry-run this
+    # workflow through providers.mock_provider.MockProvider instead of real
+    # vendor calls, for validating routing/sequencing on a complex workflow
+    # without cost before running it for real.
+    simulate: bool = False
 
 
 def _parse_data_uri(uri: str) -> dict[str, str]:
@@ -86,6 +91,7 @@ async def run_workflow(req: WorkflowRunRequest):
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             images=images or None,
+            simulate=req.simulate,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

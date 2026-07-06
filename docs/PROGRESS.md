@@ -47,6 +47,7 @@
 | 33* | PDF/DOCX Workspace Write Access — `workspace_write_file` kini bisa bikin dokumen PDF/DOCX sungguhan langsung di folder Workspace, lewat Chat maupun MCP | ✅ SELESAI |
 | 34* | Security + Audit Dashboards (Bab 68 Backlog Prioritas 13) — 2 dashboard baru melengkapi 8 dashboard Bab 62, item Backlog pertama yang dikerjakan | ✅ SELESAI |
 | 35* | Perbaiki drift `workspace_dashboard()` frontend — data sudah ada di API sejak Tahap 19, kini tampil di Monitoring page | ✅ SELESAI |
+| 36* | Simulation Mode (Bab 68 Backlog Prioritas 16) — `POST /orchestrator/run` bisa dry-run tanpa provider sungguhan lewat `MockProvider` | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -2155,9 +2156,93 @@ keputusan desain baru (pola PERSIS section Security/Audit Tahap 34).
 - **Gap yang diakui**: 19 dari 20 item Bab 68 Backlog masih belum
   disentuh (tak berubah dari Tahap 34).
 
+**Tahap 36 — Simulation Mode (Bab 68 Backlog Prioritas 16)**
+
+Item KEDUA dari Bab 68 Enterprise Architecture Backlog yang dikerjakan.
+Teks `DEVELOPMENT_ROADMAP.md` untuk Prioritas 16: "Simulation Mode
+memanfaatkan mock provider yang sudah menjadi standar pengujian CI (Bab
+12), diperluas agar dapat dijalankan secara manual oleh developer/Claude
+Code terhadap workflow kompleks... sebelum eksekusi produksi." Dicek dulu:
+"mock provider" itu SEBELUM Tahap ini cuma ada sebagai `StubProvider`/fake
+class ad-hoc di tiap file test — tak ada mock provider nyata yang bisa
+dipakai ulang, dan tak ada cara bagi manusia (atau Claude Code) men-dry-run
+`POST /api/v1/orchestrator/run` sungguhan tanpa memanggil LLM asli (dan,
+untuk role cloud, kena biaya asli). Dipilih via `AskUserQuestion`.
+Direncanakan lewat Plan Mode dulu (beberapa keputusan integrasi ke
+Orchestrator).
+
+- **`providers/mock_provider.py::MockProvider` baru** — implementasi
+  `BaseProvider` NYATA pertama kelasnya (bukan stub test lagi), jadi bisa
+  dipakai ulang di mana pun `BaseProvider` diharapkan. `generate()`
+  mengembalikan `ProviderResponse` deterministik dengan `finish_reason="stop"`
+  (BUKAN "length"/`None` — `_estimate_confidence` di `generic_agent.py`
+  menganggap alasan terpotong sebagai confidence lebih rendah; giliran
+  simulasi harus dibaca sebagai sukses normal) berisi penanda `[SIMULASI]`
+  plus cuplikan prompt asli, supaya manusia yang memeriksa hasil simulasi
+  masih bisa lihat prompt apa yang benar-benar dirutekan ke tiap peran.
+  Terdaftar sebagai `name="mock"` — TIDAK ditambahkan ke
+  `telemetry/cost_tracker.py::PRICING`, jadi `price_for("mock", ...)`
+  otomatis jatuh ke `_DEFAULT_PRICE=(0.0, 0.0)` yang sudah ada (sama
+  seperti model lokal/tak dikenal lainnya) — nol perubahan ke cost
+  tracking.
+- **`registry/agent_registry.py::build_simulation_agent_registry(roles)`
+  baru** — mirror persis `build_default_agent_registry()`, tapi
+  `GenericLLMAgent(role, provider=MockProvider())` per peran
+  (`GenericLLMAgent.__init__` SUDAH menerima override `provider` — nol
+  perubahan di sana). Tetap lewat `GenericLLMAgent.execute()` yang
+  SESUNGGUHNYA — prompt_guard/output_validator/confidence scoring semua
+  tetap jalan nyata, cuma panggilan provider-nya yang ditukar. Sengaja
+  begitu: Simulation Mode membuktikan perilaku ROUTING dan GUARDRAIL
+  workflow juga, bukan cuma "apakah ada teks kembali".
+- **`Orchestrator.run(..., simulate: bool = False)`** — kalau `True`,
+  membangun `RoutingEngine`/`Dispatcher` SEMENTARA dari
+  `build_simulation_agent_registry(roles)`, dipakai HANYA untuk panggilan
+  `workflow.run()` kali ini; `self.agents`/`self.dispatcher` (yang asli)
+  TAK PERNAH disentuh — panggilan simulasi dan panggilan nyata bisa
+  diselang-seling aman di instance `Orchestrator` yang sama. Telemetry
+  (cost/metrics/tracing) SENGAJA TIDAK dikecualikan — giliran simulasi
+  tetap lewat Event Bus yang sama (biaya BENAR tampil $0.00, latensi
+  nyaris instan) — keputusan sadar: ini alat dry-run manual, bukan
+  perhatian metrik produksi, dan manusia yang menjalankannya sudah tahu
+  barusan mensimulasikan sesuatu. `run_single()` TIDAK disentuh — kode
+  mati hari ini (tak ada rute yang memanggilnya), di luar cakupan.
+- **API**: `WorkflowRunRequest.simulate: bool = False` di
+  `POST /api/v1/orchestrator/run`, diteruskan apa adanya ke
+  `orchestrator.run(simulate=...)` — nol endpoint baru.
+- **10 test baru (594/594 total, stabil 2x berturut-turut)**: 5 unit
+  `test_mock_provider.py` (penanda+`finish_reason="stop"` di teks, health
+  check selalu True, stream menghasilkan chunk lalu done, biaya default
+  nol), 3 unit `test_orchestrator.py` (`build_simulation_agent_registry`
+  benar bungkus `MockProvider` per peran; `simulate=True` MENGABAIKAN
+  registry `StubAgent` asli yang dipakai membangun Orchestrator,
+  `self.agents` tetap sama setelahnya; `simulate=False`/default tetap
+  pakai registry asli), 2 integrasi `test_orchestrator_api.py`
+  (`"simulate": true` lewat HTTP kembalikan `[SIMULASI]` bukan output
+  StubAgent asli; default `simulate` tetap `False`).
+- **Diverifikasi live sungguhan**: `POST /run` dengan `simulate: true`,
+  `roles: ["tool", "writer"]` (mencampur peran Ollama lokal DAN peran
+  yang normalnya ke provider cloud berbayar) — selesai dalam **32ms**
+  (`time curl` — nol latensi jaringan nyata), KEDUA langkah
+  `provider_used: "mock"`, `cost: 0.0`, teks berisi `[SIMULASI]`,
+  `confidence: 0.8` (bukti `finish_reason="stop"` bekerja, tak dianggap
+  terpotong), `guardrail_score: 1.0` (bukti guardrail BENAR-BENAR
+  jalan, bukan dilewati). `GET /monitoring/dashboard`'s cost dashboard
+  SEBELUM dan SESUDAH sama-sama `$0.00` (`by_provider_usd`/`by_role_usd`
+  bertambah entrinya tapi nilainya nol — telemetry tetap mencatat,
+  cuma gratis). Panggilan NYATA (tanpa `simulate`, role `tool`/Ollama
+  gratis) sesudahnya BENAR mengembalikan jawaban asli ("Merah.") tanpa
+  penanda `[SIMULASI]` — konfirmasi nol regresi ke alur normal.
+- **Gap yang diakui**: 18 dari 20 item Bab 68 Backlog masih belum
+  disentuh; `run_single()` sengaja tak dapat `simulate` (kode mati, tak
+  ada rute yang memanggilnya).
+
 ## Test
-- **Backend: 584/584 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~25-29 detik total) — naik dari 578 lewat 10 test Security+Audit
+- **Backend: 594/594 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~26-29 detik total) — naik dari 584 lewat 10 test Simulation Mode
+  (Tahap 36, lihat detail di atas: 5 unit `test_mock_provider.py`, 3 unit
+  `test_orchestrator.py`, 2 integrasi `test_orchestrator_api.py`).
+  Tahap 35 murni frontend, nol test Python baru (tetap 584/584).
+  Sebelumnya naik dari 578 lewat 10 test Security+Audit
   Dashboards (Tahap 34, lihat detail di atas: 2 unit
   `test_generic_agent.py`, 6 unit `test_monitoring.py`, 2 integrasi
   `test_monitoring_auth.py`). Sebelumnya naik dari 574 lewat 4 test
@@ -2225,7 +2310,7 @@ keputusan desain baru (pola PERSIS section Security/Audit Tahap 34).
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-35, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-36, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -2289,7 +2374,13 @@ keputusan desain baru (pola PERSIS section Security/Audit Tahap 34).
   sudah ada di API sejak Tahap 19 kini benar-benar tampil di
   `MonitoringPage.tsx` (section Workspace baru); diverifikasi live
   screenshot browser cocok persis respons API termasuk jalur render
-  `errors` (lihat detail Tahap 35 di atas). Rute
+  `errors` (lihat detail Tahap 35 di atas). **Simulation Mode SELESAI juga
+  (Bab 68 Backlog Prioritas 16, Tahap 36)** — `MockProvider` nyata
+  pertama kelasnya (bukan stub test lagi), `POST /orchestrator/run` bisa
+  `simulate: true` untuk dry-run workflow tanpa panggilan provider
+  sungguhan; diverifikasi live selesai 32ms nol biaya untuk campuran
+  peran Ollama+cloud, guardrail tetap jalan nyata (lihat detail Tahap 36
+  di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -2520,8 +2611,9 @@ sisi sebaliknya dari Client (Tahap 28), gambar/GIS Workspace via Chat
 lewat MCP Server (Tahap 32, Bab 60.1 + 69.5), PDF/DOCX Workspace
 Write Access (Tahap 33), Security + Audit Dashboards (Tahap 34, Bab
 68 Backlog Prioritas 13 — item PERTAMA dari Backlog 20-item yang
-dikerjakan), dan perbaikan drift `workspace_dashboard()` frontend (Tahap
-35) semua selesai 2026-07-06. **Seluruh 5 area
+dikerjakan), perbaikan drift `workspace_dashboard()` frontend (Tahap
+35), dan Simulation Mode (Tahap 36, Bab 68 Backlog Prioritas 16 — item
+KEDUA) semua selesai 2026-07-06. **Seluruh 5 area
 Phase 3 (`PROJECT_SPECIFICATION.md`) kini punya kode nyata**, ditambah
 kapabilitas Workspace baru di atasnya, gate RBAC kini benar-benar hidup di
 satu-satunya jalur yang mengeksekusi tool (Chat), sesi Chat DAN file hasil
@@ -2585,13 +2677,22 @@ kategori itu kalau dibiarkan. **Tahap 35 kembali lewat `AskUserQuestion`**
 — dipilih sebagai kandidat paling kecil/cepat dari daftar, langsung
 menutup drift `workspace_dashboard()` yang ditemukan Tahap 34 tanpa Plan
 Mode formal (perubahan mekanis murni frontend, nol keputusan desain
-baru). Kandidat prioritas berikutnya, dari yang
-paling murah dieksekusi: (1) solusi storage RWX (StorageClass NFS/Longhorn
-atau pindah ke object storage) kalau memang butuh API >1 replika di
-produksi; (2) item lain di Bab 68 Backlog (19 dari 20 tersisa — Prioritas
-16 Simulation Mode, 8 Prompt Management, 7 Configuration Center adalah
-kandidat lain yang sudah disaring genuinely bounded saat Tahap 34
-disiapkan; sisanya sebagian besar terlalu besar/spekulatif untuk pola
+baru). **Tahap 36 kembali lewat `AskUserQuestion`** (item Bab 68 Backlog
+KEDUA, dari 4 kandidat termasuk 2 item Backlog lain yang sudah disaring
+genuinely bounded sejak Tahap 34: Prompt Management, Configuration
+Center) — dicek dulu sebelum coding bahwa "mock provider" yang disebut
+teks roadmap Prioritas 16 SEBELUM Tahap ini cuma stub ad-hoc per file
+test, belum ada `MockProvider` nyata yang bisa dipakai ulang; `Orchestrator.run(simulate=True)`
+membangun `RoutingEngine`/`Dispatcher` SEMENTARA per panggilan (registry
+asli tak pernah disentuh), tetap lewat `GenericLLMAgent.execute()`
+sungguhan supaya guardrail/confidence scoring juga teruji, bukan cuma
+"apakah ada teks kembali" (lihat detail Tahap 36 di atas). Kandidat
+prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
+storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
+kalau memang butuh API >1 replika di produksi; (2) item lain di Bab 68
+Backlog (18 dari 20 tersisa — Prioritas 8 Prompt Management, 7
+Configuration Center adalah kandidat lain yang sudah disaring genuinely
+bounded; sisanya sebagian besar terlalu besar/spekulatif untuk pola
 Tahap kecil sesi ini, lihat detail Tahap 34); (3) satu proses MCP
 = satu Workspace + satu role tetap (Tahap 32 sengaja config-bound, bukan
 multi-Workspace dinamis — Claude Desktop yang mau akses beberapa Project
@@ -2604,8 +2705,10 @@ belum punya generator untuk itu sama sekali; (6) heartbeat RQ yang lebih
 tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas
 Redis, bukan bahwa `worker.work()` sungguh memproses job); (7) transport
 SSE/HTTP untuk MCP Server (Tahap 28/32 sengaja stdio-saja, server
-jaringan butuh tinjauan auth+path-sandboxing sendiri) — item 3-7
-kecil/menengah, cuma relevan kalau ada kebutuhan konkret.
+jaringan butuh tinjauan auth+path-sandboxing sendiri); (8) `run_single()`
+sengaja tak dapat `simulate` (Tahap 36 — kode mati, tak ada rute yang
+memanggilnya) — item 3-8 kecil/menengah, cuma relevan kalau ada
+kebutuhan konkret.
 
 **Untuk lanjutan frontend/Phase 2-3 spesifik**: (a) Memory page kini
 terwire tapi kosong sampai ChatEngine↔`memory/` diintegrasikan (strangler
