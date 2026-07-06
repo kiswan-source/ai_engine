@@ -156,3 +156,46 @@ async def test_admin_role_bypasses_gate(monkeypatch, engine):
 
     tool_results = [e for e in events if e["type"] == "tool_result"]
     assert tool_results[0]["ok"] is True
+
+
+# ─── Tool-call resilience (Tahap 31) — any exception, not just PermissionError ──
+#
+# Found live during Tahap 30 verification: a model call missing a required
+# argument raised a raw TypeError that killed the WHOLE SSE turn instead of
+# failing just that one tool call. Every tool shared this gap.
+
+def _crashy_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        "write_txt",
+        lambda filename, content: {"success": True, "file": f"/fake/{filename}"},  # requires both args
+        "fake write_txt that raises TypeError if a required arg is missing",
+    )
+    return reg
+
+
+@pytest.fixture
+def crashy_engine(monkeypatch):
+    monkeypatch.setattr("core.chat.engine.build_registry", lambda base_url, model: _crashy_registry())
+    return ChatEngine()
+
+
+async def test_tool_call_missing_required_arg_is_a_normal_result_not_a_crashed_stream(monkeypatch, crashy_engine):
+    rounds = [
+        [_tool_call_round("write_txt", {"filename": "out.txt"})],  # missing "content" -> TypeError
+        [_final_round("Maaf, argumennya kurang.")],
+    ]
+    events = await _run(monkeypatch, crashy_engine, rounds, role=None)
+
+    tool_results = [e for e in events if e["type"] == "tool_result"]
+    assert len(tool_results) == 1
+    assert tool_results[0]["ok"] is False
+    assert not any(e["type"] == "error" for e in events)  # tool failure != stream error
+    assert events[-1]["type"] == "done"  # stream completed normally
+
+
+async def test_run_tool_returns_error_dict_for_generic_exception(engine):
+    registry = _crashy_registry()
+    result = await engine._run_tool(registry, "write_txt", {"filename": "out.txt"}, role=None)
+    assert result["success"] is False
+    assert "write_txt" in result["error"]

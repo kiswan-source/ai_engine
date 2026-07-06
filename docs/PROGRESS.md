@@ -42,6 +42,7 @@
 | 28* | MCP Server (Bab 60) — ekspos tool registry AI_ENGINE ke client MCP eksternal, arah sebaliknya dari Client Tahap 17 | ✅ SELESAI |
 | 29* | Gambar/GIS Workspace via Chat (Bab 69.5 Vision) — `workspace_read_file` kini bisa gambar (vision sungguhan) & GIS (ringkasan luas), bukan cuma dokumen | ✅ SELESAI |
 | 30* | Workspace Write Access (Bab 69.7 `write_output`) — agent bisa buat/edit file teks LANGSUNG di folder Project Workspace, bukan cuma ke `reports/` | ✅ SELESAI |
+| 31* | Tool-call resilience — satu tool call gagal (argumen kurang/exception apa pun) tak lagi merusak seluruh giliran chat | ✅ SELESAI |
 
 **Roadmap 8-tahap dari `MASTER_INSTRUCTION.md`/`DEVELOPMENT_ROADMAP.md` selesai seluruhnya per 2026-07-05.** Lihat "Gap kumulatif" di bawah untuk daftar hal yang diakui belum sempurna di setiap tahap — peta kerja realistis untuk sesi-sesi berikutnya, bukan checklist yang harus diselesaikan sebelum sistem bisa dipakai.
 
@@ -1832,9 +1833,61 @@ sebelum coding.
   `PermissionError` per tool, bukan exception generik lain (temuan di
   atas, gap pra-ada semua tool bukan cuma yang baru).
 
+**Tahap 31 — Tool-call resilience (satu tool gagal ≠ seluruh giliran gagal)**
+
+Bukan hasil `AskUserQuestion` — kelanjutan langsung dari tujuan "agent
+bekerja mandiri" yang Boss nyatakan sebelum Tahap 30, dan diputuskan
+sendiri sebagai prioritas berikutnya: temuan live Tahap 30 (model lupa
+sertakan `folder_id` → `TypeError` mentah MERUSAK SELURUH giliran chat)
+adalah gap paling mendasar yang menghalangi tujuan itu — agent yang crash
+total gara-gara satu argumen tool yang kurang bukan agent yang bisa
+dipercaya bekerja sendiri. Scope kecil, mekanisme sudah jelas (mirror
+`except PermissionError` yang sudah ada), jadi dikerjakan langsung tanpa
+Plan Mode formal.
+
+- **`core/chat/engine.py::_run_tool`** (protected, aditif) dapat
+  `except Exception as e:` KEDUA setelah `except PermissionError` yang
+  sudah ada — exception APA PUN dari `registry.execute()` (argumen
+  kurang/salah tipe, bug internal tool, dll) kini dikembalikan sebagai
+  `{"error": f"Tool '{name}' gagal: {e}", "success": False}`, bentuk
+  penolakan yang SAMA seperti setiap kegagalan tool lain
+  (`_summarize_result`/cek `ok` sudah menanganinya) — model melihat satu
+  tool call gagal dan bisa bereaksi (coba lagi, jelaskan ke pengguna),
+  bukan seluruh percakapan berhenti. Ini gap di SEMUA tool sejak awal,
+  bukan spesifik Workspace — cuma baru ketemu karena `workspace_write_file`
+  (Tahap 30) kebetulan tool pertama dengan argumen wajib cukup banyak
+  untuk model kecil sering salah.
+- **2 test baru (565/565 total, stabil 2x berturut-turut)**, ditambahkan
+  ke `test_chat_engine_rbac.py` (tempat paling pas — mekanisme denial-dict
+  yang sama, bukan spesifik Workspace): fake tool yang `raise TypeError`
+  kalau argumen wajib hilang → `_run_tool` langsung (unit) dan
+  `stream_run` penuh (integrasi, pola PERSIS
+  `test_denied_tool_call_is_a_normal_result_not_a_crashed_stream` yang
+  sudah ada untuk `PermissionError`) — keduanya membuktikan stream
+  selesai NORMAL (`"done"`), bukan `"error"`.
+- **Diverifikasi live sungguhan**: direproduksi PERSIS skenario yang
+  ditemukan di Tahap 30 — Project+Workspace+folder scratch nyata, model
+  diinstruksikan EKSPLISIT memanggil `workspace_write_file` TANPA
+  `folder_id` (mensimulasikan kesalahan model yang sama, kali ini
+  disengaja untuk pembuktian deterministik). **Sebelum fix**: event
+  `"type": "error"`, giliran mati. **Sesudah fix**: `tool_result` rapi
+  (`"ok": false, "summary": "Error: Tool 'workspace_write_file' gagal:
+  workspace_write_file() missing 1 required positional argument:
+  'folder_id'"`) diikuti `"type": "done"` normal — persis yang
+  direncanakan. Project/Workspace/folder scratch dihapus setelah
+  verifikasi.
+- **Gap yang diakui**: pesan error yang sampai ke model masih berupa
+  representasi string exception Python mentah (mis. "missing 1 required
+  positional argument") — cukup informatif untuk model mencoba
+  memperbaiki sendiri di percobaan berikutnya, tapi belum diterjemahkan
+  ke Bahasa Indonesia yang lebih ramah seperti pesan penolakan RBAC.
+  Perbaikan lanjut kalau ternyata model sering bingung dengan format ini.
+
 ## Test
-- **Backend: 563/563 lulus** (`pytest -q`, stabil 2x berturut-turut,
-  ~17-21 detik total) — naik dari 552 lewat 11 test Workspace Write
+- **Backend: 565/565 lulus** (`pytest -q`, stabil 2x berturut-turut,
+  ~18-19 detik total) — naik dari 563 lewat 2 test tool-call resilience
+  (Tahap 31, lihat detail di atas, di `test_chat_engine_rbac.py`).
+  Sebelumnya naik dari 552 lewat 11 test Workspace Write
   Access (Tahap 30, lihat detail di atas: 6 unit `test_workspace_reader.py`,
   4 unit `test_chat_engine_workspace_context.py`, 1 unit
   `test_auth_permissions.py`). Sebelumnya naik dari 549 lewat 3 test
@@ -1891,7 +1944,7 @@ sebelum coding.
   Library) — `workflowStore.applyEvent()`/`setFromRunResult()` dan
   `ApprovalCard` interaksi. `npm run lint`/`npm run build` hijau.
 
-## Gap kumulatif (Tahap 1-30, diakui bukan disamarkan)
+## Gap kumulatif (Tahap 1-31, diakui bukan disamarkan)
 - **RBAC ke `core/chat/engine.py` SELESAI** (Tahap 20) — gap yang diakui
   berulang sejak Tahap 10/16/17/18 kini tertutup: `stream_run(role=...)`
   menggerbang setiap panggilan tool lewat jalur Chat, satu-satunya jalur
@@ -1930,7 +1983,12 @@ sebelum coding.
   cuma `reports/`), digerbang `write_output` yang dorman sejak Tahap 19;
   bug viewer terkunci dari Workspace Chat (`read` vs `read_only`) sekalian
   ditemukan+diperbaiki; diverifikasi live owner menulis file nyata,
-  viewer ditolak nyata (lihat detail Tahap 30 di atas). Rute
+  viewer ditolak nyata (lihat detail Tahap 30 di atas). **Tool-call
+  resilience SELESAI juga (Tahap 31)** — `_run_tool` kini menangkap
+  exception APA PUN dari sebuah tool (bukan cuma `PermissionError`),
+  jadi satu tool call gagal (argumen kurang, dll) tak lagi merusak
+  seluruh giliran SSE; diverifikasi live dengan reproduksi persis skenario
+  crash yang ditemukan Tahap 30 (lihat detail Tahap 31 di atas). Rute
   API selain yang sudah opt-in RBAC (chat, agent/run, projects, workspace,
   files, memory, monitoring, knowledge) masih terbuka tanpa autentikasi —
   makin sedikit yang tersisa. **Loose ends Docker SELESAI juga (Tahap 27)**
@@ -2184,24 +2242,32 @@ sama sekali, jadi Tahap 29 murni ChatEngine (lihat detail di atas). Tahap
 langsung tujuan proyek (agent mandiri, buat/edit file, akses folder gaya
 Cowork) dan minta prioritas diputuskan sendiri; dipilih setelah audit
 kode menemukan `write_output` dorman sejak Tahap 19 sebagai gap
-berdampak-langsung-ke-tujuan itu yang paling murah dieksekusi. Kandidat
-prioritas berikutnya, dari yang paling murah dieksekusi: (1) solusi
-storage RWX (StorageClass NFS/Longhorn atau pindah ke object storage)
-kalau memang butuh API >1 replika di produksi; (2) Bab 68 Enterprise
-Architecture Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum
-satupun dimulai; (3) akses Workspace lewat MCP Server (gap yang
+berdampak-langsung-ke-tujuan itu yang paling murah dieksekusi. **Tahap 31
+juga bukan hasil `AskUserQuestion`** — lanjutan langsung tujuan yang sama:
+temuan live Tahap 30 (model lupa argumen wajib → `TypeError` mentah
+merusak SELURUH giliran chat) diputuskan sendiri sebagai prioritas
+karena paling mendasar untuk "agent bekerja mandiri" — agent yang crash
+total gara-gara satu tool call gagal bukan agent yang bisa dipercaya;
+`_run_tool` sekarang menangkap exception apa pun, bukan cuma
+`PermissionError` (lihat detail Tahap 31 di atas). Kandidat prioritas
+berikutnya, dari yang paling murah dieksekusi: (1) solusi storage RWX
+(StorageClass NFS/Longhorn atau pindah ke object storage) kalau memang
+butuh API >1 replika di produksi; (2) Bab 68 Enterprise Architecture
+Backlog (20 prioritas di `DEVELOPMENT_ROADMAP.md`) — belum satupun
+dimulai; (3) akses Workspace lewat MCP Server (gap yang
 ditemukan+didokumentasikan saat Tahap 29 — `mcp_server/server.py` tak
 punya sesi ChatEngine untuk menyuntikkan `workspace_id`, butuh mekanisme
-otorisasi baru untuk pemanggil eksternal yang beda dari pola sesi Chat);
-(4) PDF/DOCX baru langsung ke Workspace (Tahap 30 sengaja cuma format
-teks — generator `agent/tools/writers.py` masih hardcode ke `OUTPUT_DIR`,
-butuh parameter output-path baru); (5) `_run_tool` cuma menangkap
-`PermissionError`, bukan exception generik lain — ditemukan live Tahap
-30 (model lupa argumen wajib tool → `TypeError` mentah merusak SELURUH
-giliran chat, bukan penolakan tool yang rapi) — gap PRA-ADA di SETIAP
-tool, bukan spesifik Workspace; (6) heartbeat RQ yang lebih tepat untuk
-`HEALTHCHECK` worker (Tahap 27 cuma menjamin konektivitas Redis, bukan
-bahwa `worker.work()` sungguh memproses job); (7) transport SSE/HTTP
+otorisasi baru untuk pemanggil eksternal yang beda dari pola sesi Chat —
+relevan juga untuk tujuan Cowork kalau ada client MCP eksternal seperti
+Claude Desktop ingin diberi akses folder proyek); (4) PDF/DOCX baru
+langsung ke Workspace (Tahap 30 sengaja cuma format teks — generator
+`agent/tools/writers.py` masih hardcode ke `OUTPUT_DIR`, butuh parameter
+output-path baru); (5) pesan error tool-call resilience (Tahap 31) masih
+representasi string exception Python mentah, belum diterjemahkan ke
+Bahasa Indonesia yang ramah seperti pesan RBAC; (6) heartbeat RQ yang
+lebih tepat untuk `HEALTHCHECK` worker (Tahap 27 cuma menjamin
+konektivitas Redis, bukan bahwa `worker.work()` sungguh memproses job);
+(7) transport SSE/HTTP
 untuk MCP Server (Tahap 28 sengaja stdio-saja, server jaringan butuh
 tinjauan auth+path-sandboxing sendiri) — item 4-7 kecil/menengah, cuma
 relevan kalau ada kebutuhan konkret.

@@ -81,6 +81,13 @@ for `workspace_write_file`, catching `PermissionError` into the same
 denial-dict shape every other RBAC check here already uses. This keeps the
 same "engine trusts the route's one-time check, agent/tools/ never
 re-derives Project role itself" split Tahap 23 established.
+
+Tool-call resilience (Tahap 31): `_run_tool` now catches any exception a
+tool raises (not just `PermissionError`) and returns it as the same
+denial-dict shape — found live during Tahap 30 verification, where a
+model call missing a required argument raised a raw `TypeError` that
+propagated out of the tool loop entirely and killed the whole SSE turn.
+Every tool shared this gap, not just the newest one.
 """
 import os
 import json
@@ -340,6 +347,20 @@ class ChatEngine:
             # never hits this: ToolRegistry.execute only checks permissions
             # when role is not None).
             return {"error": f"Akses ditolak: {e}", "success": False}
+        except Exception as e:
+            # Tahap 31: found live via Tahap 30 verification — a model that
+            # omits/mistypes a required tool argument (e.g. calls
+            # workspace_write_file without folder_id) raises a raw TypeError
+            # here that, uncaught, propagates out of stream_run's tool loop
+            # entirely and kills the WHOLE SSE turn (a generic {"type":"error"}
+            # event, conversation just stops) — not a per-tool failure the
+            # model could see and react to. Every tool shared this gap, not
+            # just the new one; it was just never exercised by a tool with
+            # this many required arguments before. Same denial-dict shape as
+            # the PermissionError case above: one bad call ends that call,
+            # not the conversation.
+            logger.warning("tool call raised", tool=name, error=str(e))
+            return {"error": f"Tool '{name}' gagal: {e}", "success": False}
 
     # ── Main entry: stream a full assistant turn ──
     async def stream_run(self, session_id: str, user_text: str,
