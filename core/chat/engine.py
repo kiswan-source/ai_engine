@@ -186,6 +186,17 @@ WORKSPACE_TOOL_NAMES = {
 # excludes workspace_list_files/workspace_read_file/workspace_find_file
 # (read-only, no permission check needed — same posture those two always had).
 WORKSPACE_MUTATING_TOOL_NAMES = {"workspace_write_file", "workspace_create_folder", "workspace_move_file", "workspace_copy_file"}
+# Fase 11 fix — general-purpose writers that save to ~/ai_engine/reports/
+# regardless of any connected Workspace (unlike workspace_write_file, which
+# is Workspace-aware by design). Live report: the model created a real docx
+# via write_docx while a Workspace was connected, and the file landed only
+# in reports/ — the user had to download it and re-upload it into their
+# project folder by hand. _run_tool now auto-copies the result into the
+# connected Workspace after any of these succeeds, rather than relying on
+# the model reliably choosing workspace_write_file instead (the same
+# small-model tool-selection unreliability already worked around for reads
+# via _auto_resolve_workspace_file).
+REPORT_WRITER_TOOL_NAMES = {"write_docx", "write_pdf", "write_txt", "write_html", "write_json", "write_geojson", "write_shp"}
 # Fase 8 (DCF v5 mandate "Workspace Native File Access & Chat UX Repair",
 # Slice 1) — Chat Decision Flow. Injected into every user turn a Workspace is
 # bound to (see _build_user_message). Encodes the mandate's mandatory STEP
@@ -251,15 +262,32 @@ _FILE_EXTENSIONS = (
     r"|jpe?g|png|gif|webp|bmp|tiff?|mp3|wav|mp4|mov|avi|mkv|zip|geojson|kml|shp"
 )
 _FILE_REF_RE = re.compile(rf'[^\s"\'<>]+\.(?:{_FILE_EXTENSIONS})\b', re.IGNORECASE)
+# Fase 11 fix — live report: asking to CREATE "laporan_x.docx" also matched
+# _FILE_REF_RE (it's a filename with a recognized extension), so the
+# read-oriented auto-resolve fired, searched for it, found nothing (it
+# doesn't exist yet — it's about to be created), and injected a "TIDAK
+# ditemukan ... JANGAN pura-pura sudah membaca file ini" note into a CREATE
+# turn — actively wrong instruction, and the model's response visibly
+# garbled as a result. Any creation-intent verb near the filename means this
+# is a write turn, not a read turn: skip auto-resolve entirely and let the
+# model's own tool calls (write_docx/workspace_write_file) handle it, same
+# reliability as before this fix existed — never worse, just not bootstrapped.
+_CREATE_INTENT_RE = re.compile(
+    r"\b(buat(kan)?|bikin(kan)?|create|generate|tulis(kan)?|susun(kan)?|simpan\s+sebagai|save\s+as)\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_file_reference(text: str) -> Optional[str]:
     """First plausible filename mentioned in ``text`` (Windows or Unix path,
     or a bare filename), reduced to just its basename — ``D:\\Archive\\a.pdf``
-    and ``a.pdf`` both yield ``"a.pdf"``. ``None`` if nothing matches. Single-
-    match only (first file mentioned) — good enough to bootstrap the common
-    "summarize this one file" turn; multi-file requests still go through the
-    model's own tool calls."""
+    and ``a.pdf`` both yield ``"a.pdf"``. ``None`` if nothing matches (or the
+    message reads as a creation request — see _CREATE_INTENT_RE above).
+    Single-match only (first file mentioned) — good enough to bootstrap the
+    common "summarize this one file" turn; multi-file requests still go
+    through the model's own tool calls."""
+    if _CREATE_INTENT_RE.search(text):
+        return None
     match = _FILE_REF_RE.search(text)
     if not match:
         return None
@@ -485,6 +513,18 @@ class ChatEngine:
             f"membacanya — JANGAN panggil tool baca lain atau minta upload.]"
         )
 
+    async def _copy_generated_file_into_workspace(
+        self, workspace_id: str, source_abs_path: str, actor: str,
+    ) -> Dict[str, Any]:
+        """Fase 11 fix — see REPORT_WRITER_TOOL_NAMES above. Calls the async
+        workspace_reader function directly (no asyncio.run() wrapper): this
+        runs on the same event loop the global AsyncSessionFactory was built
+        on, the same "future async call site" _auto_resolve_workspace_file
+        already established this pattern for."""
+        from agent.tools.workspace_reader import _copy_generated_file_into_workspace
+
+        return await _copy_generated_file_into_workspace(workspace_id, source_abs_path, actor)
+
     # ── Low-level streaming call to Ollama /api/chat ──
     async def _stream_chat(self, messages, model, client) -> AsyncIterator[dict]:
         payload = {
@@ -562,7 +602,20 @@ class ChatEngine:
         if "file_paths" in args and isinstance(args["file_paths"], list):
             args["file_paths"] = [self.resolve_path(p) for p in args["file_paths"]]
         try:
-            return await asyncio.to_thread(registry.execute, name, args, role)
+            result = await asyncio.to_thread(registry.execute, name, args, role)
+            if (
+                name in REPORT_WRITER_TOOL_NAMES and workspace_id
+                and isinstance(result, dict) and result.get("success") and result.get("file")
+            ):
+                copy_result = await self._copy_generated_file_into_workspace(
+                    workspace_id, result["file"], owner or role or "anonymous"
+                )
+                if copy_result.get("success"):
+                    result["workspace_saved_path"] = copy_result["relative_path"]
+                    result["workspace_folder_id"] = copy_result["folder_id"]
+                else:
+                    result["workspace_save_error"] = copy_result.get("error")
+            return result
         except PermissionError as e:
             # Same result shape as any other tool failure (_summarize_result/
             # the ok= check already handle "error" in a dict) — the model sees
@@ -841,7 +894,10 @@ class ChatEngine:
             if result.get("error"):
                 return f"Error: {result['error']}"
             if result.get("file"):
-                return f"File dibuat: {os.path.basename(result['file'])}"
+                base = f"File dibuat: {os.path.basename(result['file'])}"
+                if result.get("workspace_saved_path"):
+                    return f"{base} (juga disimpan ke Workspace: {result['workspace_saved_path']})"
+                return base
             # Fase 6 — run_orchestrated_workflow's distinctive result shape
             # (no other tool returns both "final_output" and "escalate").
             # Escalate takes priority: a chat turn must never quietly show

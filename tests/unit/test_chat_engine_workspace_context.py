@@ -311,6 +311,13 @@ async def test_image_tool_result_injects_followup_vision_message(monkeypatch):
         ("what is version 3.2 of the plan?", None),
         ("halo apa kabar", None),
         ("cek data.xlsx dan gambar.png", "data.xlsx"),
+        # Fase 11 fix — live report: creating "laporan_x.docx" was
+        # misdetected as a READ reference, triggering a false "TIDAK
+        # ditemukan" note that visibly garbled the model's create response.
+        ("Buatkan file docx bernama laporan_uji.docx berisi ringkasan", None),
+        ("Bikin laporan.pdf dari data ini", None),
+        ("create a new report.docx summarizing this", None),
+        ("tolong tulis ringkasan.md untuk saya", None),
     ],
 )
 def test_extract_file_reference(text, expected):
@@ -404,3 +411,91 @@ async def test_stream_run_injects_auto_resolved_content_into_user_message(monkey
 
     user_messages = [m for m in engine.sessions["sess-1"].messages if m.get("role") == "user"]
     assert any("Isi laporan sungguhan." in m["content"] for m in user_messages)
+
+
+# ─── Fase 11 fix: auto-copy generated reports into the connected Workspace ──
+# Live report: write_docx (a general, non-Workspace-aware writer) produced a
+# real docx while a Workspace was connected, and it landed only in
+# ~/ai_engine/reports/ — the user had to download it and re-upload it into
+# their project folder by hand.
+
+def _report_writer_registry(tool_name: str, file_path: str = "/tmp/laporan.docx") -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        tool_name,
+        lambda **kwargs: {"success": True, "file": file_path, "filename": "laporan.docx", "size": 123, "type": "docx"},
+        "fake report writer",
+    )
+    return reg
+
+
+async def test_run_tool_copies_generated_report_into_connected_workspace(engine, monkeypatch):
+    async def _fake_copy(workspace_id, source_abs_path, actor, session_factory=None):
+        return {"success": True, "relative_path": "laporan.docx", "folder_id": "f1"}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = _report_writer_registry("write_docx")
+    result = await engine._run_tool(registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id="ws-1")
+
+    assert result["workspace_saved_path"] == "laporan.docx"
+    assert result["workspace_folder_id"] == "f1"
+
+
+async def test_run_tool_skips_copy_without_connected_workspace(engine, monkeypatch):
+    called = False
+
+    async def _fake_copy(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {"success": True}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = _report_writer_registry("write_docx")
+    result = await engine._run_tool(registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id=None)
+
+    assert called is False
+    assert "workspace_saved_path" not in result
+
+
+async def test_run_tool_skips_copy_for_non_report_writer_tools(engine, monkeypatch):
+    called = False
+
+    async def _fake_copy(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {"success": True}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = ToolRegistry()
+    registry.register("image_resize", lambda **kw: {"success": True, "file": "/tmp/x.png"}, "fake")
+    result = await engine._run_tool(registry, "image_resize", {"file_path": "/tmp/x.png"}, role=None, workspace_id="ws-1")
+
+    assert called is False
+    assert "workspace_saved_path" not in result
+
+
+async def test_run_tool_report_generation_still_succeeds_when_workspace_copy_fails(engine, monkeypatch):
+    async def _fake_copy(workspace_id, source_abs_path, actor, session_factory=None):
+        return {"success": False, "error": "disk penuh"}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = _report_writer_registry("write_pdf")
+    result = await engine._run_tool(registry, "write_pdf", {"filename": "laporan.pdf"}, role=None, workspace_id="ws-1")
+
+    assert result["success"] is True  # the report itself was generated fine
+    assert result["workspace_save_error"] == "disk penuh"
+    assert "workspace_saved_path" not in result
+
+
+def test_summarize_result_mentions_workspace_copy():
+    from core.chat.engine import ChatEngine
+
+    summary = ChatEngine._summarize_result(
+        {"success": True, "file": "/tmp/laporan.docx", "workspace_saved_path": "laporan.docx"}
+    )
+    assert "laporan.docx" in summary
+    assert "Workspace" in summary

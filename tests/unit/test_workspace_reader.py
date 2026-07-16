@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from agent.tools.workspace_reader import (
+    _copy_generated_file_into_workspace,
     _create_folder,
     _find_file,
     _list_files,
@@ -470,6 +471,69 @@ async def test_move_rejects_path_traversal_on_destination(sqlite_session_factory
 
     assert result["success"] is False
     assert (tmp_path / "src.txt").exists()
+
+
+# ─── Fase 11 fix: auto-copy a generated report into the connected Workspace ─
+# Real report: write_docx (a general, non-Workspace-aware writer) produced a
+# real docx while a Workspace was connected, and it landed only in
+# ~/ai_engine/reports/ — the user had to download it and re-upload it by hand.
+
+async def test_copy_generated_file_into_workspace_creates_it(sqlite_session_factory, tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    source = reports_dir / "laporan.docx"
+    source.write_bytes(b"fake docx bytes")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, workspace_dir)
+
+    result = await _copy_generated_file_into_workspace(
+        workspace_id, str(source), actor="alice", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is True
+    assert result["relative_path"] == "laporan.docx"
+    assert result["folder_id"] == folder_id
+    assert (workspace_dir / "laporan.docx").read_bytes() == b"fake docx bytes"
+    # The source report copy is untouched (not moved).
+    assert source.exists()
+
+
+async def test_copy_generated_file_into_workspace_versions_existing_file(sqlite_session_factory, tmp_path):
+    from workspace.versioning import list_versions
+
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    (workspace_dir / "laporan.docx").write_bytes(b"versi lama")
+    source = reports_dir / "laporan.docx"
+    source.write_bytes(b"versi baru")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, workspace_dir)
+
+    result = await _copy_generated_file_into_workspace(
+        workspace_id, str(source), actor="alice", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is True
+    assert (workspace_dir / "laporan.docx").read_bytes() == b"versi baru"
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "laporan.docx")
+    assert len(versions) == 1
+    assert versions[0]["actor"] == "alice"
+
+
+async def test_copy_generated_file_into_workspace_unknown_workspace_fails(sqlite_session_factory, tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    source = reports_dir / "laporan.docx"
+    source.write_bytes(b"x")
+
+    result = await _copy_generated_file_into_workspace(
+        "does-not-exist", str(source), actor="alice", session_factory=sqlite_session_factory
+    )
+
+    assert result["success"] is False
 
 
 # ─── sync wrappers for the new tools ────────────────────────────────────────

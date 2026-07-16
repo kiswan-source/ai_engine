@@ -38,6 +38,13 @@ pypdf==5.1.0
 python-docx==1.1.2
 reportlab==4.2.5
 lxml==5.3.0
+# CommonMark+GFM token parser (Fase 11) — write_docx/write_pdf used to split
+# lines on "**"/prefix-match "#"/"- " by hand, which left literal "###"/"**"/
+# "|" characters in generated documents (tables, numbered lists, nested bold
+# inside headings were never handled at all). Same architecture as the
+# frontend's remark/remark-gfm chat fix, just the Python-ecosystem equivalent.
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1
 
 # ─── Image processing (read/transform, NOT generation) ───────────────────────
 Pillow==12.2.0

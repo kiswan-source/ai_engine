@@ -50,22 +50,13 @@ def write_docx(filename: str, title: str, content: str) -> Dict[str, Any]:
         from docx import Document
         from docx.shared import RGBColor
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from core.document.markdown_render import render_docx_body
         doc = Document()
         t = doc.add_heading(title, 0)
         t.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for run in t.runs: run.font.color.rgb = RGBColor(0x00, 0xc8, 0x96)
         doc.add_paragraph()
-        for line in content.split("\n"):
-            line = line.rstrip()
-            if not line: doc.add_paragraph()
-            elif line.startswith("### "): doc.add_heading(line[4:], level=3)
-            elif line.startswith("## "): doc.add_heading(line[3:], level=2)
-            elif line.startswith("# "): doc.add_heading(line[2:], level=1)
-            elif line.startswith(("* ","- ")): doc.add_paragraph(line[2:], style="List Bullet")
-            else:
-                p = doc.add_paragraph()
-                for i, part in enumerate(line.split("**")):
-                    if part: run = p.add_run(part); run.bold = (i%2==1)
+        render_docx_body(doc, content)
         doc.save(path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "docx"}
     except Exception as e:
@@ -80,27 +71,25 @@ def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
         from reportlab.lib.colors import HexColor
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
         from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+        from core.document.markdown_render import render_pdf_story
         doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
         styles = getSampleStyleSheet()
         accent = HexColor("#00c896")
+        content_styles = {
+            "h1": ParagraphStyle("H1", parent=styles["Heading1"], fontSize=14, spaceBefore=12, spaceAfter=4),
+            "h2": ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=8, spaceAfter=3),
+            "body": ParagraphStyle("B", parent=styles["Normal"], fontSize=10, leading=16, alignment=TA_JUSTIFY),
+            "bullet": ParagraphStyle("BU", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16),
+            "quote": ParagraphStyle("Q", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16,
+                                     textColor=HexColor("#495057")),
+            "code": ParagraphStyle("C", parent=styles["Normal"], fontName="Courier", fontSize=9, leading=12,
+                                    backColor=HexColor("#f1f3f5"), borderPadding=6),
+            "table_header": ParagraphStyle("TH", parent=styles["Normal"], fontSize=9, leading=12),
+            "table_cell": ParagraphStyle("TC", parent=styles["Normal"], fontSize=9, leading=12),
+        }
         s_title = ParagraphStyle("T", parent=styles["Title"], textColor=accent, fontSize=18, spaceAfter=6, alignment=TA_CENTER)
-        s_h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=14, spaceBefore=12, spaceAfter=4)
-        s_h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=8, spaceAfter=3)
-        s_body = ParagraphStyle("B", parent=styles["Normal"], fontSize=10, leading=16, alignment=TA_JUSTIFY)
-        s_bullet = ParagraphStyle("BU", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16)
         story = [Paragraph(title, s_title), HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8), Spacer(1, 0.3*cm)]
-        for line in content.split("\n"):
-            line = line.strip()
-            if not line: story.append(Spacer(1, 0.15*cm))
-            elif line.startswith("### "): story.append(Paragraph(line[4:], s_h2))
-            elif line.startswith("## "): story.append(Paragraph(line[3:], s_h2))
-            elif line.startswith("# "): story.append(Paragraph(line[2:], s_h1))
-            elif line.startswith(("* ","- ")): story.append(Paragraph("• " + line[2:].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"), s_bullet))
-            else:
-                import re as _re
-                line = line.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-                line = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', line)
-                story.append(Paragraph(line, s_body))
+        story.extend(render_pdf_story(content, content_styles))
         doc.build(story)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pdf"}
     except Exception as e:

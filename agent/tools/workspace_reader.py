@@ -95,6 +95,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import os
 from typing import Any, Dict
 
 from sqlalchemy import select
@@ -336,6 +337,52 @@ async def _move_or_copy(
                 "src": src_relative_path, "dst": dst_relative_path},
     )
     return {"success": True, "src": src_relative_path, "dst": dst_relative_path}
+
+
+async def _copy_generated_file_into_workspace(
+    workspace_id: str, source_abs_path: str, actor: str = "anonymous", session_factory=None,
+) -> Dict[str, Any]:
+    """Fase 11 fix — after a general write_* tool (write_docx/write_pdf/
+    write_txt/write_html/write_json/write_geojson/write_shp) generates a
+    file in `~/ai_engine/reports/`, `ChatEngine._run_tool` calls this to
+    also copy it into the connected Workspace's first Local folder, same
+    basename — so the user never has to download a report and re-upload it
+    into their project folder by hand just because the model happened to
+    call a non-Workspace-aware writer instead of `workspace_write_file`
+    (the same tool-selection unreliability already worked around for reads
+    in `core/chat/engine.py::_auto_resolve_workspace_file`). If a file with
+    that name already exists in the Workspace, its previous content is
+    version-snapshotted first (same `WorkspaceFileVersion` mechanism
+    `_write_file` uses) — never a silent clobber."""
+    session_factory = session_factory or AsyncSessionFactory
+    filename = os.path.basename(source_abs_path)
+    async with session_factory() as session:
+        ws = await session.get(Workspace, workspace_id)
+        if ws is None or ws.deleted_at is not None:
+            return {"success": False, "error": "Workspace tidak ditemukan."}
+        result = await session.execute(
+            select(WorkspaceFolder).where(
+                WorkspaceFolder.workspace_id == workspace_id, WorkspaceFolder.source_type == "Local"
+            )
+        )
+        folder = result.scalars().first()
+        if folder is None:
+            return {"success": False, "error": "Tidak ada folder Local di Workspace ini."}
+        try:
+            adapter = FilesystemAdapter(folder.path)
+            with open(source_abs_path, "rb") as fh:
+                data = fh.read()
+            versioned = await _snapshot_if_exists(session, workspace_id, folder.id, filename, adapter, actor)
+            adapter.write_bytes(filename, data)
+        except (PathEscapesRootError, OSError) as e:
+            return {"success": False, "error": str(e)}
+        folder_id = folder.id
+    await audit_log.record(
+        "workspace.file_written", actor=actor,
+        detail={"workspace_id": workspace_id, "folder_id": folder_id, "path": filename,
+                "action": "overwritten" if versioned else "created", "source": "auto_copy_from_report"},
+    )
+    return {"success": True, "relative_path": filename, "folder_id": folder_id}
 
 
 async def _snapshot_if_exists(
