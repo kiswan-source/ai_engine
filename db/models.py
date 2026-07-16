@@ -126,6 +126,13 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(256))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_key: Mapped[str] = mapped_column(String(128), index=True)
+    # Fase 1 (v5 Architecture Blueprint §4) — forward-compatible groundwork
+    # for a future multi-tenant v5. Unused by any current code path, always
+    # NULL today; added ahead of any actual tenant concept so a later
+    # migration doesn't need a schema change plus a data backfill in the
+    # same step. `ProjectMember`/`Workspace` etc. get tenant scoping
+    # transitively via their `project_id` FK — no redundant column there.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="active")  # active | archived
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -175,6 +182,9 @@ class ScheduledJob(Base):
     interval_seconds: Mapped[int] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(default=True)
     owner_key: Mapped[str] = mapped_column(String(128), index=True)
+    # Fase 1 (v5 Architecture Blueprint §4) — see Project.tenant_id docstring
+    # for the full rationale. Same shape, same status: unused, always NULL.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # success | failed
     last_result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
