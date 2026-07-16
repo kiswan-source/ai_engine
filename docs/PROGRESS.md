@@ -1,5 +1,10 @@
 # AI_ENGINE v4 — Catatan Progres & Resume
 
+> **[SUPERSEDED 2026-07-16]** Dokumen ini murni riwayat v4 (Tahap 1-41,
+> selesai 2026-07-05). Proyek sudah pindah ke v5 sejak 2026-07-11 — status
+> arsitektur terkini ada di `CLAUDE.md` (§1-§20), bukan di sini.
+> Jangan tambah entri baru ke file ini; riwayat v4 dibiarkan utuh di bawah.
+
 > Catatan lanjutan pembangunan enterprise multi-agent per `MASTER_INSTRUCTION.md`
 > (tersimpan di `D:\01_Project\AI ENGINE` = `/mnt/d/01_Project/AI ENGINE`,
 > **bukan** di `docs/` repo git ini — dua lokasi berbeda).
