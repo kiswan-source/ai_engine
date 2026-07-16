@@ -694,6 +694,15 @@ class ChatEngine:
                 return f"Error: {result['error']}"
             if result.get("file"):
                 return f"File dibuat: {os.path.basename(result['file'])}"
+            # Fase 6 — run_orchestrated_workflow's distinctive result shape
+            # (no other tool returns both "final_output" and "escalate").
+            # Escalate takes priority: a chat turn must never quietly show
+            # a half-finished workflow's output as if it were the real
+            # answer — "message" already explains where to go decide it.
+            if "final_output" in result and "escalate" in result:
+                if result.get("escalate"):
+                    return result.get("message") or "Alur kerja ini membutuhkan persetujuan manusia sebelum selesai."
+                return str(result.get("final_output", ""))
             for k in ("total_area_ha", "result", "text", "description"):
                 if result.get(k):
                     return str(result[k])[:200]

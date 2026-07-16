@@ -29,3 +29,15 @@ def _isolated_shared_memory_manager(monkeypatch):
     from memory import memory_manager
 
     monkeypatch.setattr(memory_manager, "_shared_manager", None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_shared_orchestrator(monkeypatch):
+    """Fresh get_shared_orchestrator() singleton per test (Fase 6) — same
+    reasoning as the memory manager above: TaskManager/HumanApprovalGate
+    state lives on the singleton instance for the in-memory default
+    backends, so a trace_id or pending approval from one test must not
+    leak into the next."""
+    from orchestrator import orchestrator as orchestrator_module
+
+    monkeypatch.setattr(orchestrator_module, "_shared_orchestrator", None)

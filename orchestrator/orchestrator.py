@@ -280,3 +280,30 @@ class Orchestrator:
             max_tokens=max_tokens,
         )
         return await self.dispatcher.dispatch(task)
+
+
+_shared_orchestrator: "Orchestrator | None" = None
+
+
+def get_shared_orchestrator() -> "Orchestrator":
+    """Process-wide singleton (Fase 6, DCF v5 mandate "Cowork Experience").
+
+    ``api/routes/orchestrator.py`` (the ``/api/v1/orchestrator/*`` HTTP API,
+    which the Workflow/Approval UI pages call) and
+    ``agent/tools/orchestrator_tools.py`` (the chat tool that lets a Chat
+    Engine turn trigger a full plan->agent->workflow->approval run) must
+    share this ONE instance, not each build their own ``Orchestrator()`` —
+    otherwise a Human Approval request a chat-triggered workflow opens would
+    live in a ``TaskManager``/``HumanApprovalGate`` the Approval page's
+    ``_orchestrator`` never sees, for the in-memory (dev/CI) state backends.
+    Same rationale as ``memory.memory_manager.get_shared_memory_manager()``.
+
+    Lives here (``orchestrator/``), not in ``api/routes/orchestrator.py``,
+    so ``agent/tools/`` never has to import from ``api/`` — the dependency
+    direction ``agent/tools/`` already avoids everywhere else in this
+    codebase (see e.g. ``agent/tools/workspace_reader.py``'s docstring).
+    """
+    global _shared_orchestrator
+    if _shared_orchestrator is None:
+        _shared_orchestrator = Orchestrator()
+    return _shared_orchestrator

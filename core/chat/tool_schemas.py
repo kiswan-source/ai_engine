@@ -119,6 +119,14 @@ TOOL_SCHEMAS = [
         {"key": _STR, "value": _STR}, ["key", "value"]),
     _fn("recall_facts", "Ambil semua fakta yang pernah diminta pengguna ini untuk diingat, dari sesi chat manapun. Panggil ini kalau pengguna bertanya sesuatu yang mungkin pernah mereka minta kamu ingat sebelumnya.",
         {}, []),
+
+    # ── Chat -> Orchestrator bridge (Fase 6) ──
+    _fn("run_orchestrated_workflow",
+        "Jalankan alur kerja multi-agent PENUH: rencana, pilih satu atau beberapa agent, jalankan workflow, validasi, dan eskalasi ke persetujuan manusia kalau confidence-nya rendah — BUKAN sekadar satu panggilan tool. Pakai ini untuk permintaan kompleks yang butuh riset+analisis+penulisan berlapis, atau butuh beberapa sudut pandang/agent (mis. 'analisa dokumen ini dari berbagai sisi dan buat laporan lengkap'). JANGAN pakai untuk tugas sederhana satu-langkah (baca file, buat satu dokumen, konversi format) — tool biasa sudah cukup dan lebih cepat/murah untuk itu. roles: daftar peran dari planner/research/analyst/writer/reviewer/vision/reflection/critic/consensus (urutkan sesuai kebutuhan tugas). mode: sequential (berurutan, default), parallel, reflection (agent mengevaluasi ulang jawabannya sendiri), voting (beberapa agent independen, mayoritas menang), consensus (debat terstruktur lalu arbitrase). Hasilnya BUKAN langsung selesai — kalau escalate=true, sampaikan ke pengguna bahwa ini butuh persetujuan manusia di halaman Approval.",
+        {"goal": _STR,
+         "roles": {"type": "array", "items": _STR},
+         "mode": {"type": "string", "enum": ["sequential", "parallel", "reflection", "voting", "consensus"]}},
+        ["goal", "roles"]),
 ]
 
 # Quick lookup of which tools we expose to the model.

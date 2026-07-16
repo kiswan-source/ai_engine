@@ -161,6 +161,14 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("recall_facts", recall_facts,
         "Ambil semua fakta yang pernah diminta pengguna untuk diingat. Input: {}")
 
+    # Chat -> Orchestrator bridge (Fase 6, DCF v5 mandate "Cowork Experience")
+    # — see agent/tools/orchestrator_tools.py module docstring.
+    from agent.tools.orchestrator_tools import run_orchestrated_workflow
+    registry.register("run_orchestrated_workflow", run_orchestrated_workflow,
+        "Jalankan alur kerja multi-agent penuh (rencana, pilih agent, workflow, validasi, "
+        "eskalasi ke persetujuan manusia bila perlu) untuk tugas kompleks. "
+        "Input: {goal, roles: [...], mode?}")
+
     return registry
 
 

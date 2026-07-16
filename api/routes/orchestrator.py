@@ -18,7 +18,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.orchestrator import get_shared_orchestrator
 from registry.model_registry import ROLES
 from security.auth import Principal, get_current_principal
 from core.utils.logger import get_logger
@@ -26,7 +26,11 @@ from core.utils.logger import get_logger
 router = APIRouter()
 logger = get_logger(__name__)
 
-_orchestrator = Orchestrator()
+# Fase 6 — shared with agent/tools/orchestrator_tools.py's chat tool, so a
+# workflow triggered from a chat turn opens its Human Approval request in
+# the SAME place this page's /approvals reads from. See
+# orchestrator/orchestrator.py::get_shared_orchestrator's docstring.
+_orchestrator = get_shared_orchestrator()
 
 
 class WorkflowRunRequest(BaseModel):
