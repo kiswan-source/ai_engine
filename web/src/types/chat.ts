@@ -12,6 +12,10 @@ export type ChatStreamEvent =
   | { type: 'tool_result'; name: string; ok: boolean; summary: string }
   | { type: 'file'; filename: string; ftype: string; size: number }
   | { type: 'error'; message: string }
+  // Fase 1 (SEC-3): output-validator/PII flag on the just-streamed response —
+  // detect-and-flag only, the tokens already reached the client by the time
+  // this arrives (core/chat/engine.py's module docstring has the full story).
+  | { type: 'warning'; message: string; violations: string[] }
   | { type: 'done' }
 
 export interface ChatMessage {

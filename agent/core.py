@@ -2,6 +2,24 @@ import os
 """
 AI Agent Core v2 — Integrated Universal Agent.
 Loop: plan → execute → evaluate → repeat.
+
+Prompt/output guardrails (Fase 1, DCF_SECURITY_AUDIT_2026-07-11.md SEC-3):
+same gap as core/chat/engine.py had — this HTTP-facing path
+(`/api/v1/agent/run`) never called `security.prompt_guard`/
+`output_validator`, despite both being enabled by default. Unlike
+ChatEngine's streaming turn, `run()` returns a single dict once — no
+tokens have reached the caller yet when guardrails run, so this path CAN
+block outright on input (mirrors `agents/generic_agent.py`) and CAN
+redact PII from the output before it's ever returned (unlike ChatEngine's
+detect-and-flag-only, streaming already happened there).
+
+PII redaction on the INPUT side (Fase 1, SEC-4): also never wired in here
+until now. Gated on `security.endpoint_policy.is_internal_endpoint(self.ollama_url)`
+rather than provider name — see that module's docstring. A no-op on this
+deployment's current `OLLAMA_BASE_URL` (classifies internal), becomes real
+if that ever points somewhere that doesn't. Separate from the output-side
+redaction a few lines below, which is unconditional (it protects the
+caller of `run()`, not an external provider, so location doesn't apply).
 """
 from datetime import datetime
 import json, re, time, urllib.request
@@ -10,6 +28,8 @@ from agent.schemas import StepResult, ToolCall, AgentResult
 from agent.memory import Memory
 from core.utils.logger import get_logger
 from prompts.loader import load_prompt
+from security import audit_log, check_prompt, detect_pii, redact_pii, validate
+from security.endpoint_policy import is_internal_endpoint
 
 logger = get_logger(__name__)
 MAX_STEPS = 8
@@ -64,6 +84,41 @@ class AIAgent:
             ctx_str = f"\n\nContext:\n{context}"
 
         full_goal = task + file_content + ctx_str
+
+        from api.config import settings
+        if settings.ENABLE_PROMPT_GUARD:
+            guard = check_prompt(full_goal)
+            if guard.blocked:
+                await audit_log.record(
+                    "prompt_guard.blocked",
+                    actor=self.role or "anonymous",
+                    detail={"matches": guard.matches, "score": guard.score},
+                )
+                logger.warning("agent.prompt_blocked", role=self.role, matches=guard.matches)
+                return {
+                    "success": False,
+                    "result": f"Permintaan diblokir oleh prompt_guard: {', '.join(guard.matches)}",
+                    "steps": [],
+                    "output_files": [],
+                }
+            if guard.suspicious:
+                await audit_log.record(
+                    "prompt_guard.neutralized",
+                    actor=self.role or "anonymous",
+                    detail={"matches": guard.matches, "score": guard.score},
+                )
+                full_goal = guard.sanitized_text
+
+        if settings.ENABLE_PII_REDACTION and not is_internal_endpoint(self.ollama_url):
+            pii_matches = detect_pii(full_goal)
+            if pii_matches:
+                full_goal = redact_pii(full_goal)
+                await audit_log.record(
+                    "pii.redacted",
+                    actor=self.role or "anonymous",
+                    detail={"categories": sorted({m.category for m in pii_matches}), "count": len(pii_matches)},
+                )
+
         memory = Memory(goal=full_goal, max_steps=self.max_steps)
         logger.info("Agent v2 started", task=task[:80])
         steps = []
@@ -100,6 +155,19 @@ class AIAgent:
         output_files = memory.get_output_files()
         success = any(s.success for s in memory.get_steps())
         summary = self._summarize(memory)
+
+        if settings.ENABLE_OUTPUT_VALIDATION:
+            validation = validate(summary)
+            if not validation.ok:
+                await audit_log.record(
+                    "output_validator.violation",
+                    actor=self.role or "anonymous",
+                    detail={"violations": validation.violations},
+                )
+                if "pii_leak" in validation.violations:
+                    # Unlike ChatEngine (streamed, already sent), this return
+                    # value hasn't reached the caller yet — redact for real.
+                    summary = redact_pii(summary)
 
         return {
             "success": success,

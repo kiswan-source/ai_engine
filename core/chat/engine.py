@@ -99,6 +99,41 @@ with a short Indonesian sentence naming what went wrong; the original
 exception text is kept, not hidden, since the model still benefits from
 the specifics when composing its own explanation. Anything not in the
 map keeps the exact wording Tahap 31 already used.
+
+Prompt/output guardrails (Fase 1, DCF_SECURITY_AUDIT_2026-07-11.md SEC-3):
+`agents/generic_agent.py` was the only place `security.prompt_guard`/
+`output_validator` were ever wired in — this HTTP-facing, primary-feature
+engine never called either, despite both being enabled by default
+(`ENABLE_PROMPT_GUARD`/`ENABLE_OUTPUT_VALIDATION` in `api/config.py`).
+Input side: `check_prompt(user_text)` runs before the tool-calling loop
+starts. Unlike `generic_agent.py` (which can outright refuse a one-shot
+dispatch), a suspicious/blocked score here NEUTRALIZES and CONTINUES the
+turn rather than ending it — a live, actively-used conversation must not
+go silent on a false positive from generic regex patterns; only the
+sanitized text reaches the model, and the event is still recorded via
+`audit_log.record("prompt_guard.neutralized", ...)` for the Security
+Dashboard. Output side: because `stream_run` yields tokens incrementally
+over SSE, real per-token validation before send is out of scope for this
+pass — `validate()` (which already folds in PII-leak detection, see
+`security/output_validator.py`) runs on the FULL ACCUMULATED response
+text once, immediately before the terminal `{"type": "done"}` event. This
+is detect-and-flag, not prevent: by the time a violation is found, every
+token has already reached the client. A violation surfaces as one extra
+`{"type": "warning", ...}` SSE event plus an `audit_log.record(...)`
+entry — known limitation, not silently swallowed. `ENABLE_PROMPT_GUARD`/
+`ENABLE_OUTPUT_VALIDATION` staying `false` in `.env` is the instant
+rollback lever if either misfires against real traffic, no code change
+needed.
+
+PII redaction (Fase 1, SEC-4): same absence as above — never wired in here.
+Applied right alongside the prompt-guard check, gated on
+`security.endpoint_policy.is_internal_endpoint(self.base_url)` rather than
+provider name (see that module's docstring) — a no-op today (this
+deployment's `OLLAMA_BASE_URL` classifies as internal on both live modes),
+becomes real the moment `OLLAMA_BASE_URL` ever points somewhere that
+isn't. Input-side only, matching Bab 30's actual scope ("sebelum dikirim ke
+provider eksternal") — redacting the response after it's already streamed
+wouldn't undo anything.
 """
 import os
 import json
@@ -114,6 +149,8 @@ from agent.tools.readers import read_pdf, read_docx, read_csv, read_txt, read_js
 from core.chat.tool_schemas import TOOL_SCHEMAS, EXPOSED_TOOL_NAMES
 from core.utils.logger import get_logger
 from prompts.loader import load_prompt
+from security import audit_log, check_prompt, detect_pii, redact_pii, validate
+from security.endpoint_policy import is_internal_endpoint
 
 logger = get_logger(__name__)
 
@@ -396,12 +433,40 @@ class ChatEngine:
 
         if not session.messages:
             session.messages.append({"role": "system", "content": SYSTEM_PROMPT})
-        session.messages.append(self._build_user_message(session, user_text, new_files))
+        model_input_text = user_text
+        if settings.ENABLE_PROMPT_GUARD:
+            guard = check_prompt(user_text)
+            if guard.suspicious or guard.blocked:
+                # Chat is a live conversation, not a one-shot dispatch (unlike
+                # agents/generic_agent.py) — neutralize and continue, never
+                # hard-block, so a false positive doesn't silently end a turn.
+                # Only the text sent to the model is sanitized; session.history
+                # (below) keeps the original for the person reading the chat.
+                model_input_text = guard.sanitized_text
+                await audit_log.record(
+                    "prompt_guard.neutralized",
+                    actor=role or "anonymous",
+                    detail={"matches": guard.matches, "score": guard.score, "session_id": session_id},
+                    trace_id=session_id,
+                )
+        if settings.ENABLE_PII_REDACTION and not is_internal_endpoint(self.base_url):
+            pii_matches = detect_pii(model_input_text)
+            if pii_matches:
+                model_input_text = redact_pii(model_input_text)
+                await audit_log.record(
+                    "pii.redacted",
+                    actor=role or "anonymous",
+                    detail={"categories": sorted({m.category for m in pii_matches}), "count": len(pii_matches),
+                            "session_id": session_id},
+                    trace_id=session_id,
+                )
+        session.messages.append(self._build_user_message(session, model_input_text, new_files))
         session.history.append({"type": "user", "content": user_text,
                                 "files": [os.path.basename(f) for f in new_files]})
 
         produced_files: List[str] = []
         any_tool_called = False
+        full_response_text_parts: List[str] = []
 
         try:
             timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT, connect=10.0)
@@ -416,6 +481,7 @@ class ChatEngine:
                         msg = chunk.get("message", {})
                         if msg.get("content"):
                             assistant_content += msg["content"]
+                            full_response_text_parts.append(msg["content"])
                             yield {"type": "token", "text": msg["content"]}
                         for tc in msg.get("tool_calls", []) or []:
                             tool_calls.append(tc)
@@ -503,6 +569,26 @@ class ChatEngine:
         except Exception as e:
             logger.error("chat stream failed", error=str(e))
             yield {"type": "error", "message": str(e)}
+
+        if settings.ENABLE_OUTPUT_VALIDATION and full_response_text_parts:
+            # Detect-and-flag only — every token above has already reached the
+            # client by this point, so this cannot redact/prevent, only warn
+            # and record (see module docstring "Prompt/output guardrails").
+            full_text = "".join(full_response_text_parts)
+            validation = validate(full_text)
+            if not validation.ok:
+                await audit_log.record(
+                    "output_validator.violation",
+                    actor=role or "anonymous",
+                    detail={"violations": validation.violations, "session_id": session_id},
+                    trace_id=session_id,
+                )
+                yield {
+                    "type": "warning",
+                    "message": "Respons ini menandai pelanggaran kebijakan output setelah dikirim: "
+                                + ", ".join(validation.violations),
+                    "violations": validation.violations,
+                }
 
         yield {"type": "done"}
 

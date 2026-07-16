@@ -69,6 +69,9 @@ export default function ChatPage() {
               case 'error':
                 pushNotification({ variant: 'destructive', message: event.message })
                 break
+              case 'warning':
+                pushNotification({ variant: 'warning', message: event.message })
+                break
               case 'done':
                 setStreaming(false)
                 setToolActivity(null)
