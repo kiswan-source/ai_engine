@@ -255,78 +255,95 @@ export default function MonitoringPage() {
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-medium">Peningkatan Berkelanjutan</h2>
-          <StatusBadge
-            variant={dashboard.improvement.ledger_integrity_ok ? 'success' : 'destructive'}
-            label={dashboard.improvement.ledger_integrity_ok ? 'Ledger utuh' : 'Ledger bermasalah'}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <StatTile label="Total rekomendasi" value={String(dashboard.improvement.total_recommendations)} />
-          <StatTile label="Diterapkan otomatis" value={String(dashboard.improvement.total_actions_applied)} />
-          <StatTile label="Sudah ditinjau" value={String(dashboard.improvement.total_actions_reviewed)} />
+          {dashboard.improvement && (
+            <StatusBadge
+              variant={dashboard.improvement.ledger_integrity_ok ? 'success' : 'destructive'}
+              label={dashboard.improvement.ledger_integrity_ok ? 'Ledger utuh' : 'Ledger bermasalah'}
+            />
+          )}
         </div>
 
-        {dashboard.improvement.pending_review.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <h3 className="text-sm font-medium text-muted-foreground">Menunggu peninjauan</h3>
-            {dashboard.improvement.pending_review.map((action) => (
-              <div
-                key={action.id}
-                className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
-              >
-                <span className="font-medium">
-                  {action.setting}: {action.old_value} → {action.new_value}
-                </span>
-                <span className="text-muted-foreground">
-                  Ditinjau setelah {new Date(action.review_after * 1000).toLocaleString()}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        {!dashboard.improvement ? (
+          // Backend belum di-restart sejak Fase 7 di-deploy — respons API-nya
+          // masih tidak punya key ini sama sekali. Tampilkan pesan yang jelas
+          // alih-alih membiarkan halaman ini crash (ditemukan live: backend
+          // lama + frontend baru ternyata kombinasi nyata yang terjadi saat
+          // rebuild frontend mendahului restart backend, bukan skenario
+          // hipotetis).
+          <p className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
+            Data belum tersedia — backend perlu di-restart untuk memuat fitur ini.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatTile label="Total rekomendasi" value={String(dashboard.improvement.total_recommendations)} />
+              <StatTile label="Diterapkan otomatis" value={String(dashboard.improvement.total_actions_applied)} />
+              <StatTile label="Sudah ditinjau" value={String(dashboard.improvement.total_actions_reviewed)} />
+            </div>
 
-        {dashboard.improvement.recent_recommendations.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <h3 className="text-sm font-medium text-muted-foreground">Rekomendasi terbaru</h3>
-            {dashboard.improvement.recent_recommendations
-              .slice()
-              .reverse()
-              .map((rec) => (
-                <div key={rec.id} className="flex flex-col gap-1 rounded-lg border border-border p-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{rec.category}</span>
-                    <StatusBadge
-                      variant={rec.severity === 'high' ? 'destructive' : rec.severity === 'medium' ? 'warning' : 'success'}
-                      label={rec.severity}
-                    />
+            {dashboard.improvement.pending_review.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <h3 className="text-sm font-medium text-muted-foreground">Menunggu peninjauan</h3>
+                {dashboard.improvement.pending_review.map((action) => (
+                  <div
+                    key={action.id}
+                    className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
+                  >
+                    <span className="font-medium">
+                      {action.setting}: {action.old_value} → {action.new_value}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Ditinjau setelah {new Date(action.review_after * 1000).toLocaleString()}
+                    </span>
                   </div>
-                  <p className="text-muted-foreground">{rec.suggestion}</p>
-                </div>
-              ))}
-          </div>
-        )}
+                ))}
+              </div>
+            )}
 
-        {dashboard.improvement.recent_actions_reviewed.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <h3 className="text-sm font-medium text-muted-foreground">Hasil peninjauan terbaru</h3>
-            {dashboard.improvement.recent_actions_reviewed
-              .slice()
-              .reverse()
-              .map((action) => (
-                <div
-                  key={action.id}
-                  className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
-                >
-                  <span className="font-medium">
-                    {action.setting}: {action.old_value} → {action.new_value}
-                  </span>
-                  <StatusBadge
-                    variant={action.outcome === 'kept' ? 'success' : 'warning'}
-                    label={action.outcome ?? 'unknown'}
-                  />
-                </div>
-              ))}
-          </div>
+            {dashboard.improvement.recent_recommendations.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <h3 className="text-sm font-medium text-muted-foreground">Rekomendasi terbaru</h3>
+                {dashboard.improvement.recent_recommendations
+                  .slice()
+                  .reverse()
+                  .map((rec) => (
+                    <div key={rec.id} className="flex flex-col gap-1 rounded-lg border border-border p-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">{rec.category}</span>
+                        <StatusBadge
+                          variant={rec.severity === 'high' ? 'destructive' : rec.severity === 'medium' ? 'warning' : 'success'}
+                          label={rec.severity}
+                        />
+                      </div>
+                      <p className="text-muted-foreground">{rec.suggestion}</p>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {dashboard.improvement.recent_actions_reviewed.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <h3 className="text-sm font-medium text-muted-foreground">Hasil peninjauan terbaru</h3>
+                {dashboard.improvement.recent_actions_reviewed
+                  .slice()
+                  .reverse()
+                  .map((action) => (
+                    <div
+                      key={action.id}
+                      className="flex items-center justify-between rounded-lg border border-border p-2 text-xs"
+                    >
+                      <span className="font-medium">
+                        {action.setting}: {action.old_value} → {action.new_value}
+                      </span>
+                      <StatusBadge
+                        variant={action.outcome === 'kept' ? 'success' : 'warning'}
+                        label={action.outcome ?? 'unknown'}
+                      />
+                    </div>
+                  ))}
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>
