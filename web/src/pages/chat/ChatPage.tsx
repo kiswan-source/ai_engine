@@ -12,6 +12,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useAttachmentStore } from '@/stores/attachmentStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { streamChat } from '@/services/chatService'
 
 export default function ChatPage() {
@@ -26,6 +27,13 @@ export default function ChatPage() {
 
   const addAttachment = useAttachmentStore((s) => s.add)
   const pushNotification = useNotificationStore((s) => s.push)
+  // Fase 8 (DCF v5 mandate "Workspace Native File Access") — the store
+  // WorkspacePage.tsx already populates on open/create (workspaceStore.ts's
+  // own docstring anticipated this exact "future" consumer). Without this,
+  // every backend Workspace tool (search/read/write/move/...) built for
+  // chat was unreachable from the actual product UI — no session ever
+  // carried a workspace_id, regardless of how correct the backend was.
+  const workspace = useWorkspaceStore((s) => s.current)
 
   const [toolActivity, setToolActivity] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -43,6 +51,7 @@ export default function ChatPage() {
         await streamChat({
           sessionId: conversationId,
           message: text,
+          workspaceId: workspace?.id,
           signal: controller.signal,
           onEvent: (event) => {
             switch (event.type) {
@@ -95,11 +104,17 @@ export default function ChatPage() {
       setConversationId,
       addAttachment,
       pushNotification,
+      workspace,
     ],
   )
 
   return (
     <div className="flex h-full flex-col">
+      {workspace && (
+        <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">
+          ✓ Workspace terhubung: {workspace.folders[0]?.alias ?? workspace.root_path ?? workspace.id}
+        </p>
+      )}
       <MessageList messages={messages} />
       {toolActivity && (
         <p className="pb-2 text-xs text-muted-foreground">

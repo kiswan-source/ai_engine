@@ -13,6 +13,11 @@ export interface StreamChatArgs {
   message: string
   model?: string
   files?: string[]
+  /** Bab 69.5/Fase 8 — the Project Workspace this session should read/write
+   * through, if any (`api/routes/chat.py`'s `ChatRequest.workspace_id`).
+   * Omitted (undefined/null) means no Workspace: the backend behaves exactly
+   * as it always has, upload-only. */
+  workspaceId?: string | null
   signal?: AbortSignal
   onEvent: (event: ChatStreamEvent) => void
 }
@@ -23,6 +28,7 @@ export async function streamChat({
   message,
   model,
   files,
+  workspaceId,
   signal,
   onEvent,
 }: StreamChatArgs): Promise<void> {
@@ -33,6 +39,7 @@ export async function streamChat({
       message,
       model,
       files: files ?? [],
+      workspace_id: workspaceId ?? null,
     }),
     signal,
   })

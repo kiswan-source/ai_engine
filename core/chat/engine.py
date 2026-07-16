@@ -136,6 +136,7 @@ provider eksternal") — redacting the response after it's already streamed
 wouldn't undo anything.
 """
 import os
+import re
 import json
 import base64
 import asyncio
@@ -197,15 +198,23 @@ WORKSPACE_MUTATING_TOOL_NAMES = {"workspace_write_file", "workspace_create_folde
 WORKSPACE_DECISION_FLOW_NOTE = (
     "[Project Workspace terhubung. WAJIB ikuti urutan ini kalau pengguna menyebut "
     "sebuah file:\n"
-    "1) Pengguna kasih path/nama file -> panggil workspace_list_files (kalau belum) "
-    "lalu cocokkan ke relative_path hasilnya, baru workspace_read_file.\n"
-    "2) Ketemu -> langsung kerjakan, JANGAN tanya konfirmasi lagi.\n"
-    "3) Tidak ketemu di listing -> panggil workspace_find_file dengan nama filenya "
-    "(Smart Search, mencari ke semua folder Workspace). Satu hasil cocok -> langsung "
-    "pakai. Lebih dari satu -> minta pengguna pilih salah satu.\n"
-    "4) workspace_find_file tetap nol hasil -> baru minta pengguna sebutkan lokasi lain.\n"
+    "1) Pengguna kasih path (termasuk path Windows seperti D:\\Folder\\nama.pdf) atau "
+    "nama file -> AMBIL HANYA NAMA FILENYA (bagian setelah \\ atau / terakhir, abaikan "
+    "drive letter/folder), lalu LANGSUNG panggil workspace_find_file dengan nama itu. "
+    "JANGAN panggil workspace_list_files dulu untuk ini — daftar isi Workspace bisa "
+    "berisi ratusan file dan terpotong sebelum sampai ke kamu, workspace_find_file jauh "
+    "lebih tepat sasaran. Pakai workspace_list_files HANYA kalau pengguna minta lihat/"
+    "jelajah isi Workspace secara umum tanpa menyebut nama file tertentu.\n"
+    "2) workspace_find_file dapat SATU hasil -> langsung workspace_read_file pakai "
+    "folder_id+relative_path dari hasil itu, JANGAN tanya konfirmasi lagi.\n"
+    "3) workspace_find_file dapat LEBIH DARI SATU hasil -> minta pengguna pilih salah satu.\n"
+    "4) workspace_find_file dapat NOL hasil -> baru minta pengguna sebutkan lokasi lain.\n"
     "5) HANYA kalau sudah lewat langkah 1-4 dan benar-benar tidak ketemu -> baru "
     "tawarkan upload sebagai pilihan TERAKHIR.\n"
+    "JANGAN PERNAH mengaku sudah membaca/menganalisis sebuah file kalau kamu belum "
+    "benar-benar memanggil tool workspace_read_file (atau read_pdf/read_docx/dst) dan "
+    "melihat isinya di hasil tool — kalau ragu apakah filenya sudah benar-benar "
+    "terbaca, panggil tool-nya lagi, jangan menebak atau mengarang isi.\n"
     "DILARANG langsung menjawab 'saya tidak punya akses ke drive', 'saya hanya bisa "
     "baca file yang diupload', atau 'tolong upload filenya' SEBELUM langkah 1-4 di atas "
     "benar-benar dijalankan. Workspace juga punya tool workspace_create_folder/"
@@ -225,6 +234,37 @@ MEMORY_SUMMARY_EVERY_N_TURNS = 5
 # prompts/chat/system_v1.md; version is registered explicitly here, never
 # inferred from the highest version number on disk.
 SYSTEM_PROMPT = load_prompt("chat", "system", version=1)
+
+# Fase 8 (DCF v5 mandate) follow-up fix — live-verified against a real
+# gemma4:e2b turn that WORKSPACE_DECISION_FLOW_NOTE's prompt-only steering is
+# not reliable enough by itself: given a Windows path in the message, the
+# model called workspace_list_files (truncated at TOOL_RESULT_MAX_CHARS for
+# a real ~100-file Workspace, hiding the match), then called the *wrong*
+# tool entirely (read_pdf on the literal "D:\..." string, which obviously
+# doesn't exist on this filesystem) instead of workspace_find_file/
+# workspace_read_file. Same failure class CLAUDE.md §9 already documents for
+# GIS conversions ("a tiny model ignores tools") and the same fix shape: a
+# deterministic, code-level resolution that doesn't depend on the model
+# choosing the right tool in the right order — see _auto_resolve_workspace_file.
+_FILE_EXTENSIONS = (
+    r"pdf|docx?|txt|md|xlsx|pptx|csv|json|ya?ml|xml|html?|py|js|ts|java|cpp|c|cs|go|rs|sql"
+    r"|jpe?g|png|gif|webp|bmp|tiff?|mp3|wav|mp4|mov|avi|mkv|zip|geojson|kml|shp"
+)
+_FILE_REF_RE = re.compile(rf'[^\s"\'<>]+\.(?:{_FILE_EXTENSIONS})\b', re.IGNORECASE)
+
+
+def _extract_file_reference(text: str) -> Optional[str]:
+    """First plausible filename mentioned in ``text`` (Windows or Unix path,
+    or a bare filename), reduced to just its basename — ``D:\\Archive\\a.pdf``
+    and ``a.pdf`` both yield ``"a.pdf"``. ``None`` if nothing matches. Single-
+    match only (first file mentioned) — good enough to bootstrap the common
+    "summarize this one file" turn; multi-file requests still go through the
+    model's own tool calls."""
+    match = _FILE_REF_RE.search(text)
+    if not match:
+        return None
+    token = match.group(0).rstrip(".,;:!?)\"'")
+    return os.path.basename(token.replace("\\", "/"))
 
 # Friendly tool-error prefixes (Tahap 41) — the most common exception
 # shapes a tool call raises, keyed by exact type (not isinstance, so a
@@ -380,6 +420,70 @@ class ChatEngine:
         if images_b64:
             msg["images"] = images_b64
         return msg
+
+    # ── Deterministic Workspace file resolution (Fase 8 follow-up fix) ──
+    async def _auto_resolve_workspace_file(self, workspace_id: str, text: str) -> Optional[str]:
+        """If ``text`` mentions a filename and a Workspace is bound, resolve
+        it server-side via Smart Search *before* the model ever gets a turn —
+        removing the need for gemma4:e2b to correctly sequence
+        workspace_find_file -> workspace_read_file itself, which live
+        verification showed it doesn't reliably do (see module-level comment
+        above _FILE_REF_RE). Calls the async workspace_reader functions
+        directly rather than their asyncio.run() sync wrappers: this method
+        already runs on the same event loop the global AsyncSessionFactory
+        was built on — exactly the "future async call site" case
+        agent/tools/workspace_reader.py's module docstring anticipated.
+        Returns a context note to append to the user message, or ``None`` if
+        no file reference was found in the text."""
+        filename = _extract_file_reference(text)
+        if not filename:
+            return None
+        from agent.tools.workspace_reader import _find_file, _read_file
+
+        found = await _find_file(workspace_id, filename)
+        if not found.get("success"):
+            return None
+        matches = found["matches"]
+        if not matches:
+            searched = ", ".join(found.get("searched_folders", [])) or "(tidak ada folder terdaftar)"
+            return (
+                f"\n\n[Pencarian otomatis Workspace untuk {filename!r}: TIDAK ditemukan. "
+                f"Folder yang dicari: {searched}. Beri tahu pengguna file tidak ditemukan di "
+                f"Workspace ini, minta lokasi lain, atau tawarkan upload sebagai pilihan TERAKHIR — "
+                f"JANGAN pura-pura sudah membaca file ini.]"
+            )
+        if len(matches) > 1:
+            listing = "\n".join(f"- {m['relative_path']} (folder_id={m['folder_id']})" for m in matches)
+            return (
+                f"\n\n[Pencarian otomatis Workspace untuk {filename!r}: {len(matches)} file cocok:\n"
+                f"{listing}\nMinta pengguna pilih salah satu sebelum melanjutkan.]"
+            )
+        m = matches[0]
+        read_result = await _read_file(workspace_id, m["folder_id"], m["relative_path"])
+        if not read_result.get("success"):
+            return (
+                f"\n\n[Pencarian otomatis Workspace untuk {filename!r}: ditemukan di "
+                f"{m['relative_path']} tapi gagal dibaca ({read_result.get('error')}). "
+                f"Beri tahu pengguna, jangan pura-pura berhasil.]"
+            )
+        if read_result.get("type") == "document":
+            snippet = (read_result.get("text") or "")[:INLINE_SNIPPET_CHARS]
+            return (
+                f"\n\n[Pencarian otomatis Workspace untuk {filename!r}: ditemukan di "
+                f"{m['relative_path']} dan sudah dibaca. Isi filenya:\n{snippet}\n"
+                f"Gunakan isi ini langsung untuk menjawab permintaan pengguna — JANGAN panggil "
+                f"read_pdf/read_docx/tool baca lain untuk file ini, dan JANGAN minta upload.]"
+            )
+        # image/gis — same shape workspace_read_file already returns; the
+        # model still needs to call workspace_read_file itself for these to
+        # get the real payload (image bytes for a vision turn, GIS summary
+        # dict) since this note only carries text.
+        return (
+            f"\n\n[Pencarian otomatis Workspace untuk {filename!r}: ditemukan di "
+            f"{m['relative_path']} (folder_id={m['folder_id']}, tipe={read_result.get('type')}). "
+            f"Panggil workspace_read_file dengan folder_id dan relative_path persis ini untuk "
+            f"membacanya — JANGAN panggil tool baca lain atau minta upload.]"
+        )
 
     # ── Low-level streaming call to Ollama /api/chat ──
     async def _stream_chat(self, messages, model, client) -> AsyncIterator[dict]:
@@ -558,7 +662,12 @@ class ChatEngine:
                             "session_id": session_id},
                     trace_id=session_id,
                 )
-        session.messages.append(self._build_user_message(session, model_input_text, new_files))
+        user_msg = self._build_user_message(session, model_input_text, new_files)
+        if session.workspace_id:
+            workspace_note = await self._auto_resolve_workspace_file(session.workspace_id, model_input_text)
+            if workspace_note:
+                user_msg["content"] += workspace_note
+        session.messages.append(user_msg)
         session.history.append({"type": "user", "content": user_text,
                                 "files": [os.path.basename(f) for f in new_files]})
         session.turn_count += 1

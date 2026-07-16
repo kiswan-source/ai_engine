@@ -11,7 +11,7 @@ import json
 import pytest
 
 from agent.tools.registry import ToolRegistry
-from core.chat.engine import ChatEngine
+from core.chat.engine import ChatEngine, _extract_file_reference
 
 
 class _FakeStreamResponse:
@@ -291,3 +291,116 @@ async def test_image_tool_result_injects_followup_vision_message(monkeypatch):
     assert vision_msg["images"] == ["ZmFrZS1pbWFnZS1ieXRlcw=="]
     # The base64 must NOT leak into the tool-role JSON fed back as text.
     assert "ZmFrZS1pbWFnZS1ieXRlcw==" not in messages[tool_idx]["content"]
+
+
+# ─── Fase 8 follow-up fix: deterministic Workspace file auto-resolution ────
+# Live verification against a real gemma4:e2b turn showed the prompt-only
+# WORKSPACE_DECISION_FLOW_NOTE steering (tested above) isn't reliable enough
+# by itself — given a Windows path, the model called workspace_list_files
+# (truncated for a real ~100-file folder, hiding the match) then called the
+# WRONG tool (read_pdf on the literal "D:\..." string) instead of
+# workspace_find_file/workspace_read_file. These tests cover the
+# deterministic, code-level fix instead.
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (r"Ringkas file di D:\04_Archive\Document\Kesimpulan_Tiga_Framework.pdf", "Kesimpulan_Tiga_Framework.pdf"),
+        ("summarize report.docx please", "report.docx"),
+        ("lihat /home/user/notes.txt dong", "notes.txt"),
+        ("what is version 3.2 of the plan?", None),
+        ("halo apa kabar", None),
+        ("cek data.xlsx dan gambar.png", "data.xlsx"),
+    ],
+)
+def test_extract_file_reference(text, expected):
+    assert _extract_file_reference(text) == expected
+
+
+def _patch_find_and_read(monkeypatch, find_result, read_result=None):
+    async def _fake_find(workspace_id, filename, session_factory=None):
+        return find_result
+
+    async def _fake_read(workspace_id, folder_id, relative_path, session_factory=None):
+        return read_result
+
+    monkeypatch.setattr("agent.tools.workspace_reader._find_file", _fake_find)
+    monkeypatch.setattr("agent.tools.workspace_reader._read_file", _fake_read)
+
+
+async def test_auto_resolve_returns_none_without_file_reference(engine):
+    note = await engine._auto_resolve_workspace_file("ws-1", "halo apa kabar")
+    assert note is None
+
+
+async def test_auto_resolve_zero_matches_tells_model_not_to_pretend(engine, monkeypatch):
+    _patch_find_and_read(monkeypatch, {"success": True, "matches": [], "searched_folders": ["Docs"]})
+    note = await engine._auto_resolve_workspace_file("ws-1", "ringkas laporan.pdf")
+    assert "TIDAK ditemukan" in note
+    assert "Docs" in note
+    assert "JANGAN pura-pura" in note
+
+
+async def test_auto_resolve_multiple_matches_lists_them(engine, monkeypatch):
+    _patch_find_and_read(monkeypatch, {"success": True, "matches": [
+        {"relative_path": "a/laporan.pdf", "folder_id": "f1"},
+        {"relative_path": "b/laporan.pdf", "folder_id": "f2"},
+    ]})
+    note = await engine._auto_resolve_workspace_file("ws-1", "ringkas laporan.pdf")
+    assert "2 file cocok" in note
+    assert "a/laporan.pdf" in note
+    assert "b/laporan.pdf" in note
+
+
+async def test_auto_resolve_single_document_match_injects_content(engine, monkeypatch):
+    _patch_find_and_read(
+        monkeypatch,
+        {"success": True, "matches": [{"relative_path": "Document/laporan.pdf", "folder_id": "f1"}]},
+        {"success": True, "type": "document", "text": "Kadar tembaga 1.85% ditemukan di blok Alpha."},
+    )
+    note = await engine._auto_resolve_workspace_file("ws-1", "ringkas laporan.pdf")
+    assert "Kadar tembaga 1.85%" in note
+    assert "JANGAN panggil read_pdf" in note
+
+
+async def test_auto_resolve_read_failure_reports_error_not_success(engine, monkeypatch):
+    _patch_find_and_read(
+        monkeypatch,
+        {"success": True, "matches": [{"relative_path": "Document/laporan.pdf", "folder_id": "f1"}]},
+        {"success": False, "error": "disk penuh"},
+    )
+    note = await engine._auto_resolve_workspace_file("ws-1", "ringkas laporan.pdf")
+    assert "gagal dibaca" in note
+    assert "disk penuh" in note
+
+
+async def test_auto_resolve_image_match_defers_to_workspace_read_file_tool(engine, monkeypatch):
+    _patch_find_and_read(
+        monkeypatch,
+        {"success": True, "matches": [{"relative_path": "site.png", "folder_id": "f1"}]},
+        {"success": True, "type": "image"},
+    )
+    note = await engine._auto_resolve_workspace_file("ws-1", "lihat site.png")
+    assert "workspace_read_file" in note
+    assert "folder_id=f1" in note
+
+
+async def test_stream_run_injects_auto_resolved_content_into_user_message(monkeypatch, engine):
+    _patch_find_and_read(
+        monkeypatch,
+        {"success": True, "matches": [{"relative_path": "Document/laporan.pdf", "folder_id": "f1"}]},
+        {"success": True, "type": "document", "text": "Isi laporan sungguhan."},
+    )
+
+    class Client(_FakeAsyncClient):
+        pass
+
+    Client.rounds = [[_final_round("Ringkasan selesai.")]]
+    monkeypatch.setattr("core.chat.engine.httpx.AsyncClient", Client)
+
+    events = []
+    async for ev in engine.stream_run("sess-1", "ringkas laporan.pdf", workspace_id="ws-1"):
+        events.append(ev)
+
+    user_messages = [m for m in engine.sessions["sess-1"].messages if m.get("role") == "user"]
+    assert any("Isi laporan sungguhan." in m["content"] for m in user_messages)
