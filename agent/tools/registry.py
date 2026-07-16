@@ -39,44 +39,27 @@ class ToolRegistry:
         elif isinstance(input_data, dict): return fn(**input_data)
         else: return fn(input_data)
 
-registry = ToolRegistry()
 
-def build_registry(ollama_url: str, model: str) -> ToolRegistry:
+def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
+    """Domain-agnostic tools — everything the platform needs regardless of
+    which domain skill(s) are enabled (Fase 5, DCF v5 mandate "Domain
+    Generalization"). Mining/GIS tools are deliberately NOT here — see
+    :func:`register_mining_gis_tools` and :func:`build_registry`.
+
+    A FRESH ToolRegistry per call — not the module-level `registry`
+    singleton this file used to mutate directly, which silently broke the
+    Fase 5 toggle: a tool registered on a shared object in one call is
+    never removed by a later call with ENABLE_MINING_GIS_SKILL=False,
+    caught live by tests/unit/test_domain_skill_toggle.py."""
+    registry = ToolRegistry()
     from agent.tools.readers import read_pdf, read_txt, read_docx, read_csv, read_json, read_image
     from agent.tools.writers import write_docx, write_txt, write_json, write_html, write_pdf
     from agent.tools.analyzers import make_analyzer
-    from agent.tools.gis_io import (
-        read_geojson, read_shp, write_geojson, write_shp, convert_geo, _summarize_fc,
-    )
     from agent.tools.images import (
         image_convert, image_resize, image_crop, image_rotate, image_compress, images_to_pdf,
     )
-    from core.gis.processor import KMLProcessor, haversine_area_ha, centroid, bbox
 
     analyze_text = make_analyzer(ollama_url=ollama_url, model=model)
-
-    # GIS tools (dari ai_engine existing)
-    def gis_calculate_area(coordinates):
-        coords = coordinates if isinstance(coordinates, list) else []
-        return {"area_ha": haversine_area_ha(coords), "centroid": centroid(coords), "bbox": bbox(coords), "vertex_count": len(coords)}
-
-    def gis_parse_kml(file_path):
-        # Return the SAME clean summary shape as read_geojson/read_shp:
-        # total_area_ha + per-polygon area/centroid/bbox, plus a compact `text`.
-        # Crucially we do NOT dump the full coordinate FeatureCollection into the
-        # result — that blob (hundreds of KB) buried the area numbers and made the
-        # model unable to answer "berapa luasnya", so it fabricated one.
-        if not os.path.exists(file_path):
-            return {"error": f"File not found: {file_path}"}
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            fc = KMLProcessor.to_geojson(content)
-            s = _summarize_fc(fc)
-            s.update({"source": file_path, "type": "kml"})
-            return s
-        except Exception as e:
-            return {"error": str(e), "source": file_path}
 
     # Readers
     registry.register("read_pdf",   read_pdf,   "Baca dan ekstrak teks dari PDF. Input: file_path", ["pdf"])
@@ -85,15 +68,6 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("read_csv",   read_csv,   "Baca file CSV. Input: file_path", ["csv"])
     registry.register("read_json",  read_json,  "Baca file JSON. Input: file_path", ["json"])
     registry.register("read_image", read_image, "OCR + metadata gambar. Input: file_path", ["jpg","jpeg","png","webp","tif","tiff","bmp","gif"])
-    registry.register("read_kml",   gis_parse_kml, "Parse file KML polygon. Input: file_path", ["kml"])
-    registry.register("read_geojson", read_geojson, "Baca GeoJSON + ringkas luas/centroid. Input: file_path", ["geojson"])
-    registry.register("read_shp",   read_shp,   "Baca Shapefile (.shp atau .zip) + ringkas. Input: file_path", ["shp","zip"])
-
-    # GIS
-    registry.register("calculate_area", gis_calculate_area, "Hitung luas polygon (Ha). Input: coordinates [[lon,lat],...]")
-    registry.register("write_geojson", write_geojson, "Tulis GeoJSON. Input: {filename, data}")
-    registry.register("write_shp", write_shp, "Tulis Shapefile (zip). Input: {filename, data: GeoJSON}")
-    registry.register("convert_geo", convert_geo, "Konversi GIS antar format. Input: {file_path, to_format: geojson|kml|shp, filename?}")
 
     # Image transforms (Pillow) — bukan generasi gambar
     registry.register("image_convert", image_convert, "Konversi format gambar. Input: {file_path, to_format: jpg|png|tiff|webp|bmp|gif, filename?}")
@@ -114,12 +88,6 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("write_json", write_json, "Simpan JSON. Input: {filename, data}")
 
     # Code generator
-    async def generate_code_sync(language, requirement, context=""):
-        from agent.tools.analyzers import make_code_generator
-        gen = make_code_generator(ollama_url=ollama_url, model=model)
-        return gen(language=language, requirement=requirement, context=context)
-
-    import asyncio
     def generate_code(language, requirement, context=""):
         from agent.tools.analyzers import make_code_generator
         gen = make_code_generator(ollama_url=ollama_url, model=model)
@@ -128,7 +96,8 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("generate_code", generate_code,
         "Generate kode program. Input: {language: html|js|python|sql|css, requirement: str, context: str}")
 
-    # Plugins (Bab 59) — one tool per plugin, toggled via registry/plugin_registry.py.
+    # Plugins (Bab 59) — one tool per plugin, toggled via registry/plugin_registry.py
+    # (its own, separate enable/disable mechanism from Domain Skills).
     def plugin_weather(latitude: float, longitude: float):
         from registry.plugin_registry import get as get_plugin
         plugin = get_plugin("weather")
@@ -137,7 +106,7 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
         return plugin.execute(latitude=latitude, longitude=longitude)
 
     registry.register("plugin_weather", plugin_weather,
-        "Cuaca saat ini (suhu/curah hujan/angin) untuk lokasi tambang/lapangan. Input: {latitude, longitude}")
+        "Cuaca saat ini (suhu/curah hujan/angin) untuk sebuah lokasi. Input: {latitude, longitude}")
 
     # MCP (Bab 60) — bridge to Model Context Protocol servers via mcp_client/.
     def mcp_list_tools(server: str):
@@ -193,3 +162,59 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
         "Ambil semua fakta yang pernah diminta pengguna untuk diingat. Input: {}")
 
     return registry
+
+
+def register_mining_gis_tools(target: ToolRegistry, ollama_url: str, model: str) -> None:
+    """Mining/GIS domain skill (Fase 5) — the platform's first domain skill,
+    not a core-engine assumption. Gated by ``settings.ENABLE_MINING_GIS_SKILL``
+    in :func:`build_registry`; a deployment with it off keeps every tool in
+    :func:`build_core_registry` working unchanged (proven by
+    ``tests/unit/test_domain_skill_toggle.py``, not just claimed)."""
+    from agent.tools.gis_io import (
+        read_geojson, read_shp, write_geojson, write_shp, convert_geo, _summarize_fc,
+    )
+    from core.gis.processor import KMLProcessor, haversine_area_ha, centroid, bbox
+
+    def gis_calculate_area(coordinates):
+        coords = coordinates if isinstance(coordinates, list) else []
+        return {"area_ha": haversine_area_ha(coords), "centroid": centroid(coords), "bbox": bbox(coords), "vertex_count": len(coords)}
+
+    def gis_parse_kml(file_path):
+        # Return the SAME clean summary shape as read_geojson/read_shp:
+        # total_area_ha + per-polygon area/centroid/bbox, plus a compact `text`.
+        # Crucially we do NOT dump the full coordinate FeatureCollection into the
+        # result — that blob (hundreds of KB) buried the area numbers and made the
+        # model unable to answer "berapa luasnya", so it fabricated one.
+        if not os.path.exists(file_path):
+            return {"error": f"File not found: {file_path}"}
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            fc = KMLProcessor.to_geojson(content)
+            s = _summarize_fc(fc)
+            s.update({"source": file_path, "type": "kml"})
+            return s
+        except Exception as e:
+            return {"error": str(e), "source": file_path}
+
+    target.register("read_kml", gis_parse_kml, "Parse file KML polygon. Input: file_path", ["kml"])
+    target.register("read_geojson", read_geojson, "Baca GeoJSON + ringkas luas/centroid. Input: file_path", ["geojson"])
+    target.register("read_shp", read_shp, "Baca Shapefile (.shp atau .zip) + ringkas. Input: file_path", ["shp", "zip"])
+    target.register("calculate_area", gis_calculate_area, "Hitung luas polygon (Ha). Input: coordinates [[lon,lat],...]")
+    target.register("write_geojson", write_geojson, "Tulis GeoJSON. Input: {filename, data}")
+    target.register("write_shp", write_shp, "Tulis Shapefile (zip). Input: {filename, data: GeoJSON}")
+    target.register("convert_geo", convert_geo, "Konversi GIS antar format. Input: {file_path, to_format: geojson|kml|shp, filename?}")
+
+
+def build_registry(ollama_url: str, model: str) -> ToolRegistry:
+    """Core tools + the mining/GIS domain skill if enabled (Fase 5). This is
+    still the one entry point every existing caller
+    (``core/chat/engine.py``, ``agent/core.py``, ``mcp_server/server.py``)
+    uses — the domain-skill split is internal to this module, not a
+    breaking change to callers."""
+    from api.config import settings
+
+    core = build_core_registry(ollama_url, model)
+    if settings.ENABLE_MINING_GIS_SKILL:
+        register_mining_gis_tools(core, ollama_url, model)
+    return core

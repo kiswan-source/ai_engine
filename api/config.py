@@ -211,6 +211,17 @@ class Settings(BaseSettings):
     MCP_SERVER_WORKSPACE_ID: Optional[str] = None
     MCP_SERVER_WORKSPACE_ROLE: str = "viewer"
 
+    # Domain Skills (Fase 5, DCF v5 mandate "Domain Generalization") — mining/
+    # GIS is the platform's first domain skill, not a hard-wired assumption of
+    # the core engine. Gates the mining/GIS agent tools
+    # (agent/tools/registry.py::register_mining_gis_tools — read_kml,
+    # calculate_area, convert_geo, write_geojson, write_shp) and the
+    # gis/dokumen/pipeline routers (api/main.py) as one unit. Default True —
+    # this deployment's actual domain, no behavior change. Setting it False is
+    # what proves (not just claims) that core/orchestrator/agents/workflows/
+    # chat don't need this domain — see tests/unit/test_domain_skill_toggle.py.
+    ENABLE_MINING_GIS_SKILL: bool = True
+
     # Ollama / Gemma (local, always available)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     GEMMA_MODEL: str = "gemma4:e2b"
@@ -245,6 +256,7 @@ class Settings(BaseSettings):
             CONFIG_DIR / "security.yaml",
             CONFIG_DIR / "memory.yaml",
             CONFIG_DIR / "budget.yaml",
+            CONFIG_DIR / "domain_skills.yaml",
         ],
     )
 

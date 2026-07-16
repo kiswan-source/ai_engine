@@ -106,12 +106,18 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 # get_current_principal still returns an admin Principal for every caller.
 _AUTH = [Depends(get_current_principal)]
 app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI"], dependencies=_AUTH)
-app.include_router(gis.router, prefix="/api/v1/gis", tags=["GIS"], dependencies=_AUTH)
-app.include_router(pipeline.router, prefix="/api/v1/pipeline", tags=["Pipeline"], dependencies=_AUTH)
+# Domain Skills (Fase 5, DCF v5 mandate "Domain Generalization") — gis/dokumen/
+# pipeline are 100% mining/GIS content (pipeline.py's only sync route is
+# wiup-full-report), not core-engine routes; gated as one unit so the
+# platform can run without this domain skill at all — see
+# agent/tools/registry.py's matching gate and tests/unit/test_domain_skill_toggle.py.
+if settings.ENABLE_MINING_GIS_SKILL:
+    app.include_router(gis.router, prefix="/api/v1/gis", tags=["GIS"], dependencies=_AUTH)
+    app.include_router(pipeline.router, prefix="/api/v1/pipeline", tags=["Pipeline"], dependencies=_AUTH)
+    app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"], dependencies=_AUTH)
 app.include_router(docs_router.router, prefix="/api/v1/docs", tags=["Documents"], dependencies=_AUTH)
 app.include_router(agent_router.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(files_router.router, prefix="", tags=["Files"])
-app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"], dependencies=_AUTH)
 app.include_router(chat_router.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", tags=["Orchestrator"])
 app.include_router(monitoring_router.router, prefix="/api/v1/monitoring", tags=["Monitoring"])

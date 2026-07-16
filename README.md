@@ -34,8 +34,8 @@ Mesin chat: `core/chat/` · API: `api/routes/chat.py` (`/api/v1/chat/*`).
 - **Plugin** (`plugins/`) — kategori tool tambahan lewat tool-calling (contoh: `weather`).
 - **MCP** — `mcp_client/` (memanggil tool dari server MCP eksternal) & `mcp_server/` (mengekspos Workspace sebagai server MCP untuk Claude Desktop dkk, stdio-only).
 
-### 🗺️ GIS & 📄 Dokumen Tambang
-`core/gis/` (KML parsing, luas/centroid WGS-84 via shapely+pyproj) via `/api/v1/gis/*`. `core/document/` + `templates/` (ReportLab) generate laporan tambang formal (PDF/DOCX) via `/api/dokumen/*`.
+### 🗺️ GIS & 📄 Dokumen Tambang — Domain Skill Pertama
+`core/gis/` (KML parsing, luas/centroid WGS-84 via shapely+pyproj) via `/api/v1/gis/*`. `core/document/` + `templates/` (ReportLab) generate laporan tambang formal (PDF/DOCX) via `/api/dokumen/*`. Mining/GIS adalah **domain skill pertama** platform ini, bukan asumsi core engine — diverifikasi struktural (Fase 5, DCF v5 mandate): `ENABLE_MINING_GIS_SKILL=false` mematikan tool GIS + router `/api/v1/gis`, `/api/dokumen`, `/api/v1/pipeline` sekaligus, sementara chat/orchestrator/memory/workspace tetap berjalan penuh — dibuktikan lewat `tests/unit/test_domain_skill_toggle.py`, bukan cuma diklaim.
 
 ### ☸️ Kubernetes-ready
 `k8s/` (Kustomize base + overlay production) — Postgres pgvector (StatefulSet), Redis, API (2 replika), worker terpisah per queue. Diverifikasi live di `kind` lokal (lihat `docs/PROGRESS.md`).
@@ -180,6 +180,7 @@ Sebagian besar default field `Settings` kini ada di `config/*.yaml` (Configurati
 - `DATABASE_URL` — koneksi asyncpg
 - `REDIS_URL` — broker + cache
 - `API_KEYS` — otentikasi RBAC
+- `ENABLE_MINING_GIS_SKILL` — matikan untuk menjalankan platform tanpa domain skill mining/GIS (default `true`)
 
 ## Status & Gap yang Diketahui
 

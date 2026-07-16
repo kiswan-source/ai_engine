@@ -1,0 +1,10 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — which domain skills
+# are active. NO SECRETS HERE. See api/config.py for the authoritative field
+# list.
+
+# Domain Skills (Fase 5, DCF v5 mandate "Domain Generalization") — mining/GIS
+# is the platform's first domain skill, not a hard-wired core assumption.
+# Setting this false disables the mining/GIS agent tools and the
+# gis/dokumen/pipeline routers as one unit — everything else (chat,
+# orchestrator, memory, workspace, plugins, MCP) keeps working unchanged.
+ENABLE_MINING_GIS_SKILL: true
