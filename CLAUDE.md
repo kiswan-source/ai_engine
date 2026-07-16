@@ -36,31 +36,57 @@ docker compose restart api    # Restart after code changes
 
 ## Architecture
 
-The system is a **mining & GIS intelligence engine** with three layers:
+The system is a **multi-agent AI platform**, first applied to mining & GIS intelligence but not hard-wired to that domain at the architecture level (see `docs/PROGRESS.md` and the v5 evolution blueprint for the domain-generalization plan). This section was rewritten 2026-07-16 after an audit found it had drifted — it previously described only 9 of 17 live routers and omitted entire subsystems (`orchestrator/`, `agents/`, `memory/`, `rag/`, `workspace/`, `telemetry/`, `messaging/`, `mcp_client/`/`mcp_server/`, `plugins/`, `scheduler/`) that are real, tested, and load-bearing. **Verify against actual code before trusting any doc, including this one** — that same audit also found and corrected a stale docstring in `security/auth.py` making an incorrect claim about its own file.
 
 ### 1. API Layer (`api/`)
-FastAPI app (`api/main.py`) with routers under `api/routes/`. Only the routers wired in `main.py` are live — these are:
-- `/api/v1/chat/*` — **primary feature**: ChatGPT-style streaming chat with tool-calling + file upload/download (`api/routes/chat.py`, see §7). The web UI at `/` talks to this.
-- `/api/v1/agent/run` — older rule-based autonomous agent (`api/routes/agent.py`)
-- `/api/v1/ai/*` — direct Gemma chat/analyze via `core/ai/gemma_client.py`
-- `/api/v1/gis/*` — KML parsing, area calculation, WIUP analysis
-- `/api/v1/pipeline/*` — orchestrated workflows (sync + async via RQ)
-- `/api/v1/docs/*` — upload-and-analyze a document (`api/routes/docs.py`)
-- `/api/dokumen/*` — formal mining-document generation (`api/routes/dokumen.py`, see §6)
-- `/reports/*`, `/upload`, `/uploads` — file serving + uploads (`api/routes/files.py`)
-- `/health/*` — liveness/readiness probes (e.g. `/health/ready` checks Ollama + Gemma). CI and Docker healthchecks hit these.
-- `/` — new ChatGPT-style UI (`web/index.html`, static assets under `/web`). `/ui` and `/v3` served the legacy HTML UIs; both files were removed, so those routes no longer register.
+FastAPI app (`api/main.py`) with routers under `api/routes/`. All 17 are live (check `api/main.py`'s `include_router` calls, not this table, if the two ever disagree):
 
-Configuration lives in `api/config.py` (pydantic-settings, reads from `.env`).
+| Prefix | Router file | Auth |
+|---|---|---|
+| `/health/*` | `health.py` | none |
+| `/api/v1/ai/*` | `ai.py` | router-level |
+| `/api/v1/gis/*` | `gis.py` | router-level |
+| `/api/v1/pipeline/*` | `pipeline.py` | router-level |
+| `/api/v1/docs/*` | `docs.py` | router-level |
+| `/api/dokumen/*` | `dokumen.py` | router-level |
+| `/api/v1/agent/*` | `agent.py` | per-route |
+| `/reports`, `/upload`, `/uploads` | `files.py` | per-route |
+| `/api/v1/chat/*` | `chat.py` | per-route |
+| `/api/v1/orchestrator/*` | `orchestrator.py` | per-route |
+| `/api/v1/monitoring/*` | `monitoring.py` | `require_role` |
+| `/api/v1/memory/*` | `memory.py` | per-route |
+| `/api/v1/knowledge/*` | `knowledge.py` | per-route |
+| `/api/v1/projects/*` | `projects.py` | per-route |
+| `/api/v1/automation/*` | `automation.py` | per-route |
+| `/api/v1/plugins/*` | `plugins.py` | per-route |
+| `/api/v1/workspace/*` | `workspace.py` | per-route |
+| `/` | `web/dist` static bundle | n/a |
 
-> **Two agent paths exist.** The **chat engine** (`core/chat/`, §7) is the modern path: LLM-driven *native tool-calling* via Ollama `/api/chat`. The older **`agent/core.py`** (`AIAgent`) uses a brittle *rule-based* planner (`_smart_plan`) and is kept only for `/api/v1/agent/run`. Prefer the chat engine for new work. Both share the same `agent/tools/registry.py`.
+"router-level" = `dependencies=[Depends(get_current_principal)]` on the `app.include_router(...)` call itself, so a future endpoint added under that prefix can't ship unauthenticated by omission (added Fase 1, after these 5 routers were found to have no auth dependency at all). Everywhere else, auth is opt-in per-route inside the router file — grep for `Depends(get_current_principal)` before assuming a route is protected. `API_KEYS` being blank (current dev default) makes every checked route treat the caller as admin; this deployment relies on loopback-only network binding (`docker-compose.yml`, `ai-engine.service`) as its actual isolation, not API keys — a documented trade-off, not an oversight.
+
+Configuration lives in `api/config.py` (pydantic-settings); most defaults have moved to `config/*.yaml` (Configuration Center, versioned), with `.env` for secrets and per-deployment overrides.
+
+> **Three agent execution paths exist side by side — know which one you're touching:**
+> - `core/chat/` (§9) — **primary user-facing feature**. LLM-driven native tool-calling via Ollama `/api/chat`, backs the `/` web UI.
+> - `orchestrator/` + `agents/` + `registry/` (§2) — **15-role multi-agent system**, backs `/api/v1/orchestrator/*` and the Workflow UI page.
+> - `agent/` singular (§3) — **older rule-based planner**, kept only for `/api/v1/agent/run`. Don't extend it without a specific reason to.
 >
-> Experimental "enhanced" code that was never wired up has been archived to `backups/archived_20260602/` (was `core_enhanced.py`, `toolkit.py`, `agent_enhanced.py`, `logger_enhanced.py`, `skills/`). Don't resurrect it without reason.
+> All three call into the same `agent/tools/registry.py` (`ToolRegistry`) for actual tool execution.
+>
+> Experimental "enhanced" code that was never wired up is archived at `backups/archived_20260602/` (`core_enhanced.py`, `toolkit.py`, `agent_enhanced.py`, `logger_enhanced.py`, `skills/`). Don't resurrect it without reason.
 
-### 2. Autonomous Agent (`agent/`)
-`agent/core.py` — `AIAgent` class runs a deterministic plan→execute→evaluate loop (max 8 steps). The planner is **rule-based** (`_smart_plan`), not LLM-driven, to avoid hallucination. LLM (`_plan`) is a fallback only.
+### 2. Orchestrator & Multi-Agent System (`orchestrator/`, `agents/`, `registry/`, `workflows/`)
+- `orchestrator/planner.py` + `execution_graph.py` — builds a DAG-based plan from a goal; does not execute it.
+- `orchestrator/dispatcher.py` + `task_manager.py` — executes the DAG. State machine has real transitions beyond the happy path: `PENDING→PLANNING→RESEARCH→EXECUTING→REVIEWING→APPROVED→COMPLETED`, plus `CANCELLED`/`FAILED`/`RETRY`/`ROLLBACK` (including a retry loop back to `PENDING`); illegal transitions raise `IllegalTransitionError` rather than silently corrupting state.
+- `orchestrator/routing_engine.py` — picks provider/model per step.
+- `agents/generic_agent.py` — **all 15 roles (planner/research/analyst/writer/reviewer/memory/guardrail/prompt_optimizer/tool/vision/reflection/critic/consensus/cost_optimizer/confidence) are one class, `GenericLLMAgent`, configured with a different prompt per instance.** There is no code-level authority boundary today between a role that does work and one that validates it (`reviewer`/`critic`/`consensus`) — if that separation exists at all, it's a convention in how `orchestrator/dispatcher.py` calls agents, not something `agents/` itself enforces. Don't assume Validator/Builder independence is structurally guaranteed here; this is a known, tracked gap (highest-priority item in the v5 evolution roadmap), not an oversight to quietly work around.
+- `registry/agent_registry.py` — the 15-role registry (Agent Manager equivalent). `registry/` also holds the provider registry and plugin registry.
+- `workflows/` — five orchestration patterns: `sequential.py`, `parallel.py`, `reflection.py` (self-critique), `voting.py`, `consensus.py`, `approval.py`. `HumanApprovalGate` in `approval.py` never auto-decides and audit-logs every decision with approver identity + reason, but by design has no notion of *who* the caller is — RBAC-gating who may call `decide()` is the caller's job (`Orchestrator.finalize_approval`), not enforced inside the gate itself.
 
-All agent capabilities go through `agent/tools/registry.py` (`ToolRegistry`). Tools are registered with `registry.register(name, fn, description, extensions)`. The `auto_reader()` method maps file extensions to reader tools automatically.
+### 3. Legacy Rule-Based Agent (`agent/`)
+`agent/core.py` — `AIAgent` runs a deterministic plan→execute→evaluate loop (max 8 steps). The planner is **rule-based** (`_smart_plan`), not LLM-driven, to avoid hallucination; LLM planning (`_plan`) is a fallback only. As of Fase 1, input runs through `security.prompt_guard` (can block outright, unlike the streaming chat path) and PII redaction, and output is validated/redacted before returning — added alongside the equivalent wiring in `core/chat/engine.py` (§9); see §8 for how these differ between the two paths.
+
+All agent capabilities (from all three paths in §1) go through `agent/tools/registry.py` (`ToolRegistry`). Tools are registered with `registry.register(name, fn, description, extensions)`. The `auto_reader()` method maps file extensions to reader tools automatically.
 
 Tool categories:
 - `agent/tools/readers.py` — read_pdf, read_txt, read_docx, read_csv, read_json, read_image
@@ -68,16 +94,53 @@ Tool categories:
 - `agent/tools/analyzers.py` — analyze_text (wraps Ollama), generate_code
 - `agent/tools/gis_io.py` — read_geojson/read_shp, write_geojson/write_shp, convert_geo (KML↔GeoJSON↔SHP via `fiona`/`shapely`; reuses `core/gis/processor.py` for the math)
 - `agent/tools/images.py` — image_convert/resize/crop/rotate/compress, images_to_pdf (Pillow). **Transform only — no image generation** (a local text LLM can't synthesize images)
+- `agent/tools/workspace_reader.py` — reads from `workspace/`-registered folders (§7)
 - GIS area tools registered inline in `build_registry()` using `core/gis/processor.py`
 
-**To add a new agent tool:** implement the function, call `registry.register(...)` in `agent/tools/registry.py:build_registry()`, and — if the chat engine should be able to call it — add its JSON schema to `core/chat/tool_schemas.py:TOOL_SCHEMAS` (names must match).
+**To add a new agent tool:** implement the function, call `registry.register(...)` in `agent/tools/registry.py:build_registry()`, and — if the chat engine should be able to call it — add its JSON schema to `core/chat/tool_schemas.py:TOOL_SCHEMAS` (names must match). **If the tool is risky** (writes, deletes, external calls), add it to `security/permissions.py`'s `TOOL_RISK_ACTIONS` (§8) — one line per tool, the established pattern for every risky tool added so far.
 
-### 3. Core Business Logic (`core/`)
+### 4. Providers (`providers/`)
+`BaseProvider` — uniform interface over Ollama (local, default), Claude, OpenAI, Gemini. Each exposes a `base_url` property, used by `security/endpoint_policy.py` (§8) to classify internal vs. external for PII redaction — **classify by the provider's actual configured endpoint, not by name**; `OLLAMA_BASE_URL` is not automatically internal (it points at a WSL virtual-network IP in Docker Compose, or an arbitrary k8s hostname) so "provider is ollama" was a real bug fixed in Fase 1, not a hypothetical. Circuit breaker (Closed→Open→Half-Open) per provider with automatic fallback.
+
+### 5. Memory System (`memory/`)
+6 tiers coordinated by `memory_manager.py`: `working_memory.py`, `conversation_memory.py`, `summary_memory.py`, `long_term_memory.py`, `reflection_memory.py`, `vector_memory.py` (pgvector-backed). Exposed via `/api/v1/memory/*`. **Not connected to `core/chat/engine.py` today** — the Chat Engine never calls `memory_manager.py`, so the Memory UI page is empty until that integration is built (Fase 3 of the v5 evolution roadmap). Don't assume chat sessions get any cross-session memory benefit from this system as it stands.
+
+### 6. RAG & Knowledge (`rag/`)
+Chunk → embed → store → retrieve → hybrid → rerank → context, exposed via `/api/v1/knowledge/*`. Ingest today is **paste-text only** — no file upload or OCR yet — and the embedder is `hashed_bow_embedder` (offline hash-based, not a production embedding model).
+
+### 7. Workspace (`workspace/`)
+Index & scan local folders for agent/RAG use, exposed via `/api/v1/workspace/*`; reading is also available via `agent/tools/workspace_reader.py`. **Scope today is index-and-read only.** A separate path, `agent/tools/writers.py`, does controlled writes but only for a different use case (template-bound document generation, §6 in "Document Generation" below) — general-purpose controlled write/edit with versioning, rollback, and approval has not been verified to exist as a unified capability. Don't wire free-form file writes into arbitrary user folders without checking/building this first (tracked as Fase 4 of the v5 evolution roadmap, gated on the security matrix in §8).
+
+### 8. Security (`security/`)
+- `auth.py` — `get_current_principal`, API-key principal lookup (`API_KEYS`: comma-separated `key` or `key:role`).
+- `permissions.py` — static role→permission RBAC matrix + `TOOL_RISK_ACTIONS` (per-tool risk classification; extend this — one line — when adding a risky tool, see §3).
+- `endpoint_policy.py` — `is_internal_endpoint(url)`: loopback / RFC1918 / `.local` / `.internal` / `.svc.cluster.local` = internal, everything else (including blank) = external, fail-closed.
+- `prompt_guard.py` / `output_validator.py` / `pii_detector.py` — wired into all three agent paths from §1 as of Fase 1. Behavior differs by path because of streaming: `agents/generic_agent.py` and `agent/core.py` (§3) can block outright on suspicious input and redact PII from output before it's ever returned, since nothing has reached the caller yet. `core/chat/engine.py` (§9) neutralizes-and-continues on input instead of blocking — a live conversation must not go silent on a false positive — and can only detect-and-flag the output after the fact (SSE has already streamed every token by the time the full response is checked), surfaced as a `warning` SSE event, not silently swallowed.
+- `audit_log.py` — append-only, hash-chained (`prev_hash`/`entry_hash`, SHA-256, survives rotation via a synthetic marker entry) with size-based rotation (`AUDIT_LOG_MAX_BYTES`/`AUDIT_LOG_BACKUP_COUNT`). Verify integrity independently with `python3 scripts/verify_audit_log.py` — don't trust the log's own contents as proof of its own integrity.
+- `startup_validation.py` — `enforce_production_config()`, called from `api/main.py`'s `lifespan`; refuses to start with blank/example/weak credentials when `APP_ENV=production` (no-op otherwise — this deployment currently runs `APP_ENV=development` with loopback-only network binding as the actual isolation mechanism, a deliberate choice, not a gap).
+- **Not verified to exist**: a dedicated sandbox for tool-calling/code execution, and a complete AUTONOMOUS/SHARED/HUMAN-ONLY risk matrix for file operations beyond what `TOOL_RISK_ACTIONS` covers today. Don't enable free-form code execution or unrestricted file writes without checking/building these first.
+
+### 9. Chat Engine (`core/chat/`) — the primary feature
+A ChatGPT-style conversational layer that lets the user read/create/convert files by chatting with the local Gemma model.
+- `core/chat/engine.py` — `ChatEngine` runs a streaming tool-calling loop against Ollama `/api/chat` (native function calling). Per turn it: runs `security.prompt_guard`/PII redaction on the input (§8), auto-reads uploaded text files into context, attaches uploaded images as vision input (base64 `images`), streams assistant tokens, and when the model emits `tool_calls` executes them via the shared `ToolRegistry`, feeds results back, and loops (`MAX_TOOL_ROUNDS`). Tools that produce a file (`result["file"]`) surface as downloadable cards. Runs `security.output_validator` on the full accumulated response just before the terminal event (§8). A small deterministic `_fallback` handles GIS conversions if a tiny model ignores tools. Sessions are in-memory (`chat_engine.sessions`, plain dict — no `TaskStore`/`RedisTaskStore`-style abstraction like `task_manager.py` has); swap to Redis later if persistence or horizontal scaling is needed.
+- `core/chat/tool_schemas.py` — `TOOL_SCHEMAS`: the curated JSON-schema list of tools exposed to the model. **Names must match registry names.** This is the file to edit when you want the chat to call a new tool.
+- `api/routes/chat.py` — `/api/v1/chat/{stream,upload,download,sessions,models}`. `stream` returns Server-Sent Events; each `data:` line is one engine event (`token`/`tool_start`/`tool_result`/`file`/`warning`/`error`/`done`).
+- `web/src/pages/chat/` — React chat page (part of the full `web/src/` SPA, §12), parses the SSE stream, renders markdown + tool chips + file cards + warning toasts, handles drag-drop upload + model selector.
+
+Files flow: uploads → `uploads/`, generated outputs → `reports/` (downloaded via `/api/v1/chat/download/{filename}`). Path arguments from the model are resolved against `uploads/` then `reports/` by `ChatEngine.resolve_path`, which is what makes multi-step chains (e.g. resize → convert) work.
+
+### 10. Telemetry (`telemetry/`) & Messaging (`messaging/`)
+`telemetry/` — tracing, metrics, cost tracking; 8 dashboards via `/api/v1/monitoring/*`. Read-only observability by design — must not influence execution decisions. `messaging/` — message bus / event bus / task queue abstraction (`InMemory` or Redis broker); `security/audit_log.record()` also publishes a `security.<event_type>` event here, which `telemetry.tracing.Tracer` folds into a request's Execution Timeline.
+
+### 11. MCP (`mcp_client/`, `mcp_server/`), Plugins (`plugins/`) & Automation (`scheduler/`)
+`mcp_client/` calls tools on external MCP servers. `mcp_server/` exposes this repo's Workspace as an MCP server (stdio-only) for external clients like Claude Desktop — one process serves one Workspace + one fixed role today. `plugins/` + `registry/plugin_registry.py` — additional tool categories via the same tool-calling path (one real example so far: `weather`); state is in-memory, not persisted. `scheduler/` — scheduled triggers, exposed via `/api/v1/automation/*`.
+
+### 12. Core Business Logic (`core/`)
 - `core/ai/gemma_client.py` — async Ollama HTTP client with retry (tenacity), streaming, SHA-256 cache key, and Redis caching via `core/ai/cache.py`
 - `core/gis/processor.py` — KML parsing (lxml), polygon area/centroid/bbox (shapely + pyproj WGS-84)
 - `core/utils/logger.py` — structlog JSON logger; use `get_logger(__name__)` everywhere
 
-### 4. Background Workers (`worker/`)
+### 13. Background Workers (`worker/`)
 RQ workers consume separate queues (names in `api/config.py`: `ai_queue`, `gis_queue`, `pipeline_queue`):
 - `worker/ai/worker_ai.py` → `ai_queue`
 - `worker/gis/worker_gis.py` → `gis_queue`
@@ -85,38 +148,34 @@ RQ workers consume separate queues (names in `api/config.py`: `ai_queue`, `gis_q
 
 Job functions live in `jobs_*.py` files and are enqueued via `api/routes/pipeline.py`. **Note:** `docker-compose.yml` only starts `worker_ai` and `worker_gis` — there is no dedicated `worker_pipeline` service, so pipeline jobs are processed by whatever worker is run against `pipeline_queue`.
 
-### 5. Database (`db/`)
-PostgreSQL 16 + PostGIS via SQLAlchemy async (`asyncpg`). `db/connection.py` exposes `get_session()` as a FastAPI dependency. `db/models.py` defines `AIJob`, `GISProject`, `Document`. Tables are auto-created on startup via `init_db()`. No Alembic migrations are currently in use — schema changes require manual migration or `init_db()` re-run.
+### 14. Database (`db/`)
+PostgreSQL 16 + PostGIS via SQLAlchemy async (`asyncpg`). `db/connection.py` exposes `get_session()` as a FastAPI dependency. `db/models.py` defines `AIJob`, `GISProject`, `Document`, `Project`, `ScheduledJob`, and others. `Project`/`ScheduledJob` carry a nullable, indexed `tenant_id` (v5 forward-compatibility groundwork — unused by any current code path, always `NULL` today, not a live multi-tenant feature). Tables are auto-created on startup via `init_db()`. No Alembic migrations are currently in use — schema changes require manual migration or `init_db()` re-run.
 
-### 6. Document Generation (`core/document/` + `templates/`)
-Generates formal Indonesian mining documents (PDF/DOCX) served under `/api/dokumen/*`. The route handler (`api/routes/dokumen.py`) calls factory functions in `core/document/generator.py` (`generate_laporan_wilayah`, `generate_laporan_produksi`, `generate_dokumen_wiup`), which in turn render via the ReportLab-based builders in `templates/` (`laporan_wilayah.py`, `laporan_produksi.py`, `dokumen_wiup.py`). `enrich_with_ai()` in the generator adds LLM-written narrative. Commodity metadata is keyed off `templates/dokumen_wiup.py:KOMODITAS_INFO`.
+### 15. Document Generation (`core/document/` + `templates/`)
+Generates formal Indonesian mining documents (PDF/DOCX) served under `/api/dokumen/*`. The route handler (`api/routes/dokumen.py`) calls factory functions in `core/document/generator.py` (`generate_laporan_wilayah`, `generate_laporan_produksi`, `generate_dokumen_wiup`), which in turn render via the ReportLab-based builders in `templates/` (`laporan_wilayah.py`, `laporan_produksi.py`, `dokumen_wiup.py`). `enrich_with_ai()` in the generator adds LLM-written narrative. Commodity metadata is keyed off `templates/dokumen_wiup.py:KOMODITAS_INFO`. This and `core/gis/` are candidates for extraction into a "domain skill" (vs. core-engine code) if/when the platform generalizes beyond mining/GIS — see the v5 evolution blueprint.
 
 **To add a new document type:** add a builder in `templates/`, a `generate_*` factory in `core/document/generator.py`, and a route in `api/routes/dokumen.py`.
 
-### 7. Chat Engine (`core/chat/`) — the primary feature
-A ChatGPT-style conversational layer that lets the user read/create/convert files by chatting with the local Gemma model.
-- `core/chat/engine.py` — `ChatEngine` runs a streaming tool-calling loop against Ollama `/api/chat` (native function calling). Per turn it: auto-reads uploaded text files into context, attaches uploaded images as vision input (base64 `images`), streams assistant tokens, and when the model emits `tool_calls` it executes them via the shared `ToolRegistry`, feeds results back, and loops (`MAX_TOOL_ROUNDS`). Tools that produce a file (`result["file"]`) surface as downloadable cards. A small deterministic `_fallback` handles GIS conversions if a tiny model ignores tools. Sessions are in-memory (`chat_engine.sessions`); swap to Redis later if persistence is needed.
-- `core/chat/tool_schemas.py` — `TOOL_SCHEMAS`: the curated JSON-schema list of tools exposed to the model. **Names must match registry names.** This is the file to edit when you want the chat to call a new tool.
-- `api/routes/chat.py` — `/api/v1/chat/{stream,upload,download,sessions,models}`. `stream` returns Server-Sent Events; each `data:` line is one engine event (`token`/`tool_start`/`tool_result`/`file`/`error`/`done`).
-- `web/` — vanilla-JS UI (no build step): `index.html`, `app.js` (parses the SSE stream, renders markdown + tool chips + file cards, handles drag-drop upload + model selector), `style.css`. Served at `/`.
-
-Files flow: uploads → `uploads/`, generated outputs → `reports/` (downloaded via `/api/v1/chat/download/{filename}`). Path arguments from the model are resolved against `uploads/` then `reports/` by `ChatEngine.resolve_path`, which is what makes multi-step chains (e.g. resize → convert) work.
-
 ## Deployment
 
-Two active deployment modes:
+Three active deployment modes:
 | Mode | Port | How |
 |---|---|---|
 | Docker Compose | 8000 | `docker compose up -d` |
 | systemd (WSL) | 8001 | `ai-engine.service` auto-starts on boot |
+| Kubernetes | — | `kubectl apply -k k8s/base` (+ overlay `production`); Kustomize base + overlay, verified live in local `kind` |
+
+Postgres/Redis/API/RQ-dashboard ports are bound to `127.0.0.1` only in `docker-compose.yml` (loopback-only network isolation, not to be removed casually — see §8 Security).
 
 Ollama runs on the host at `http://172.29.239.93:11434` (WSL host IP). The default model is `gemma4:e2b` (7.2 GB, fast). `gemma4:26b` is available for formal reports.
 
 Output files go to `reports/`, uploaded files land in `uploads/`. Both are volume-mounted in Docker.
 
-## Key Configuration (`.env`)
+## Key Configuration (`.env` + `config/*.yaml`)
+Most `Settings` field defaults now live in `config/*.yaml` (Configuration Center, versioned); `.env` stays for secrets and per-deployment overrides.
 - `OLLAMA_BASE_URL` — point to Ollama instance (host or Azure VM)
 - `GEMMA_MODEL` — active model (`gemma4:e2b` default)
 - `DATABASE_URL` — asyncpg connection string
-- `REDIS_URL` — broker + cache
+- `REDIS_URL` / `REDIS_PASSWORD` — broker + cache; `REDIS_PASSWORD` is required by `docker-compose.yml` (`redis --requirepass`), generate a real value, don't leave it as the placeholder
+- `API_KEYS` — comma-separated `key` or `key:role` for `security.auth.get_current_principal`; blank (dev default) means every checked route treats the caller as admin — see CLAUDE.md Architecture §1/§8
 - `AI_CACHE_TTL` / `GIS_CACHE_TTL` — Redis TTLs for AI and GIS responses
