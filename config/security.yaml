@@ -16,8 +16,11 @@ PROMPT_GUARD_BLOCK_THRESHOLD: 0.8
 ENABLE_PII_REDACTION: true
 ENABLE_OUTPUT_VALIDATION: true
 
-# Append-only audit trail (Bab 30).
+# Append-only audit trail (Bab 30). Rotation (SEC-8, Fase 1): rotate before
+# the file exceeds AUDIT_LOG_MAX_BYTES, keep AUDIT_LOG_BACKUP_COUNT backups.
 AUDIT_LOG_PATH: "security_audit.log"
+AUDIT_LOG_MAX_BYTES: 10000000
+AUDIT_LOG_BACKUP_COUNT: 5
 
 # Rate limiting
 RATE_LIMIT_PER_MINUTE: 60

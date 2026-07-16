@@ -16,6 +16,10 @@ htmlcov/
 # --- Runtime data / output ---
 audit.log
 *.log
+# Rotation backups (security_audit.log.1, .2, ...) and the flock lock file
+# (Fase 1 / SEC-8, security/audit_log.py) — *.log above doesn't match these
+# since the .log suffix isn't at the end.
+security_audit.log.*
 backups/
 uploads/
 reports/

@@ -168,6 +168,12 @@ class Settings(BaseSettings):
     # Append-only audit trail (Bab 30 — distinct from the plain-text `audit.log`
     # this deployment's systemd unit already uses for general stdout capture).
     AUDIT_LOG_PATH: str = "security_audit.log"
+    # Fase 1 (SEC-8, DCF_SECURITY_AUDIT_2026-07-11.md temuan #8): rotate
+    # before the file grows past this size, keep this many numbered backups
+    # (security_audit.log.1 .. .N). Hash-chain continuity is preserved
+    # across rotation — see security/audit_log.py.
+    AUDIT_LOG_MAX_BYTES: int = 10_000_000
+    AUDIT_LOG_BACKUP_COUNT: int = 5
     # Comma-separated valid API keys for security.auth's principal lookup;
     # blank disables the dependency (dev default — matches no existing route
     # requiring auth today, Bab 45 no-big-rewrite).
