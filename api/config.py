@@ -179,6 +179,43 @@ class Settings(BaseSettings):
     # requiring auth today, Bab 45 no-big-rewrite).
     API_KEYS: str = ""
 
+    # Continuous Improvement Engine (Fase 7, DCF v5 mandate) — see
+    # improvement/engine.py. Analysis (read-only) always runs when the
+    # scheduler tick fires; AUTO-APPLYING a recommendation (writing
+    # config/agents.yaml + a git commit) is gated separately and defaults to
+    # OFF — Owner approved building the full analyze->apply->auto-revert
+    # loop (Fase 7 design decision), but flipping this to True is a further,
+    # separate, even more consequential decision for this specific
+    # deployment/repo, not something to default on quietly.
+    ENABLE_AUTONOMOUS_IMPROVEMENT: bool = False
+    IMPROVEMENT_LEDGER_PATH: str = "improvement_ledger.log"
+    # Minimum observations before a recommendation is even considered —
+    # guards against adjusting anything off statistical noise.
+    IMPROVEMENT_MIN_SAMPLES: int = 30
+    # Escalate/error rate band the engine treats as "healthy" — outside
+    # this band (with enough samples) is what triggers a recommendation.
+    IMPROVEMENT_ESCALATE_RATE_HIGH: float = 0.3
+    IMPROVEMENT_ESCALATE_RATE_LOW: float = 0.02
+    # Bounded step + hard bounds for the one whitelisted auto-adjustable
+    # setting (CONFIDENCE_THRESHOLD_DEFAULT) — see
+    # improvement/apply.py::WHITELISTED_SETTINGS. Never applied outside
+    # [MIN, MAX] regardless of what the analysis suggests.
+    IMPROVEMENT_CONFIDENCE_STEP: float = 0.05
+    IMPROVEMENT_CONFIDENCE_MIN: float = 0.4
+    IMPROVEMENT_CONFIDENCE_MAX: float = 0.9
+    # How long to wait after applying a change before review_pending_actions()
+    # checks whether it helped or hurt and decides keep-vs-revert.
+    IMPROVEMENT_REVIEW_WINDOW_SECONDS: int = 86_400
+    # None (default) = the real repo root (improvement/apply.py resolves it
+    # from its own file location) — tests override this to a disposable
+    # temp git repo so an applied/reverted change can never touch the real
+    # ai_engine repository.
+    IMPROVEMENT_REPO_PATH: Optional[str] = None
+    # This is aggregate-trend analysis, not a fast user-facing tick like
+    # SCHEDULER_TICK_SECONDS (30s) — hourly is plenty to accumulate enough
+    # samples for IMPROVEMENT_MIN_SAMPLES to mean anything.
+    IMPROVEMENT_TICK_SECONDS: int = 3_600
+
     # Automation / Scheduler (Bab 68 Prioritas 5) — in-process tick loop, not
     # a separate worker process; disable for tests/environments that don't
     # want background workflow runs firing on their own.
@@ -257,6 +294,7 @@ class Settings(BaseSettings):
             CONFIG_DIR / "memory.yaml",
             CONFIG_DIR / "budget.yaml",
             CONFIG_DIR / "domain_skills.yaml",
+            CONFIG_DIR / "improvement.yaml",
         ],
     )
 

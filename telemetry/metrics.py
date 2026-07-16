@@ -144,6 +144,16 @@ class MetricsCollector:
             if (total := outcomes.get("agent.completed", 0) + outcomes.get("agent.failed", 0)) > 0
         }
 
+    def total_dispatches_by_role(self) -> dict[str, int]:
+        """Per-role terminal-dispatch count (Fase 7, Continuous Improvement
+        Engine — needs the sample size behind `error_rate_by_role()`'s
+        ratios before treating one as statistically meaningful, not just
+        the rate itself)."""
+        return {
+            role: outcomes.get("agent.completed", 0) + outcomes.get("agent.failed", 0)
+            for role, outcomes in self._role_outcomes.items()
+        }
+
     def success_rate(self) -> float:
         """Fraction of terminal workflows that completed, vs failed/cancelled (Bab 34 — Success
         Rate). Approximation: doesn't distinguish "completed after Human Approval" from

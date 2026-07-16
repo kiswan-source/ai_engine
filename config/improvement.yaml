@@ -1,0 +1,17 @@
+# Configuration Center (Bab 68 Backlog Prioritas 7) — Continuous Improvement
+# Engine (Fase 7, DCF v5 mandate). NO SECRETS HERE. See api/config.py for the
+# authoritative field list.
+
+# Auto-apply (write config/agents.yaml + git commit) stays OFF by default —
+# Owner approved building the full analyze->apply->auto-revert loop, but
+# turning it on for a real deployment/repo is a separate decision.
+ENABLE_AUTONOMOUS_IMPROVEMENT: false
+IMPROVEMENT_LEDGER_PATH: "improvement_ledger.log"
+IMPROVEMENT_MIN_SAMPLES: 30
+IMPROVEMENT_ESCALATE_RATE_HIGH: 0.3
+IMPROVEMENT_ESCALATE_RATE_LOW: 0.02
+IMPROVEMENT_CONFIDENCE_STEP: 0.05
+IMPROVEMENT_CONFIDENCE_MIN: 0.4
+IMPROVEMENT_CONFIDENCE_MAX: 0.9
+IMPROVEMENT_REVIEW_WINDOW_SECONDS: 86400
+IMPROVEMENT_TICK_SECONDS: 3600

@@ -48,6 +48,17 @@ async def test_agent_completed_records_latency_and_counts(bus):
     assert p["p50"] >= 0.0
 
 
+async def test_total_dispatches_by_role_counts_completed_and_failed(bus):
+    m = MetricsCollector(event_bus=bus)
+    await m.start()
+
+    await bus.emit("agent.completed", source="a", trace_id="t1", payload={"task_id": "1", "role": "writer"})
+    await bus.emit("agent.completed", source="a", trace_id="t2", payload={"task_id": "2", "role": "writer"})
+    await bus.emit("agent.failed", source="a", trace_id="t3", payload={"task_id": "3", "role": "writer"})
+
+    assert m.total_dispatches_by_role()["writer"] == 3
+
+
 async def test_agent_failed_increments_error_rate(bus):
     m = MetricsCollector(event_bus=bus)
     await m.start()

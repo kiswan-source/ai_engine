@@ -11,6 +11,14 @@ def _isolated_audit_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_improvement_ledger(tmp_path, monkeypatch):
+    """Same isolation as audit_log above, for the Continuous Improvement
+    Engine's ledger (Fase 7) — never the real IMPROVEMENT_LEDGER_PATH in
+    the repo root."""
+    monkeypatch.setattr("api.config.settings.IMPROVEMENT_LEDGER_PATH", str(tmp_path / "improvement_ledger.log"))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_circuit_breakers(monkeypatch):
     """Fresh default breaker registry per test (Tahap 9) — any Dispatcher built
     without an explicit registry shares the module-level one, so provider

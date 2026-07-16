@@ -28,8 +28,17 @@ from api.routes import projects as projects_router
 from api.routes import automation as automation_router
 from api.routes import plugins as plugins_router
 from api.routes import workspace as workspace_router
+from improvement.scheduler import ImprovementScheduler
 
 logger = get_logger(__name__)
+
+# Fase 7 (DCF v5 mandate, Continuous Improvement Engine) — module-level
+# singleton, same pattern as automation_router._scheduler above. Always
+# started: analysis is read-only/safe (same "telemetry has no on/off
+# switch" reasoning CLAUDE.md §10 already applies) — only the separate
+# ENABLE_AUTONOMOUS_IMPROVEMENT flag (default off) gates whether a tick
+# ever actually writes a config change.
+_improvement_scheduler = ImprovementScheduler()
 
 
 @asynccontextmanager
@@ -44,10 +53,12 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Database connected")
     if settings.ENABLE_SCHEDULER:
         await automation_router._scheduler.start()
+    await _improvement_scheduler.start()
     yield
     logger.info("🛑 AI Engine shutting down…")
     if settings.ENABLE_SCHEDULER:
         await automation_router._scheduler.stop()
+    await _improvement_scheduler.stop()
     await close_db()
 
 

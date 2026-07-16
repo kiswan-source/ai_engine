@@ -251,6 +251,36 @@ def audit_dashboard(limit: int = 500) -> dict:
     }
 
 
+def improvement_dashboard(limit: int = 200) -> dict:
+    """Fase 7 (DCF v5 mandate, Continuous Improvement Engine) dashboard —
+    every recommendation the engine has detected, and every applied
+    action's outcome (pending/kept/reverted), sourced from
+    ``improvement/ledger.py``'s hash-chained trail (same "one source of
+    truth, don't reconstruct it differently here" principle
+    :func:`audit_dashboard` already follows for `security/audit_log.py`).
+    """
+    from dataclasses import asdict
+
+    from improvement import ledger
+
+    entries = ledger.read_recent(limit)
+    recommendations = [e.payload for e in entries if e.record_type == "recommendation"]
+    applied = [e.payload for e in entries if e.record_type == "action_applied"]
+    reviewed = [e.payload for e in entries if e.record_type == "action_reviewed"]
+    pending = [asdict(a) for a in ledger.pending_actions()]
+    chain_ok, chain_problems = ledger.verify_chain()
+    return {
+        "total_recommendations": len(recommendations),
+        "total_actions_applied": len(applied),
+        "total_actions_reviewed": len(reviewed),
+        "pending_review": pending,
+        "recent_recommendations": recommendations[-20:],
+        "recent_actions_reviewed": reviewed[-20:],
+        "ledger_integrity_ok": chain_ok,
+        "ledger_integrity_problems": chain_problems,
+    }
+
+
 async def queue_dashboard(queue_names: tuple[str, ...] = ("ai_queue", "gis_queue", "pipeline_queue")) -> dict:
     """Bab 62 Queue Dashboard: RQ (legacy pipeline) + TaskQueue (v4-native) lengths.
 

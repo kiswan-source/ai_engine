@@ -52,7 +52,8 @@ async def dashboard(
 ):
     """Bab 62 dashboards — Agent, Workflow, Provider, Cost, Latency, Health,
     Queue, Workspace (Bab 69.14, Tahap 19; Memory excluded, see module docstring),
-    plus Security/Audit (Bab 68 Backlog Prioritas 13, Tahap 34)."""
+    Security/Audit (Bab 68 Backlog Prioritas 13, Tahap 34), plus Improvement
+    (Fase 7, DCF v5 mandate Continuous Improvement Engine)."""
     await _orchestrator._ensure_telemetry_started()
     return {
         "agent": monitoring.agent_dashboard(_orchestrator.agents, _orchestrator.metrics),
@@ -65,6 +66,7 @@ async def dashboard(
         "workspace": await monitoring.workspace_dashboard(session),
         "security": monitoring.security_dashboard(),
         "audit": monitoring.audit_dashboard(),
+        "improvement": monitoring.improvement_dashboard(),
     }
 
 

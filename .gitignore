@@ -20,6 +20,9 @@ audit.log
 # (Fase 1 / SEC-8, security/audit_log.py) — *.log above doesn't match these
 # since the .log suffix isn't at the end.
 security_audit.log.*
+# Flock lock file for the Continuous Improvement Engine's ledger (Fase 7,
+# improvement/ledger.py) — same reasoning as security_audit.log.* above.
+improvement_ledger.log.lock
 backups/
 uploads/
 reports/
