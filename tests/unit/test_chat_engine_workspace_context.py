@@ -113,6 +113,17 @@ async def test_run_tool_returns_not_connected_error_without_workspace_id(engine)
     assert "belum terhubung" in result["error"].lower()
 
 
+async def test_run_tool_injects_workspace_id_for_find_file(engine):
+    registry = _echo_registry()
+    registry.register("workspace_find_file", lambda **kw: {"success": True, "received_args": kw}, "fake")
+    result = await engine._run_tool(
+        registry, "workspace_find_file", {"filename": "x"}, role=None, workspace_id="real-ws-id"
+    )
+    assert result["received_args"]["workspace_id"] == "real-ws-id"
+    # Read-only — no actor stamped, unlike the mutating tools below.
+    assert "actor" not in result["received_args"]
+
+
 async def test_run_tool_leaves_unrelated_tools_untouched(engine):
     registry = ToolRegistry()
     registry.register("write_txt", lambda **kw: {"success": True, "received_args": kw}, "fake")
@@ -168,6 +179,55 @@ async def test_run_tool_allows_write_for_editor_role(engine):
         role=None, workspace_id="real-ws-id", workspace_role="editor",
     )
     assert result["success"] is True
+
+
+# ─── Fase 8 Slice 1: same write_output gate extended to create/move/copy ───
+
+def _mutating_echo_registry(tool_name: str) -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(tool_name, lambda **kwargs: {"success": True, "received_args": kwargs}, "fake")
+    return reg
+
+
+@pytest.mark.parametrize("tool_name", ["workspace_create_folder", "workspace_move_file", "workspace_copy_file"])
+async def test_run_tool_denies_mutating_workspace_tools_for_viewer_role(engine, tool_name):
+    registry = _mutating_echo_registry(tool_name)
+    result = await engine._run_tool(
+        registry, tool_name, {"folder_id": "f1", "relative_path": "a"},
+        role=None, workspace_id="real-ws-id", workspace_role="viewer",
+    )
+    assert result["success"] is False
+    assert "akses ditolak" in result["error"].lower()
+
+
+@pytest.mark.parametrize("tool_name", ["workspace_create_folder", "workspace_move_file", "workspace_copy_file"])
+async def test_run_tool_allows_mutating_workspace_tools_for_owner_role(engine, tool_name):
+    registry = _mutating_echo_registry(tool_name)
+    result = await engine._run_tool(
+        registry, tool_name, {"folder_id": "f1", "relative_path": "a"},
+        role=None, workspace_id="real-ws-id", workspace_role="owner", owner="alice",
+    )
+    assert result["success"] is True
+    assert result["received_args"]["actor"] == "alice"
+    assert result["received_args"]["workspace_id"] == "real-ws-id"
+
+
+# ─── Fase 8 Slice 1: Chat Decision Flow prompt injection ───────────────────
+
+def test_build_user_message_injects_decision_flow_note_when_workspace_bound(engine):
+    from core.chat.engine import Session, WORKSPACE_DECISION_FLOW_NOTE
+
+    session = Session("s1", workspace_id="ws-1")
+    msg = engine._build_user_message(session, "ringkas file laporan.pdf", [])
+    assert WORKSPACE_DECISION_FLOW_NOTE in msg["content"]
+
+
+def test_build_user_message_omits_decision_flow_note_without_workspace(engine):
+    from core.chat.engine import Session, WORKSPACE_DECISION_FLOW_NOTE
+
+    session = Session("s1")
+    msg = engine._build_user_message(session, "halo", [])
+    assert WORKSPACE_DECISION_FLOW_NOTE not in msg["content"]
 
 
 # ─── stream_run integration (binding persistence across messages) ──────

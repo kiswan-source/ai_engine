@@ -99,3 +99,80 @@ def test_adapter_list_tree_returns_relative_posix_paths(workspace_root):
     paths = {f.relative_path for f in adapter.list_tree()}
     assert "docs/report.txt" in paths
     assert "images/site.png" in paths
+
+
+# ─── CRUD additions (Fase 8, DCF v5 mandate "Workspace Native File Access") ──
+
+def test_adapter_exists(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    assert adapter.exists("docs/report.txt") is True
+    assert adapter.exists("docs/missing.txt") is False
+
+
+def test_adapter_make_dir_creates_nested_folder(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.make_dir("new/nested/folder")
+    assert (workspace_root / "new" / "nested" / "folder").is_dir()
+
+
+def test_adapter_make_dir_is_idempotent(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.make_dir("docs")  # already exists — must not raise
+    assert (workspace_root / "docs").is_dir()
+
+
+def test_adapter_make_dir_rejects_root_escape(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(PathEscapesRootError):
+        adapter.make_dir("../escape")
+
+
+def test_adapter_move_renames_file(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.move("docs/report.txt", "docs/renamed.txt")
+    assert not (workspace_root / "docs" / "report.txt").exists()
+    assert (workspace_root / "docs" / "renamed.txt").read_text() == "mining feasibility study"
+
+
+def test_adapter_move_to_different_folder(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.move("docs/report.txt", "images/report.txt")
+    assert (workspace_root / "images" / "report.txt").exists()
+
+
+def test_adapter_move_missing_source_raises(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(FileNotFoundError):
+        adapter.move("docs/does-not-exist.txt", "docs/x.txt")
+
+
+def test_adapter_move_rejects_root_escape_on_either_side(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(PathEscapesRootError):
+        adapter.move("docs/report.txt", "../outside.txt")
+    with pytest.raises(PathEscapesRootError):
+        adapter.move("../outside.txt", "docs/x.txt")
+
+
+def test_adapter_copy_leaves_source_in_place(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.copy("docs/report.txt", "docs/copy.txt")
+    assert (workspace_root / "docs" / "report.txt").exists()
+    assert (workspace_root / "docs" / "copy.txt").read_text() == "mining feasibility study"
+
+
+def test_adapter_copy_missing_source_raises(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(FileNotFoundError):
+        adapter.copy("docs/does-not-exist.txt", "docs/x.txt")
+
+
+def test_adapter_search_matches_by_substring_case_insensitive(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    results = {f.relative_path for f in adapter.search("REPORT")}
+    assert results == {"docs/report.txt"}
+
+
+def test_adapter_search_no_match_returns_empty_list(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    assert adapter.search("nonexistent-name") == []

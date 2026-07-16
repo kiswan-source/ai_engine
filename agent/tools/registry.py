@@ -141,7 +141,15 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     # Agent Workspace Context (Bab 69.5, Tahap 23) — workspace_id is always
     # injected by ChatEngine._run_tool from the session's authorized
     # Workspace, never taken from the model's own arguments.
-    from agent.tools.workspace_reader import workspace_list_files, workspace_read_file, workspace_write_file
+    from agent.tools.workspace_reader import (
+        workspace_copy_file,
+        workspace_create_folder,
+        workspace_find_file,
+        workspace_list_files,
+        workspace_move_file,
+        workspace_read_file,
+        workspace_write_file,
+    )
     registry.register("workspace_list_files", workspace_list_files,
         "Daftar semua file di Project Workspace yang terhubung ke sesi ini. Input: {}")
     registry.register("workspace_read_file", workspace_read_file,
@@ -151,6 +159,20 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     # also checks the write_output permission before this ever runs.
     registry.register("workspace_write_file", workspace_write_file,
         "Buat/timpa/tambah satu file teks di Project Workspace. Input: {folder_id, relative_path, content, mode}")
+    # Fase 8 (DCF v5 mandate "Workspace Native File Access", Slice 1) — Smart
+    # Search is read-only (no write_output check, same posture as
+    # workspace_list_files/workspace_read_file); create/move/copy are
+    # mutations gated on write_output the same as workspace_write_file.
+    registry.register("workspace_find_file", workspace_find_file,
+        "Cari file berdasarkan nama (Smart Search) di seluruh folder Project Workspace. Input: {filename}")
+    registry.register("workspace_create_folder", workspace_create_folder,
+        "Buat folder baru di dalam Project Workspace. Input: {folder_id, relative_path}")
+    registry.register("workspace_move_file", workspace_move_file,
+        "Pindahkan atau ganti nama satu file/folder di dalam Project Workspace. "
+        "Input: {folder_id, src_relative_path, dst_relative_path, overwrite?}")
+    registry.register("workspace_copy_file", workspace_copy_file,
+        "Salin satu file/folder di dalam Project Workspace ke path lain. "
+        "Input: {folder_id, src_relative_path, dst_relative_path, overwrite?}")
 
     # Cross-session memory (Fase 3, DCF v5 mandate) — owner is always
     # injected by ChatEngine._run_tool, never taken from the model. See

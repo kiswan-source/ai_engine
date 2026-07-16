@@ -12,10 +12,17 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from agent.tools.workspace_reader import (
+    _create_folder,
+    _find_file,
     _list_files,
+    _move_or_copy,
     _read_file,
     _write_file,
+    workspace_copy_file,
+    workspace_create_folder,
+    workspace_find_file,
     workspace_list_files,
+    workspace_move_file,
     workspace_read_file,
     workspace_write_file,
 )
@@ -295,6 +302,228 @@ async def test_read_file_rejects_non_local_source_type(sqlite_session_factory, t
 
     assert result["success"] is False
     assert "belum didukung" in result["error"]
+
+
+# ─── Fase 8 (DCF v5 mandate "Workspace Native File Access"), Slice 1 ────────
+# Smart Search + create-folder/move/copy — reversible ops only; delete is a
+# separate, later Slice (Owner decision: two-step confirmation token).
+
+async def test_find_file_matches_across_multiple_folders(sqlite_session_factory, tmp_path):
+    import uuid
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "Kesimpulan_Tiga_Framework.pdf").write_bytes(b"%PDF-fake")
+    (root_b / "other.txt").write_text("x")
+    project_id = f"p-{uuid.uuid4().hex}"
+    workspace_id, _ = await _seed(sqlite_session_factory, root_a, project_id=project_id)
+    async with sqlite_session_factory() as session:
+        folder_b = WorkspaceFolder(workspace_id=workspace_id, source_type="Local", path=str(root_b), alias="B")
+        session.add(folder_b)
+        await session.commit()
+
+    result = await _find_file(workspace_id, "Kesimpulan_Tiga_Framework", session_factory=sqlite_session_factory)
+
+    assert result["success"] is True
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["relative_path"] == "Kesimpulan_Tiga_Framework.pdf"
+    assert len(result["searched_folders"]) == 2
+
+
+async def test_find_file_no_match_still_succeeds_with_empty_matches(sqlite_session_factory, tmp_path):
+    workspace_id, _ = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _find_file(workspace_id, "does-not-exist", session_factory=sqlite_session_factory)
+
+    assert result["success"] is True
+    assert result["matches"] == []
+
+
+async def test_create_folder_creates_nested_directory(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _create_folder(workspace_id, folder_id, "Legal/2026", session_factory=sqlite_session_factory)
+
+    assert result["success"] is True
+    assert (tmp_path / "Legal" / "2026").is_dir()
+
+
+async def test_create_folder_rejects_path_traversal(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _create_folder(workspace_id, folder_id, "../escape", session_factory=sqlite_session_factory)
+
+    assert result["success"] is False
+
+
+async def test_move_renames_file(sqlite_session_factory, tmp_path):
+    (tmp_path / "old.txt").write_text("isi")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "old.txt", "new.txt", op="move", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert not (tmp_path / "old.txt").exists()
+    assert (tmp_path / "new.txt").read_text() == "isi"
+
+
+async def test_move_refuses_existing_destination_without_overwrite(sqlite_session_factory, tmp_path):
+    (tmp_path / "src.txt").write_text("baru")
+    (tmp_path / "dst.txt").write_text("lama")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "src.txt", "dst.txt", op="move", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+    assert (tmp_path / "src.txt").exists()  # untouched
+    assert (tmp_path / "dst.txt").read_text() == "lama"  # untouched
+
+
+async def test_move_with_overwrite_snapshots_previous_content(sqlite_session_factory, tmp_path):
+    from workspace.versioning import list_versions
+
+    (tmp_path / "src.txt").write_text("baru")
+    (tmp_path / "dst.txt").write_text("lama yang akan hilang")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "src.txt", "dst.txt", op="move", overwrite=True,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert (tmp_path / "dst.txt").read_text() == "baru"
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "dst.txt")
+    assert len(versions) == 1
+    assert versions[0]["actor"] == "alice"
+
+
+async def test_move_missing_source_fails(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "does-not-exist.txt", "new.txt", op="move", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+
+
+async def test_copy_leaves_source_file_intact(sqlite_session_factory, tmp_path):
+    (tmp_path / "src.txt").write_text("isi")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "src.txt", "copy.txt", op="copy", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert (tmp_path / "src.txt").exists()
+    assert (tmp_path / "copy.txt").read_text() == "isi"
+
+
+async def test_concurrent_moves_to_same_destination_do_not_silently_clobber(sqlite_session_factory, tmp_path):
+    """Adversarial-review finding: two concurrent calls targeting the same
+    not-yet-existing destination must not both observe exists()==False and
+    both skip the version snapshot — exactly one must win, the other must
+    be refused (not silently overwritten with no recovery)."""
+    (tmp_path / "src1.txt").write_text("dari src1")
+    (tmp_path / "src2.txt").write_text("dari src2")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    results = await asyncio.gather(
+        _move_or_copy(workspace_id, folder_id, "src1.txt", "dst.txt", op="move", overwrite=False,
+                       actor="a", session_factory=sqlite_session_factory),
+        _move_or_copy(workspace_id, folder_id, "src2.txt", "dst.txt", op="move", overwrite=False,
+                       actor="b", session_factory=sqlite_session_factory),
+    )
+
+    successes = [r for r in results if r["success"]]
+    failures = [r for r in results if not r["success"]]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert "sudah ada" in failures[0]["error"]
+    # The losing move's source file must still exist untouched — it was
+    # refused, not silently discarded.
+    losing_src = "src1.txt" if failures[0] is results[0] else "src2.txt"
+    assert (tmp_path / losing_src).exists()
+
+
+async def test_move_rejects_path_traversal_on_destination(sqlite_session_factory, tmp_path):
+    (tmp_path / "src.txt").write_text("isi")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "src.txt", "../outside.txt", op="move", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+    assert (tmp_path / "src.txt").exists()
+
+
+# ─── sync wrappers for the new tools ────────────────────────────────────────
+
+def test_sync_wrapper_find_file(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    (content_dir / "Laporan_Akhir.pdf").write_bytes(b"%PDF-fake")
+    db_path, (workspace_id, _) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_find_file(workspace_id, "Laporan_Akhir")
+
+    assert result["success"] is True
+    assert len(result["matches"]) == 1
+
+
+def test_sync_wrapper_create_folder(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_create_folder(workspace_id, folder_id, "New")
+
+    assert result["success"] is True
+    assert (content_dir / "New").is_dir()
+
+
+def test_sync_wrapper_move_file(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    (content_dir / "old.txt").write_text("isi")
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_move_file(workspace_id, folder_id, "old.txt", "new.txt")
+
+    assert result["success"] is True
+    assert (content_dir / "new.txt").exists()
+
+
+def test_sync_wrapper_copy_file(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    (content_dir / "src.txt").write_text("isi")
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_copy_file(workspace_id, folder_id, "src.txt", "copy.txt")
+
+    assert result["success"] is True
+    assert (content_dir / "src.txt").exists()
+    assert (content_dir / "copy.txt").exists()
 
 
 # ─── sync wrappers (the asyncio.run plumbing actually registered as tools) ──

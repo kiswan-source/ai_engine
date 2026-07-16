@@ -171,8 +171,48 @@ IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"}
 TEXT_READERS = {"pdf": read_pdf, "docx": read_docx, "csv": read_csv,
                 "txt": read_txt, "md": read_txt, "json": read_json}
 # Tools whose workspace_id arg is always injected from the session, never
-# the model (Bab 69.5, Tahap 23) — see _run_tool.
-WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file", "workspace_write_file"}
+# the model (Bab 69.5, Tahap 23) — see _run_tool. Fase 8 Slice 1 adds the
+# search/move/copy/create-folder tools to this set — same injection rule,
+# they're just as capable of reaching outside an authorized Workspace via a
+# hallucinated/injected ID as the original three.
+WORKSPACE_TOOL_NAMES = {
+    "workspace_list_files", "workspace_read_file", "workspace_write_file",
+    "workspace_find_file", "workspace_create_folder", "workspace_move_file", "workspace_copy_file",
+}
+# Mutating subset of WORKSPACE_TOOL_NAMES — gated on the write_output
+# Workspace Permission (Bab 69.7) and stamped with `actor` for audit/version
+# snapshots, same as workspace_write_file already was (Fase 4). Deliberately
+# excludes workspace_list_files/workspace_read_file/workspace_find_file
+# (read-only, no permission check needed — same posture those two always had).
+WORKSPACE_MUTATING_TOOL_NAMES = {"workspace_write_file", "workspace_create_folder", "workspace_move_file", "workspace_copy_file"}
+# Fase 8 (DCF v5 mandate "Workspace Native File Access & Chat UX Repair",
+# Slice 1) — Chat Decision Flow. Injected into every user turn a Workspace is
+# bound to (see _build_user_message). Encodes the mandate's mandatory STEP
+# 1-5 order and its PROHIBITED RESPONSE list verbatim as a steering
+# instruction to the model — this is prompt-level guidance, not a hard
+# guarantee: gemma4:e2b can still ignore it on a given turn (no different
+# from any other system-prompt instruction in this codebase), but it is the
+# actual mechanism available given the chat path is LLM-driven native tool
+# calling (core/chat/, see CLAUDE.md §9), not a scripted dialogue tree.
+WORKSPACE_DECISION_FLOW_NOTE = (
+    "[Project Workspace terhubung. WAJIB ikuti urutan ini kalau pengguna menyebut "
+    "sebuah file:\n"
+    "1) Pengguna kasih path/nama file -> panggil workspace_list_files (kalau belum) "
+    "lalu cocokkan ke relative_path hasilnya, baru workspace_read_file.\n"
+    "2) Ketemu -> langsung kerjakan, JANGAN tanya konfirmasi lagi.\n"
+    "3) Tidak ketemu di listing -> panggil workspace_find_file dengan nama filenya "
+    "(Smart Search, mencari ke semua folder Workspace). Satu hasil cocok -> langsung "
+    "pakai. Lebih dari satu -> minta pengguna pilih salah satu.\n"
+    "4) workspace_find_file tetap nol hasil -> baru minta pengguna sebutkan lokasi lain.\n"
+    "5) HANYA kalau sudah lewat langkah 1-4 dan benar-benar tidak ketemu -> baru "
+    "tawarkan upload sebagai pilihan TERAKHIR.\n"
+    "DILARANG langsung menjawab 'saya tidak punya akses ke drive', 'saya hanya bisa "
+    "baca file yang diupload', atau 'tolong upload filenya' SEBELUM langkah 1-4 di atas "
+    "benar-benar dijalankan. Workspace juga punya tool workspace_create_folder/"
+    "workspace_move_file/workspace_copy_file untuk membuat folder/memindahkan/"
+    "mengganti nama/menyalin file — pakai kalau relevan. Format jawaban ringkas dan "
+    "profesional (mis. '✓ File ditemukan' / '✓ Analisis selesai'), jangan bertele-tele.]"
+)
 # Fase 3 (DCF v5 mandate, Memory Intelligence Evolution): same injection rule
 # as WORKSPACE_TOOL_NAMES, for owner instead of workspace_id — see _run_tool
 # and agent/tools/memory_tools.py.
@@ -334,10 +374,7 @@ class ChatEngine:
         if context_blocks:
             parts.append("\n\n" + "\n\n".join(context_blocks))
         if session.workspace_id:
-            parts.append(
-                "\n\n[Project Workspace terhubung — pakai tool workspace_list_files/"
-                "workspace_read_file untuk membaca isinya bila relevan dengan permintaan ini.]"
-            )
+            parts.append("\n\n" + WORKSPACE_DECISION_FLOW_NOTE)
 
         msg: Dict[str, Any] = {"role": "user", "content": "".join(parts)}
         if images_b64:
@@ -388,10 +425,11 @@ class ChatEngine:
             if not workspace_id:
                 return {"error": "Sesi ini belum terhubung ke Project Workspace.", "success": False}
             args["workspace_id"] = workspace_id
-        if name == "workspace_write_file":
-            # Fase 4 — identifies who triggered an overwrite, for the version
-            # snapshot + audit log entry _write_file records. Same
-            # never-trust-the-model rule as workspace_id/owner above.
+        if name in WORKSPACE_MUTATING_TOOL_NAMES:
+            # Fase 4 (extended Fase 8 Slice 1 to the whole mutating set) —
+            # identifies who triggered a mutation, for the version snapshot +
+            # audit log entry each of these records. Same never-trust-the-model
+            # rule as workspace_id/owner above.
             args["actor"] = owner or role or "anonymous"
         if name in MEMORY_TOOL_NAMES:
             # Fase 3 — same rule as workspace_id above: never let the model
@@ -400,13 +438,14 @@ class ChatEngine:
             # call. None (no authenticated caller) maps to a shared
             # "anonymous" namespace inside agent/tools/memory_tools.py.
             args["owner"] = owner
-        if name == "workspace_write_file":
-            # Bab 69.7 write_output (Tahap 30) — checked here with the
-            # Project role api/routes/chat.py already resolved once at bind
-            # time (cached on session.workspace_role), NOT re-derived here:
-            # agent/tools/ must not import from api/ (same rule Tahap 23
-            # already documented for why per-tool-call re-derivation was
-            # rejected there).
+        if name in WORKSPACE_MUTATING_TOOL_NAMES:
+            # Bab 69.7 write_output (Tahap 30, extended Fase 8 Slice 1 to
+            # create/move/copy) — checked here with the Project role
+            # api/routes/chat.py already resolved once at bind time (cached
+            # on session.workspace_role), NOT re-derived here: agent/tools/
+            # must not import from api/ (same rule Tahap 23 already
+            # documented for why per-tool-call re-derivation was rejected
+            # there).
             try:
                 from security.permissions import require_workspace_permission
                 require_workspace_permission(workspace_role, "write_output")

@@ -112,6 +112,16 @@ TOOL_SCHEMAS = [
          "mode": {"type": "string", "enum": ["overwrite", "append"]},
          "title": _STR},
         ["folder_id", "relative_path", "content"]),
+    _fn("workspace_find_file", "Cari file berdasarkan nama (atau sebagian nama, boleh tanpa path lengkap) di SELURUH folder Project Workspace ini — Smart Search. WAJIB dipanggil sebelum bilang 'file tidak ditemukan' atau minta pengguna upload, kalau pengguna sudah menyebut nama file dan Workspace terhubung. Kalau hasil cocok cuma satu, langsung pakai (jangan tanya balik). Kalau lebih dari satu, minta pengguna pilih. Kalau nol, baru lanjut ke langkah berikutnya (minta lokasi/upload).",
+        {"filename": _STR}, ["filename"]),
+    _fn("workspace_create_folder", "Buat folder baru (beserta parent yang belum ada) di dalam Project Workspace. Pakai folder_id PERSIS dari hasil workspace_list_files.",
+        {"folder_id": _STR, "relative_path": _STR}, ["folder_id", "relative_path"]),
+    _fn("workspace_move_file", "Pindahkan ATAU ganti nama satu file/folder di dalam Project Workspace (satu operasi yang sama — ganti nama = pindah ke path lain di folder yang sama). Kalau dst_relative_path sudah ada isinya, panggilan ini GAGAL kecuali overwrite=true (versi lama otomatis disimpan sebelum ditimpa). Pakai folder_id PERSIS dari hasil workspace_list_files.",
+        {"folder_id": _STR, "src_relative_path": _STR, "dst_relative_path": _STR, "overwrite": {"type": "boolean"}},
+        ["folder_id", "src_relative_path", "dst_relative_path"]),
+    _fn("workspace_copy_file", "Salin satu file/folder di dalam Project Workspace ke path lain — sumbernya tetap ada (beda dengan workspace_move_file). Kalau dst_relative_path sudah ada isinya, panggilan ini GAGAL kecuali overwrite=true. Pakai folder_id PERSIS dari hasil workspace_list_files.",
+        {"folder_id": _STR, "src_relative_path": _STR, "dst_relative_path": _STR, "overwrite": {"type": "boolean"}},
+        ["folder_id", "src_relative_path", "dst_relative_path"]),
 
     # ── Cross-session memory (Fase 3) — no owner property on either;
     # ChatEngine injects it from the session, never from the model.

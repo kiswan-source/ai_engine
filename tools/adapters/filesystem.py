@@ -14,6 +14,7 @@ same files one by one.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -137,3 +138,54 @@ class FilesystemAdapter:
         with open(path, "wb") as f:
             f.write(data)
         return path
+
+    def exists(self, relative_path: str) -> bool:
+        """Whether ``relative_path`` exists under this root — resolved
+        through the same Root Restriction gate as every other method here,
+        so a traversal attempt raises rather than silently returning False."""
+        return resolve_within_root(self.root, relative_path).exists()
+
+    def make_dir(self, relative_path: str) -> Path:
+        """Create a folder (and any missing parents) under this root.
+        A no-op if it already exists, matching ``os.makedirs(exist_ok=True)``
+        — creating a folder that's already there isn't an error condition
+        for the "buat folder" mandate requirement."""
+        path = resolve_within_root(self.root, relative_path)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def move(self, src_relative: str, dst_relative: str) -> Path:
+        """Move/rename a file or folder within this root — both the source
+        and destination are validated through Root Restriction (a caller
+        could otherwise ``../``-escape via either argument, not just one)."""
+        src = resolve_within_root(self.root, src_relative)
+        if not src.exists():
+            raise FileNotFoundError(f"{src_relative!r} tidak ditemukan di Workspace ini.")
+        dst = resolve_within_root(self.root, dst_relative)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        return Path(shutil.move(str(src), str(dst)))
+
+    def copy(self, src_relative: str, dst_relative: str) -> Path:
+        """Copy a file or folder within this root — same dual Root
+        Restriction check as :meth:`move`."""
+        src = resolve_within_root(self.root, src_relative)
+        if not src.exists():
+            raise FileNotFoundError(f"{src_relative!r} tidak ditemukan di Workspace ini.")
+        dst = resolve_within_root(self.root, dst_relative)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=True)
+        else:
+            shutil.copy2(str(src), str(dst))
+        return dst
+
+    def search(self, query: str) -> list[WorkspaceFile]:
+        """Case-insensitive filename search across the whole tree under this
+        root (Smart Search) — matches on substring, not just exact name, so
+        "Kesimpulan_Tiga_Framework" finds "Kesimpulan_Tiga_Framework.pdf"."""
+        needle = query.lower()
+        return [
+            WorkspaceFile(relative_path=rel_path, category=classify(rel_path), size_bytes=abs_path.stat().st_size)
+            for rel_path, abs_path in self._walk()
+            if needle in os.path.basename(rel_path).lower()
+        ]

@@ -108,6 +108,17 @@ from tools.tool_validator import PathEscapesRootError
 from workspace.indexer import extract_text
 from workspace.versioning import save_version
 
+# Fase 8 (DCF v5 mandate "Workspace Native File Access & Chat UX Repair",
+# Slice 1) note on scope: this Slice adds the safe, reversible parts of the
+# mandate — search/move/rename/copy/create-folder. Delete is deliberately
+# NOT here (Owner decision, Gate 1: gated behind a two-step confirmation
+# token, a separate Slice) and xlsx/pptx/format-preserving DOCX+PDF edit are
+# separate Slices too (new dependencies + higher design risk). Drive access
+# (D:\, E:\, F:\) is unaffected by this file — every function below already
+# works with whatever root path a WorkspaceFolder is registered with; making
+# a Windows drive reachable from wherever this process runs is a deployment/
+# mount decision the Owner deferred, not something fixed in code.
+
 # Plain-text formats write raw content directly.
 WRITABLE_EXTENSIONS = {"txt", "md", "log", "csv", "json", "html"}
 # pdf/docx (Tahap 33) reuse agent/tools/writers.py's real generators
@@ -196,6 +207,135 @@ async def _read_file(
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+async def _find_file(workspace_id: str, filename: str, session_factory=None) -> Dict[str, Any]:
+    """Smart Search (mandate §Smart Search) — case-insensitive substring
+    match on filename across every Local folder registered to this
+    Workspace, not just one. Always ``success: True`` (the search itself
+    ran) — an empty ``matches`` list is a valid outcome the caller/model
+    decides how to act on (STEP 3/4 of the mandate's Chat Decision Flow),
+    not a tool failure."""
+    session_factory = session_factory or AsyncSessionFactory
+    async with session_factory() as session:
+        ws = await session.get(Workspace, workspace_id)
+        if ws is None or ws.deleted_at is not None:
+            return {"success": False, "error": "Workspace tidak ditemukan."}
+        result = await session.execute(select(WorkspaceFolder).where(WorkspaceFolder.workspace_id == workspace_id))
+        folders = result.scalars().all()
+
+    matches = []
+    searched = []
+    for folder in folders:
+        if folder.source_type != "Local":
+            continue
+        searched.append(folder.alias or folder.path)
+        try:
+            adapter = FilesystemAdapter(folder.path)
+        except NotADirectoryError:
+            continue
+        for f in adapter.search(filename):
+            matches.append({
+                "folder_id": folder.id, "folder_alias": folder.alias,
+                "relative_path": f.relative_path, "category": f.category, "size_bytes": f.size_bytes,
+            })
+    return {
+        "success": True, "matches": matches, "searched_folders": searched,
+        "text": f"{len(matches)} file cocok dengan {filename!r} di {len(searched)} folder Workspace.",
+    }
+
+
+async def _create_folder(
+    workspace_id: str, folder_id: str, relative_path: str, actor: str = "anonymous", session_factory=None,
+) -> Dict[str, Any]:
+    session_factory = session_factory or AsyncSessionFactory
+    async with session_factory() as session:
+        folder = await session.get(WorkspaceFolder, folder_id)
+        if folder is None or folder.workspace_id != workspace_id:
+            return {"success": False, "error": "Folder tidak ditemukan di Workspace ini."}
+        if folder.source_type != "Local":
+            return {"success": False, "error": f"source_type={folder.source_type!r} belum didukung."}
+        try:
+            adapter = FilesystemAdapter(folder.path)
+            path = adapter.make_dir(relative_path)
+        except PathEscapesRootError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    await audit_log.record(
+        "workspace.folder_created", actor=actor,
+        detail={"workspace_id": workspace_id, "folder_id": folder_id, "path": relative_path},
+    )
+    return {"success": True, "path": relative_path, "text": f"Folder {relative_path!r} dibuat."}
+
+
+# Serializes the check-then-act (exists? -> snapshot -> move/copy) sequence
+# in _move_or_copy per (workspace_id, folder_id, dst_relative_path) — without
+# this, two concurrent calls targeting the same not-yet-existing destination
+# both observe exists()==False, both skip the version snapshot, and whichever
+# move/copy runs second silently clobbers the first with no recovery, exactly
+# the "silent unrecoverable overwrite" Fase 4 was built to prevent (caught in
+# adversarial review, not the original design — see git history). In-process
+# only, matching this codebase's existing single-process assumption
+# (`ChatEngine.sessions` is an in-memory dict, same posture) — does not
+# protect across multiple uvicorn workers/processes. Entries are never
+# evicted (unbounded growth over process lifetime), but each is one tiny
+# asyncio.Lock keyed by strings; revisit only if this ever matters in practice.
+_move_copy_locks: dict[tuple[str, str, str], "asyncio.Lock"] = {}
+
+
+def _lock_for(workspace_id: str, folder_id: str, dst_relative_path: str):
+    import asyncio as _asyncio
+
+    key = (workspace_id, folder_id, dst_relative_path)
+    lock = _move_copy_locks.get(key)
+    if lock is None:
+        lock = _asyncio.Lock()
+        _move_copy_locks[key] = lock
+    return lock
+
+
+async def _move_or_copy(
+    workspace_id: str, folder_id: str, src_relative_path: str, dst_relative_path: str,
+    op: str, overwrite: bool, actor: str, session_factory=None,
+) -> Dict[str, Any]:
+    """Shared implementation for move/rename and copy — same shape (one
+    WorkspaceFolder root, both paths validated through Root Restriction),
+    differing only in which `FilesystemAdapter` method actually runs."""
+    session_factory = session_factory or AsyncSessionFactory
+    async with session_factory() as session:
+        folder = await session.get(WorkspaceFolder, folder_id)
+        if folder is None or folder.workspace_id != workspace_id:
+            return {"success": False, "error": "Folder tidak ditemukan di Workspace ini."}
+        if folder.source_type != "Local":
+            return {"success": False, "error": f"source_type={folder.source_type!r} belum didukung."}
+        async with _lock_for(workspace_id, folder_id, dst_relative_path):
+            try:
+                adapter = FilesystemAdapter(folder.path)
+                if adapter.exists(dst_relative_path):
+                    if not overwrite:
+                        return {
+                            "success": False,
+                            "error": f"{dst_relative_path!r} sudah ada. Set overwrite=true untuk menimpanya.",
+                        }
+                    # Only a file can be safely version-snapshotted (Fase 4's
+                    # WorkspaceFileVersion stores one file's bytes) — a folder
+                    # destination is refused rather than silently merged.
+                    if adapter.absolute_path(dst_relative_path).is_dir():
+                        return {"success": False, "error": f"{dst_relative_path!r} adalah folder yang sudah ada."}
+                    await _snapshot_if_exists(session, workspace_id, folder_id, dst_relative_path, adapter, actor)
+                fn = adapter.move if op == "move" else adapter.copy
+                fn(src_relative_path, dst_relative_path)
+            except (PathEscapesRootError, FileNotFoundError) as e:
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+    await audit_log.record(
+        f"workspace.file_{op}d" if op == "move" else "workspace.file_copied", actor=actor,
+        detail={"workspace_id": workspace_id, "folder_id": folder_id,
+                "src": src_relative_path, "dst": dst_relative_path},
+    )
+    return {"success": True, "src": src_relative_path, "dst": dst_relative_path}
 
 
 async def _snapshot_if_exists(
@@ -333,6 +473,81 @@ def workspace_write_file(
             return await _write_file(
                 workspace_id, folder_id, relative_path, content, mode, title,
                 actor=actor or "anonymous", session_factory=factory,
+            )
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_find_file(workspace_id: str, filename: str) -> Dict[str, Any]:
+    """Cari file berdasarkan nama (atau sebagian nama) di seluruh folder
+    Project Workspace ini — Smart Search. ``workspace_id`` selalu disuntik
+    oleh `ChatEngine._run_tool` — lihat modul docstring."""
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            return await _find_file(workspace_id, filename, session_factory=factory)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_create_folder(
+    workspace_id: str, folder_id: str, relative_path: str, actor: str | None = None,
+) -> Dict[str, Any]:
+    """Buat folder baru di dalam Project Workspace (dan parent-nya kalau
+    belum ada). ``workspace_id``/``actor`` selalu disuntik oleh
+    `ChatEngine._run_tool` — lihat modul docstring."""
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            return await _create_folder(workspace_id, folder_id, relative_path, actor or "anonymous", session_factory=factory)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_move_file(
+    workspace_id: str, folder_id: str, src_relative_path: str, dst_relative_path: str,
+    overwrite: bool = False, actor: str | None = None,
+) -> Dict[str, Any]:
+    """Pindahkan ATAU ganti nama satu file/folder di dalam Project Workspace
+    (memindahkan ke path lain = 'move'; mengganti nama di folder yang sama =
+    'rename' — keduanya operasi filesystem yang sama). ``workspace_id``/
+    ``actor`` selalu disuntik oleh `ChatEngine._run_tool`."""
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            return await _move_or_copy(
+                workspace_id, folder_id, src_relative_path, dst_relative_path,
+                op="move", overwrite=overwrite, actor=actor or "anonymous", session_factory=factory,
+            )
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_copy_file(
+    workspace_id: str, folder_id: str, src_relative_path: str, dst_relative_path: str,
+    overwrite: bool = False, actor: str | None = None,
+) -> Dict[str, Any]:
+    """Salin satu file/folder di dalam Project Workspace ke path lain,
+    sumber tetap ada. ``workspace_id``/``actor`` selalu disuntik oleh
+    `ChatEngine._run_tool`."""
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            return await _move_or_copy(
+                workspace_id, folder_id, src_relative_path, dst_relative_path,
+                op="copy", overwrite=overwrite, actor=actor or "anonymous", session_factory=factory,
             )
         finally:
             await engine.dispose()
