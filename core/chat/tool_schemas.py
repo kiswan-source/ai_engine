@@ -112,6 +112,13 @@ TOOL_SCHEMAS = [
          "mode": {"type": "string", "enum": ["overwrite", "append"]},
          "title": _STR},
         ["folder_id", "relative_path", "content"]),
+
+    # ── Cross-session memory (Fase 3) — no owner property on either;
+    # ChatEngine injects it from the session, never from the model.
+    _fn("remember_fact", "Simpan satu fakta atau preferensi permanen tentang pengguna ini, supaya bisa kamu ingat lagi di sesi chat lain di masa depan. HANYA pakai ini kalau pengguna secara eksplisit minta diingat (mis. 'ingat bahwa...', 'simpan preferensi saya...') — jangan panggil otomatis tiap pesan.",
+        {"key": _STR, "value": _STR}, ["key", "value"]),
+    _fn("recall_facts", "Ambil semua fakta yang pernah diminta pengguna ini untuk diingat, dari sesi chat manapun. Panggil ini kalau pengguna bertanya sesuatu yang mungkin pernah mereka minta kamu ingat sebelumnya.",
+        {}, []),
 ]
 
 # Quick lookup of which tools we expose to the model.

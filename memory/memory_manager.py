@@ -97,3 +97,31 @@ def build_memory_manager(
         ),
         reflection=ReflectionMemory(reflection_store),
     )
+
+
+_shared_manager: MemoryManager | None = None
+
+
+def get_shared_memory_manager() -> MemoryManager:
+    """Process-wide singleton (Fase 3, DCF v5 mandate "Memory Intelligence
+    Evolution").
+
+    Callers that need to actually see each other's writes — ``core/chat/engine.py``
+    (writes working/conversation/summary per turn) and ``api/routes/memory.py``
+    (reads them for the Memory UI page) — must share this instance rather than
+    each calling :func:`build_memory_manager` independently. For the in-memory
+    (dev/CI) backends the store itself *is* the state, so two separately
+    constructed managers would be disconnected islands that never see each
+    other's writes; Postgres/Redis-backed deployments don't strictly need this
+    (the data is genuinely shared external storage regardless of instance
+    count) but there's no reason for the two code paths to diverge over it.
+
+    Not used by ``agent/tools/memory_tools.py``'s ``remember_fact``/
+    ``recall_facts`` for the Postgres-backend case specifically — see that
+    module's docstring for why (the same asyncpg-event-loop-affinity
+    constraint ``agent/tools/workspace_reader.py`` already documents).
+    """
+    global _shared_manager
+    if _shared_manager is None:
+        _shared_manager = build_memory_manager()
+    return _shared_manager

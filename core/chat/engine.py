@@ -139,6 +139,7 @@ import os
 import json
 import base64
 import asyncio
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
@@ -148,6 +149,7 @@ from agent.tools.registry import build_registry
 from agent.tools.readers import read_pdf, read_docx, read_csv, read_txt, read_json
 from core.chat.tool_schemas import TOOL_SCHEMAS, EXPOSED_TOOL_NAMES
 from core.utils.logger import get_logger
+from memory.memory_manager import get_shared_memory_manager
 from prompts.loader import load_prompt
 from security import audit_log, check_prompt, detect_pii, redact_pii, validate
 from security.endpoint_policy import is_internal_endpoint
@@ -171,6 +173,13 @@ TEXT_READERS = {"pdf": read_pdf, "docx": read_docx, "csv": read_csv,
 # Tools whose workspace_id arg is always injected from the session, never
 # the model (Bab 69.5, Tahap 23) — see _run_tool.
 WORKSPACE_TOOL_NAMES = {"workspace_list_files", "workspace_read_file", "workspace_write_file"}
+# Fase 3 (DCF v5 mandate, Memory Intelligence Evolution): same injection rule
+# as WORKSPACE_TOOL_NAMES, for owner instead of workspace_id — see _run_tool
+# and agent/tools/memory_tools.py.
+MEMORY_TOOL_NAMES = {"remember_fact", "recall_facts"}
+# How many turns between rolling-summary refreshes (Fase 3) — SummaryMemory's
+# own summarizer call costs an LLM round-trip, so this isn't done every turn.
+MEMORY_SUMMARY_EVERY_N_TURNS = 5
 
 # Prompt Versioning (Bab 51, Tahap 37) — content lives at
 # prompts/chat/system_v1.md; version is registered explicitly here, never
@@ -208,6 +217,7 @@ class Session:
         self.history: List[Dict[str, Any]] = []     # display items for the UI
         self.files: List[str] = []  # absolute paths of uploaded files
         self.produced_files: set = set()  # basenames this session's tools generated (Tahap 24)
+        self.turn_count: int = 0  # Fase 3 — gates SummaryMemory refresh cadence
 
     def add_file(self, path: str):
         if path not in self.files:
@@ -220,6 +230,10 @@ class ChatEngine:
         self.default_model = settings.GEMMA_MODEL
         self._registries: Dict[str, Any] = {}
         self.sessions: Dict[str, Session] = {}
+        # Fase 3 — the SAME instance api/routes/memory.py reads, not a
+        # private build_memory_manager() call (see get_shared_memory_manager
+        # docstring for why that matters for the in-memory dev/CI backends).
+        self.memory = get_shared_memory_manager()
 
     # ── Session helpers ──
     def get_session(
@@ -358,7 +372,7 @@ class ChatEngine:
     # ── Execute one tool call, normalising args + paths ──
     async def _run_tool(
         self, registry, name: str, args: Any, role: Optional[str] = None, workspace_id: Optional[str] = None,
-        workspace_role: Optional[str] = None,
+        workspace_role: Optional[str] = None, owner: Optional[str] = None,
     ) -> Dict[str, Any]:
         if isinstance(args, str):
             try:
@@ -374,6 +388,13 @@ class ChatEngine:
             if not workspace_id:
                 return {"error": "Sesi ini belum terhubung ke Project Workspace.", "success": False}
             args["workspace_id"] = workspace_id
+        if name in MEMORY_TOOL_NAMES:
+            # Fase 3 — same rule as workspace_id above: never let the model
+            # supply its own owner, or one session could recall/overwrite
+            # another owner's remembered facts by just naming them in a tool
+            # call. None (no authenticated caller) maps to a shared
+            # "anonymous" namespace inside agent/tools/memory_tools.py.
+            args["owner"] = owner
         if name == "workspace_write_file":
             # Bab 69.7 write_output (Tahap 30) — checked here with the
             # Project role api/routes/chat.py already resolved once at bind
@@ -416,6 +437,39 @@ class ChatEngine:
             # not the conversation.
             logger.warning("tool call raised", tool=name, error=str(e))
             return {"error": _friendly_tool_error(name, e), "success": False}
+
+    # ── Memory wiring (Fase 3, DCF v5 mandate "Memory Intelligence Evolution") ──
+    # Session-scoped only (working/conversation/summary) — safe by construction,
+    # no cross-session/cross-user data ever crosses here. Cross-session memory
+    # is the separate, explicit-opt-in remember_fact/recall_facts tools instead
+    # (agent/tools/memory_tools.py), never automatic. A memory-tier failure
+    # (e.g. Redis/Postgres down) must never break the actual chat turn — Bab
+    # 10.4's audit-log principle applies here too, so both helpers below only
+    # log a warning on failure, never raise.
+    async def _remember_turn_start(self, session_id: str, user_text: str) -> None:
+        try:
+            await self.memory.conversation.add_message(session_id, "user", user_text, trace_id=session_id)
+            await self.memory.working.set(session_id, "last_message_at", time.time())
+        except Exception as e:
+            logger.warning("memory.remember_turn_start_failed", session_id=session_id, error=str(e))
+
+    async def _remember_turn_end(self, session: Session, user_text: str, full_text: str) -> None:
+        if not full_text.strip():
+            return
+        session_id = session.id
+        try:
+            await self.memory.conversation.add_message(session_id, "assistant", full_text, trace_id=session_id)
+            await self.memory.working.set(
+                session_id, "last_files",
+                {"uploaded": [os.path.basename(f) for f in session.files],
+                 "produced": sorted(session.produced_files)},
+            )
+            if session.turn_count % MEMORY_SUMMARY_EVERY_N_TURNS == 0:
+                await self.memory.summary.summarize_and_store(
+                    session_id, f"User: {user_text}\n\nAssistant: {full_text}"
+                )
+        except Exception as e:
+            logger.warning("memory.remember_turn_end_failed", session_id=session_id, error=str(e))
 
     # ── Main entry: stream a full assistant turn ──
     async def stream_run(self, session_id: str, user_text: str,
@@ -463,6 +517,8 @@ class ChatEngine:
         session.messages.append(self._build_user_message(session, model_input_text, new_files))
         session.history.append({"type": "user", "content": user_text,
                                 "files": [os.path.basename(f) for f in new_files]})
+        session.turn_count += 1
+        await self._remember_turn_start(session_id, user_text)
 
         produced_files: List[str] = []
         any_tool_called = False
@@ -508,7 +564,10 @@ class ChatEngine:
                             continue
                         any_tool_called = True
                         yield {"type": "tool_start", "name": name, "args": args}
-                        result = await self._run_tool(registry, name, args, role, session.workspace_id, session.workspace_role)
+                        result = await self._run_tool(
+                            registry, name, args, role, session.workspace_id, session.workspace_role,
+                            owner=session.owner,
+                        )
                         ok = not (isinstance(result, dict) and (result.get("success") is False or
                                   ("error" in result and "success" not in result)))
                         summary = self._summarize_result(result)
@@ -570,11 +629,13 @@ class ChatEngine:
             logger.error("chat stream failed", error=str(e))
             yield {"type": "error", "message": str(e)}
 
+        full_text = "".join(full_response_text_parts)
+        await self._remember_turn_end(session, user_text, full_text)
+
         if settings.ENABLE_OUTPUT_VALIDATION and full_response_text_parts:
             # Detect-and-flag only — every token above has already reached the
             # client by this point, so this cannot redact/prevent, only warn
             # and record (see module docstring "Prompt/output guardrails").
-            full_text = "".join(full_response_text_parts)
             validation = validate(full_text)
             if not validation.ok:
                 await audit_log.record(

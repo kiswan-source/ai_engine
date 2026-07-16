@@ -183,4 +183,13 @@ def build_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("workspace_write_file", workspace_write_file,
         "Buat/timpa/tambah satu file teks di Project Workspace. Input: {folder_id, relative_path, content, mode}")
 
+    # Cross-session memory (Fase 3, DCF v5 mandate) — owner is always
+    # injected by ChatEngine._run_tool, never taken from the model. See
+    # agent/tools/memory_tools.py module docstring for the full rationale.
+    from agent.tools.memory_tools import remember_fact, recall_facts
+    registry.register("remember_fact", remember_fact,
+        "Simpan satu fakta/preferensi permanen tentang pengguna, bisa diambil lagi di sesi chat lain. Input: {key, value}")
+    registry.register("recall_facts", recall_facts,
+        "Ambil semua fakta yang pernah diminta pengguna untuk diingat. Input: {}")
+
     return registry

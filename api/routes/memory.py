@@ -2,10 +2,19 @@
 to a session_id, for the Memory page (AI_WORKSPACE_ARCHITECTURE.md §2). Not
 a protected folder (Bab 45.1).
 
-Real gap acknowledged (docs/PROGRESS.md Tahap 12): `core/chat/engine.py`
-never writes to any `memory/` tier, so every response here is empty for any
-real chat session_id today — wired ahead of that integration by deliberate
-choice (confirmed with the user), not a bug to be silently papered over.
+Fase 3 (DCF v5 mandate, "Memory Intelligence Evolution"): `core/chat/engine.py`
+now writes working/conversation/summary per turn, keyed by the same
+session_id this module reads — using `memory.memory_manager.get_shared_memory_manager()`,
+the SAME manager instance `core/chat/engine.py` holds, not a private
+`build_memory_manager()` call (that would leave the in-memory dev/CI
+backends as disconnected islands that never see the Chat Engine's writes —
+see that function's docstring). `long_term` here stays whatever it was
+before this Tahap: nothing in `core/chat/engine.py` writes to it under a
+plain `session_id` namespace — the new `remember_fact`/`recall_facts` tools
+(Fase 3) write under an `owner:<id>` namespace instead (deliberately NOT
+session-scoped, since remembering across sessions is the whole point), so
+they don't show up here; a session-scoped long_term view staying empty is
+expected, not a regression.
 
 Scoped to the four tiers where "one key = one session's data" makes sense:
 working, conversation, summary, long_term. Reflection memory is keyed by
@@ -33,12 +42,12 @@ now rejects a different caller.
 """
 from fastapi import APIRouter, Depends
 
-from memory.memory_manager import build_memory_manager
+from memory.memory_manager import get_shared_memory_manager
 from security.auth import Principal, get_current_principal
 from api.routes.chat import _require_session_owner
 
 router = APIRouter()
-_memory = build_memory_manager()
+_memory = get_shared_memory_manager()
 
 
 @router.get("/{session_id}")
