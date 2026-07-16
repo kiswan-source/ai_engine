@@ -6,10 +6,22 @@ actual maturity: a comma-separated allowlist in ``API_KEYS`` (``key`` or
 that needs to know where secrets come from (Bab 58.3), ready to swap for
 Docker/Kubernetes Secrets/Vault later without this module changing.
 
-Not wired into any existing route — every current endpoint stays open
-exactly as before (Bab 45, no big rewrite of already-shipped behavior
-without an explicit request). ``get_current_principal`` is ready for a
-route that opts in via ``Depends``.
+``get_current_principal`` IS wired into every route today. Most routers
+opt in per-endpoint (chat, files, memory, knowledge, workspace, projects,
+automation, orchestrator, agent, plugins — grep for
+``Depends(get_current_principal)`` under ``api/routes/`` for the current
+list; ``monitoring.py`` goes through ``require_role`` in
+``security/permissions.py`` instead, which itself depends on this function).
+``ai.py``, ``docs.py``, ``dokumen.py``, ``gis.py``, and ``pipeline.py`` had
+no auth dependency at all until Fase 1 (DCF_SECURITY_AUDIT_2026-07-11.md
+temuan #7) — closed at router level instead, via
+``dependencies=[Depends(get_current_principal)]`` on their
+``app.include_router(...)`` calls in ``api/main.py`` (see the ``_AUTH``
+list there), so a future endpoint added to any of these five can't ship
+unauthenticated by omission. The remaining gap is not "not wired" but that
+``API_KEYS`` defaulting to blank makes every wired route treat every
+caller as admin (temuan #1) — see ``security/startup_validation.py`` for
+the fail-closed guard on that.
 """
 from __future__ import annotations
 

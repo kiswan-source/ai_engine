@@ -22,6 +22,9 @@ configMapGenerator:
   - name: ai-engine-postgres-initdb
     files:
       - init.sql=../../scripts/init_db.sql
+      # Trust-loopback pg_hba.conf hardening (same fix as docker-compose.yml's
+      # postgres service) — zz_ prefix so it sorts after init.sql.
+      - zz_harden_pg_hba.sh=../../scripts/harden_pg_hba.sh
 
 # Placeholder image names — overlays/production (or your own overlay) must
 # point these at real registry references built from docker/Dockerfile.api,

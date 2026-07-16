@@ -4,13 +4,15 @@ Integrates Gemma 4:26B via Ollama with GIS + document processing pipelines.
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from api.config import settings
 from api.middleware import setup_middleware
+from security.auth import get_current_principal
+from security.startup_validation import enforce_production_config
 from api.routes import health, ai, gis, pipeline, docs as docs_router
 from core.utils.logger import get_logger
 from db.connection import init_db, close_db
@@ -34,6 +36,10 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Startup & shutdown lifecycle."""
     logger.info("🚀 AI Engine starting up…", env=settings.APP_ENV)
+    # Fase 0 / SEC-1, SEC-2 (fail-closed): refuses to start in production with
+    # blank/example/weak credentials, instead of silently granting full access.
+    # No-op outside APP_ENV=production, so local/dev workflows are unaffected.
+    enforce_production_config(settings)
     await init_db()
     logger.info("✅ Database connected")
     if settings.ENABLE_SCHEDULER:
@@ -91,13 +97,21 @@ if v3_path.exists():
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI"])
-app.include_router(gis.router, prefix="/api/v1/gis", tags=["GIS"])
-app.include_router(pipeline.router, prefix="/api/v1/pipeline", tags=["Pipeline"])
-app.include_router(docs_router.router, prefix="/api/v1/docs", tags=["Documents"])
+# Fase 1 / SEC-1 follow-up: these 5 routers had no auth dependency at all
+# (found while wiring the Fase-0 fail-closed startup guard — every other
+# router already opts into get_current_principal per-route). Applied at
+# router level, not per-endpoint, so a future endpoint added to any of these
+# can't ship unauthenticated by omission. No-op today: API_KEYS is blank
+# (Fase 0 chose loopback-only network isolation over API-key auth), so
+# get_current_principal still returns an admin Principal for every caller.
+_AUTH = [Depends(get_current_principal)]
+app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI"], dependencies=_AUTH)
+app.include_router(gis.router, prefix="/api/v1/gis", tags=["GIS"], dependencies=_AUTH)
+app.include_router(pipeline.router, prefix="/api/v1/pipeline", tags=["Pipeline"], dependencies=_AUTH)
+app.include_router(docs_router.router, prefix="/api/v1/docs", tags=["Documents"], dependencies=_AUTH)
 app.include_router(agent_router.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(files_router.router, prefix="", tags=["Files"])
-app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"])
+app.include_router(dokumen_router.router, prefix="/api/dokumen", tags=["Dokumen"], dependencies=_AUTH)
 app.include_router(chat_router.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(orchestrator_router.router, prefix="/api/v1/orchestrator", tags=["Orchestrator"])
 app.include_router(monitoring_router.router, prefix="/api/v1/monitoring", tags=["Monitoring"])
