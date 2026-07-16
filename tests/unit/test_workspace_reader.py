@@ -305,6 +305,32 @@ async def test_read_file_rejects_non_local_source_type(sqlite_session_factory, t
     assert "belum didukung" in result["error"]
 
 
+# ─── Regression: default session_factory must honor a patched AsyncSessionFactory ─
+# Real CI failure, not hypothetical: `from db.connection import AsyncSessionFactory`
+# copies the reference at import time, so tests/integration/test_chat_workspace_context_api.py
+# monkeypatching db.connection.AsyncSessionFactory never reached any function here
+# that defaulted to the bare (stale) name — those functions silently tried the
+# REAL configured database instead of the test's sqlite one. Passed locally
+# (real Postgres happened to be reachable) but failed in CI (no Postgres at
+# all) the first time this code was ever actually pushed. Fixed by importing
+# `db.connection` as a module and referencing `db_connection.AsyncSessionFactory`
+# at call time instead — this test locks in that the fix actually works.
+
+async def test_default_session_factory_honors_a_later_patched_async_session_factory(
+    sqlite_session_factory, tmp_path, monkeypatch
+):
+    import db.connection as db_connection
+
+    (tmp_path / "notes.txt").write_text("isi asli")
+    workspace_id, _ = await _seed(sqlite_session_factory, tmp_path)
+    monkeypatch.setattr(db_connection, "AsyncSessionFactory", sqlite_session_factory)
+
+    result = await _find_file(workspace_id, "notes.txt")  # no session_factory passed — must use the default
+
+    assert result["success"] is True
+    assert len(result["matches"]) == 1
+
+
 # ─── Fase 8 (DCF v5 mandate "Workspace Native File Access"), Slice 1 ────────
 # Smart Search + create-folder/move/copy — reversible ops only; delete is a
 # separate, later Slice (Owner decision: two-step confirmation token).

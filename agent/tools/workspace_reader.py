@@ -100,8 +100,8 @@ from typing import Any, Dict
 
 from sqlalchemy import select
 
+import db.connection as db_connection
 from agent.tools.gis_io import _load_any_fc, _summarize_fc
-from db.connection import AsyncSessionFactory
 from db.models import Workspace, WorkspaceFolder
 from security import audit_log
 from tools.adapters.filesystem import FilesystemAdapter, classify
@@ -133,7 +133,7 @@ def _default_title(relative_path: str) -> str:
 
 
 async def _list_files(workspace_id: str, session_factory=None) -> Dict[str, Any]:
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         ws = await session.get(Workspace, workspace_id)
         if ws is None or ws.deleted_at is not None:
@@ -165,7 +165,7 @@ async def _list_files(workspace_id: str, session_factory=None) -> Dict[str, Any]
 async def _read_file(
     workspace_id: str, folder_id: str, relative_path: str, session_factory=None
 ) -> Dict[str, Any]:
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         folder = await session.get(WorkspaceFolder, folder_id)
         if folder is None or folder.workspace_id != workspace_id:
@@ -217,7 +217,7 @@ async def _find_file(workspace_id: str, filename: str, session_factory=None) -> 
     ran) — an empty ``matches`` list is a valid outcome the caller/model
     decides how to act on (STEP 3/4 of the mandate's Chat Decision Flow),
     not a tool failure."""
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         ws = await session.get(Workspace, workspace_id)
         if ws is None or ws.deleted_at is not None:
@@ -249,7 +249,7 @@ async def _find_file(workspace_id: str, filename: str, session_factory=None) -> 
 async def _create_folder(
     workspace_id: str, folder_id: str, relative_path: str, actor: str = "anonymous", session_factory=None,
 ) -> Dict[str, Any]:
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         folder = await session.get(WorkspaceFolder, folder_id)
         if folder is None or folder.workspace_id != workspace_id:
@@ -303,7 +303,7 @@ async def _move_or_copy(
     """Shared implementation for move/rename and copy — same shape (one
     WorkspaceFolder root, both paths validated through Root Restriction),
     differing only in which `FilesystemAdapter` method actually runs."""
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         folder = await session.get(WorkspaceFolder, folder_id)
         if folder is None or folder.workspace_id != workspace_id:
@@ -354,7 +354,7 @@ async def _copy_generated_file_into_workspace(
     that name already exists in the Workspace, its previous content is
     version-snapshotted first (same `WorkspaceFileVersion` mechanism
     `_write_file` uses) — never a silent clobber."""
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     filename = os.path.basename(source_abs_path)
     async with session_factory() as session:
         ws = await session.get(Workspace, workspace_id)
@@ -403,7 +403,7 @@ async def _write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
     mode: str = "overwrite", title: str | None = None, actor: str = "anonymous", session_factory=None,
 ) -> Dict[str, Any]:
-    session_factory = session_factory or AsyncSessionFactory
+    session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
         folder = await session.get(WorkspaceFolder, folder_id)
         if folder is None or folder.workspace_id != workspace_id:
