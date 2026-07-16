@@ -97,6 +97,46 @@ export interface WorkspaceDashboard {
   errors: string[]
 }
 
+/** `ImprovementRecommendation` (improvement/models.py) as returned by the ledger. */
+export interface ImprovementRecommendationEntry {
+  id: string
+  created_at: number
+  category: string
+  severity: 'low' | 'medium' | 'high'
+  evidence: Record<string, unknown>
+  suggestion: string
+  setting: string | null
+  suggested_value: number | null
+}
+
+/** `ImprovementAction` (improvement/models.py) as returned by the ledger. */
+export interface ImprovementActionEntry {
+  id: string
+  recommendation_id: string
+  created_at: number
+  setting: string
+  old_value: number
+  new_value: number
+  commit_sha: string
+  review_after: number
+  reviewed_at: number | null
+  outcome: 'kept' | 'reverted' | null
+  revert_commit_sha: string | null
+}
+
+/** Fase 7, DCF v5 mandate "Continuous Improvement Engine" — sourced from
+ * `improvement/ledger.py` via `telemetry/monitoring.py::improvement_dashboard()`. */
+export interface ImprovementDashboard {
+  total_recommendations: number
+  total_actions_applied: number
+  total_actions_reviewed: number
+  pending_review: ImprovementActionEntry[]
+  recent_recommendations: ImprovementRecommendationEntry[]
+  recent_actions_reviewed: ImprovementActionEntry[]
+  ledger_integrity_ok: boolean
+  ledger_integrity_problems: string[]
+}
+
 export interface MonitoringDashboard {
   agent: AgentDashboard
   workflow: WorkflowDashboard
@@ -108,6 +148,7 @@ export interface MonitoringDashboard {
   workspace: WorkspaceDashboard
   security: SecurityDashboard
   audit: AuditDashboard
+  improvement: ImprovementDashboard
 }
 
 export interface MonitoringAlert {
