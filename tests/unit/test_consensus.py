@@ -5,6 +5,7 @@ Agents are stubbed — no provider/network calls (Bab 12.3).
 import pytest
 
 from agents.base_agent import AgentResult, BaseAgent, Task
+from agents.validation_guard import ValidatorNotIndependentError
 from orchestrator.consensus import ConsensusEngine
 from orchestrator.dispatcher import Dispatcher
 from orchestrator.execution_graph import ExecutionGraph, Step
@@ -116,6 +117,82 @@ async def test_decide_raises_on_unknown_strategy():
     engine = ConsensusEngine()
     with pytest.raises(ValueError):
         await engine.decide([_result("writer", "A")], strategy="nonsense")
+
+
+# ─── Fase 2 / R-08: validator-independence guard, exercised through the real
+# Dispatcher + ConsensusEngine path (not just agents/validation_guard.py in
+# isolation) — proves arbitrate() actually wires the metadata Dispatcher checks.
+
+@pytest.mark.asyncio
+async def test_arbitrate_rejects_arbitrator_that_is_also_a_candidate():
+    """If a caller's roles list already included "consensus" as a candidate,
+    the arbitrator resolving to that same agent_id must be rejected instead
+    of silently letting it judge its own answer."""
+
+    class SelfCandidateAgent(BaseAgent):
+        role = "consensus"
+        agent_id = "consensus-agent"  # matches GenericLLMAgent's f"{role}-agent" convention
+        default_provider = "stub"
+
+        async def execute(self, task: Task) -> AgentResult:
+            return AgentResult(
+                output="final",
+                confidence=0.9,
+                trace_id=task.trace_id,
+                provider_used="stub",
+                model_used="stub-m",
+                role="consensus",
+                agent_id="consensus-agent",
+            )
+
+        async def health_check(self) -> bool:
+            return True
+
+    registry = AgentRegistry()
+    registry.register(SelfCandidateAgent())
+    dispatcher = Dispatcher(RoutingEngine(registry), max_retries=0)
+    engine = ConsensusEngine()
+
+    candidates = [
+        _result("writer", "A"),
+        AgentResult(
+            output="B", confidence=0.8, trace_id="t1", provider_used="stub", model_used="stub-m",
+            role="consensus", agent_id="consensus-agent",  # same agent_id as the arbitrator below
+        ),
+    ]
+
+    with pytest.raises(ValidatorNotIndependentError, match="cannot validate its own output"):
+        await engine.arbitrate(candidates, dispatcher, trace_id="t1")
+
+
+@pytest.mark.asyncio
+async def test_arbitrate_rejects_non_validator_arbitrator_role():
+    """A caller passing a non-VALIDATOR role as the arbitrator (misuse of the
+    ``arbitrator_role`` parameter) must be rejected, not silently accepted."""
+
+    class WriterAsArbitrator(BaseAgent):
+        role = "writer"
+        agent_id = "writer-arbitrator"
+        default_provider = "stub"
+
+        async def execute(self, task: Task) -> AgentResult:
+            return AgentResult(
+                output="final", confidence=0.9, trace_id=task.trace_id,
+                provider_used="stub", model_used="stub-m", role="writer", agent_id="writer-arbitrator",
+            )
+
+        async def health_check(self) -> bool:
+            return True
+
+    registry = AgentRegistry()
+    registry.register(WriterAsArbitrator())
+    dispatcher = Dispatcher(RoutingEngine(registry), max_retries=0)
+    engine = ConsensusEngine()
+
+    with pytest.raises(ValidatorNotIndependentError, match="cannot act as a validator"):
+        await engine.arbitrate(
+            [_result("analyst", "A")], dispatcher, arbitrator_role="writer", trace_id="t1"
+        )
 
 
 # ─── VotingWorkflow / ConsensusWorkflow end-to-end ───────────────────────────

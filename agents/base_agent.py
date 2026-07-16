@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from .capabilities import AgentCapability, capability_for
+
 
 def new_id() -> str:
     """Generate a short unique id (task/trace)."""
@@ -92,6 +94,16 @@ class BaseAgent(ABC):
     agent_id: str
     role: str
     default_provider: str
+
+    @property
+    def capability(self) -> AgentCapability:
+        """Which of the mandate's SPECIALIST/EXECUTOR/VALIDATOR tiers this agent's
+        role belongs to (Fase 2, R-08). Derived from ``self.role`` — every
+        ``BaseAgent`` subclass gets this for free as long as ``role`` is a
+        canonical role (``registry.model_registry.ROLES``); no override needed.
+        See ``agents/validation_guard.py`` for what actually enforces it.
+        """
+        return capability_for(self.role)
 
     @abstractmethod
     async def execute(self, task: Task) -> AgentResult:

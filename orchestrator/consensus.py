@@ -141,7 +141,16 @@ class ConsensusEngine:
             "Timbang seluruh opini, pilih atau gabungkan menjadi satu jawaban akhir terbaik:\n\n"
             f"{options}"
         )
-        task = Task(role=arbitrator_role, prompt=prompt, trace_id=trace_id or new_id())
+        # Fase 2 / R-08: mark this task as validating the candidates' output so
+        # Dispatcher's validator-independence guard rejects an arbitrator that
+        # turns out to be one of the very candidates it's judging (e.g. if a
+        # caller's roles list already included "consensus").
+        task = Task(
+            role=arbitrator_role,
+            prompt=prompt,
+            trace_id=trace_id or new_id(),
+            metadata={"validates_agent_ids": [r.agent_id for r in ok]},
+        )
         winner = await dispatcher.dispatch(task)
         return ConsensusDecision(
             winner=winner, strategy="arbitrator", agreement_rate=self.agreement_rate(ok), candidates=results

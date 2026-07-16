@@ -31,6 +31,7 @@ import asyncio
 
 from agents.base_agent import AgentResult, Task
 from agents.generic_agent import GenericLLMAgent
+from agents.validation_guard import assert_independent_validator
 from api.config import settings
 from core.utils.logger import get_logger
 from messaging import EventBus
@@ -89,6 +90,16 @@ class Dispatcher:
             logger.error("dispatch.no_route", trace_id=task.trace_id, error=str(exc))
             await self._emit(ev.AGENT_FAILED, task, "dispatcher", error=str(exc))
             return self._failed(task, f"routing failed: {exc}")
+
+        # Fase 2 / R-08: a task marked as validating another agent's output
+        # (currently only set by orchestrator/consensus.py's arbitrate()) must
+        # resolve to a genuinely independent VALIDATOR-capability agent —
+        # raises ValidatorNotIndependentError uncaught (policy violation, not
+        # a transient provider failure) rather than silently proceeding. See
+        # agents/validation_guard.py for the full rationale.
+        validates_agent_ids = task.metadata.get("validates_agent_ids")
+        if validates_agent_ids:
+            assert_independent_validator(validates_agent_ids, agent)
 
         await self._emit(ev.AGENT_ASSIGNED, task, agent.agent_id)
 
