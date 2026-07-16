@@ -126,3 +126,14 @@ class FilesystemAdapter:
         with open(path, mode, encoding=encoding) as f:
             f.write(content)
         return path
+
+    def write_bytes(self, relative_path: str, data: bytes) -> Path:
+        """Overwrite with raw bytes (Fase 4, Workspace file version restore
+        — `workspace/versioning.py` stores every version as raw bytes
+        regardless of format, so one write path covers text and PDF/DOCX
+        alike instead of branching by extension)."""
+        path = resolve_within_root(self.root, relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path

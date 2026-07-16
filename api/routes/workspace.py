@@ -67,11 +67,14 @@ from api.routes.knowledge import _retriever as _knowledge_retriever
 from api.routes.projects import _role_for
 from db.connection import get_session
 from db.models import Project, Workspace, WorkspaceFolder
+from security import audit_log
 from security.auth import Principal, get_current_principal
 from security.permissions import require_workspace_permission
 from tools.adapters.filesystem import FilesystemAdapter
+from tools.tool_validator import PathEscapesRootError
 from workspace.indexer import index_folder
 from workspace.scanner import scan_folders
+from workspace.versioning import get_version, list_versions, save_version
 
 router = APIRouter()
 
@@ -91,6 +94,11 @@ class MountRequest(BaseModel):
     path: str = Field(..., min_length=1)
     source_type: str = Field("Local")
     alias: str | None = None
+
+
+class RestoreVersionRequest(BaseModel):
+    relative_path: str = Field(..., min_length=1)
+    version_id: int
 
 
 def _folder_dict(folder: WorkspaceFolder) -> dict:
@@ -128,6 +136,13 @@ async def _folders_for(session: AsyncSession, workspace_id: str) -> list[Workspa
     return list(result.scalars().all())
 
 
+async def _get_folder_or_404(session: AsyncSession, workspace_id: str, folder_id: str) -> WorkspaceFolder:
+    folder = await session.get(WorkspaceFolder, folder_id)
+    if folder is None or folder.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Folder not found in this workspace")
+    return folder
+
+
 async def _project_role_for_workspace(
     session: AsyncSession, workspace: Workspace, principal: Principal
 ) -> str | None:
@@ -151,6 +166,20 @@ async def _require_admin(session: AsyncSession, workspace: Workspace, principal:
     role = await _project_role_for_workspace(session, workspace, principal)
     try:
         require_workspace_permission(role, "admin")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return role
+
+
+async def _require_write(session: AsyncSession, workspace: Workspace, principal: Principal) -> str | None:
+    """Workspace Permission "write_output" (Fase 4) — the same action
+    `agent/tools/workspace_reader.py::workspace_write_file` already gates on
+    for the chat-tool write path; restoring a version is equally a content
+    mutation, not Workspace-registration management, so it uses this
+    finer-grained action rather than "admin" like the routes above."""
+    role = await _project_role_for_workspace(session, workspace, principal)
+    try:
+        require_workspace_permission(role, "write_output")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return role
@@ -391,3 +420,72 @@ async def workspace_status(
         "root_path": workspace.root_path,
         "last_scan_at": workspace.last_scan_at,
     }
+
+
+@router.get("/{workspace_id}/files/{folder_id}/versions")
+async def get_file_versions(
+    workspace_id: str,
+    folder_id: str,
+    path: str,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Version history for one file (Fase 4) — same read access as any other
+    Workspace content (`_require_member`: owner/editor/viewer). `content`
+    bytes are deliberately not included per-entry; restore reads them
+    server-side instead of round-tripping potentially large/binary content
+    through this listing."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    await _require_member(session, workspace, principal)
+    await _get_folder_or_404(session, workspace_id, folder_id)
+    versions = await list_versions(session, workspace_id, folder_id, path)
+    return {"relative_path": path, "versions": versions}
+
+
+@router.post("/{workspace_id}/files/{folder_id}/restore")
+async def restore_file_version(
+    workspace_id: str,
+    folder_id: str,
+    req: RestoreVersionRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Restore a file to a previously saved version (Fase 4, CONTROL —
+    rollback). Deliberately a human-facing HTTP endpoint, not a chat tool —
+    see `workspace/versioning.py`'s module docstring for why. Gated on
+    `write_output` (`_require_write`), same permission the chat write-path
+    tool already uses — restoring is equally a content mutation.
+
+    Restoring is itself an overwrite of whatever is live right now, so the
+    current content is snapshotted first too — a restore can always be
+    undone, not just the original write that prompted it."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    role = await _require_write(session, workspace, principal)
+    folder = await _get_folder_or_404(session, workspace_id, folder_id)
+    if folder.source_type != "Local":
+        raise HTTPException(status_code=400, detail=f"source_type={folder.source_type!r} belum didukung.")
+
+    version = await get_version(session, req.version_id, workspace_id, folder_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Version not found for this file")
+
+    try:
+        adapter = FilesystemAdapter(folder.path)
+        abs_path = adapter.absolute_path(req.relative_path)
+        if abs_path.exists():
+            current_bytes = adapter.read_bytes(req.relative_path)
+            await save_version(
+                session, workspace_id, folder_id, req.relative_path, current_bytes,
+                actor=principal.api_key,
+            )
+        adapter.write_bytes(req.relative_path, version.content)
+    except PathEscapesRootError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    await audit_log.record(
+        "workspace.file_restored",
+        actor=principal.api_key,
+        detail={"workspace_id": workspace_id, "folder_id": folder_id,
+                "path": req.relative_path, "restored_version_id": req.version_id},
+    )
+    return {"success": True, "path": req.relative_path, "restored_from_version_id": req.version_id}

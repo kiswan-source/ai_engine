@@ -114,3 +114,25 @@ async def test_remember_fact_and_recall_facts_use_injected_owner_not_model_suppl
     attacker_facts = await asyncio.to_thread(recall_facts, owner="attacker-supplied")
     assert real_owner_facts["facts"] == {"bahasa": "Indonesia"}
     assert attacker_facts["facts"] == {}
+
+
+async def test_run_tool_injects_actor_for_workspace_write_file(engine):
+    """Fase 4 — workspace_write_file's version snapshot/audit trail needs to
+    know who triggered an overwrite. Same never-trust-the-model rule as
+    owner/workspace_id: _run_tool must inject it, not the caller-supplied args."""
+    captured = {}
+
+    def fake_workspace_write_file(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "path": kwargs.get("relative_path"), "action": "created"}
+
+    registry = ToolRegistry()
+    registry.register("workspace_write_file", fake_workspace_write_file, "fake")
+
+    await engine._run_tool(
+        registry, "workspace_write_file",
+        {"folder_id": "f1", "relative_path": "a.txt", "content": "x", "actor": "attacker-supplied"},
+        role=None, workspace_id="ws-1", workspace_role="editor", owner="real-owner",
+    )
+
+    assert captured["actor"] == "real-owner"

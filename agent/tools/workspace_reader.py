@@ -70,6 +70,25 @@ land inside the Workspace folder instead of `~/ai_engine/reports/`, no
 changes to that module needed. `mode="append"` is rejected for these two
 extensions — ReportLab/python-docx have no sane way to append to an
 existing binary document.
+
+Automatic versioning (Fase 4, DCF v5 mandate "Workspace Autonomous
+Capability"): before this Tahap, an overwrite of an existing file was
+silent and unrecoverable — `FilesystemAdapter.write_text(mode="w")` just
+replaced the content with no trace of what was there before. `_write_file`
+now snapshots the file's current bytes to `workspace/versioning.py` (a new
+`WorkspaceFileVersion` row) BEFORE overwriting it — but only when the
+target already exists; a brand-new file has nothing to snapshot. The
+result's `action` field is `"created"` or `"overwritten"` (not a generic
+`mode` echo) so the model/user can tell which actually happened — the
+"tidak boleh ada silent modification" mandate requirement. Every write
+(create or overwrite) is also recorded to `security.audit_log`. Restoring
+a saved version is deliberately NOT a chat tool — see
+`api/routes/workspace.py`'s versions/restore endpoints and
+`workspace/versioning.py`'s module docstring for why. Known, accepted
+limitation: this is automatic-snapshot-then-write, not a live
+pause-and-confirm approval before the overwrite happens — Owner chose this
+over a full in-chat approval flow (Fase 4 design decision) to avoid a much
+larger SSE-protocol + frontend change for this pass.
 """
 from __future__ import annotations
 
@@ -83,9 +102,11 @@ from sqlalchemy import select
 from agent.tools.gis_io import _load_any_fc, _summarize_fc
 from db.connection import AsyncSessionFactory
 from db.models import Workspace, WorkspaceFolder
+from security import audit_log
 from tools.adapters.filesystem import FilesystemAdapter, classify
 from tools.tool_validator import PathEscapesRootError
 from workspace.indexer import extract_text
+from workspace.versioning import save_version
 
 # Plain-text formats write raw content directly.
 WRITABLE_EXTENSIONS = {"txt", "md", "log", "csv", "json", "html"}
@@ -177,9 +198,23 @@ async def _read_file(
         return {"success": False, "error": str(e)}
 
 
+async def _snapshot_if_exists(
+    session, workspace_id: str, folder_id: str, relative_path: str, adapter: FilesystemAdapter, actor: str,
+) -> bool:
+    """Save the file's current bytes as a version BEFORE it's overwritten —
+    no-op (returns False) if the file doesn't exist yet, since a brand-new
+    file has nothing to snapshot. Returns whether a version was saved."""
+    abs_path = adapter.absolute_path(relative_path)
+    if not abs_path.exists():
+        return False
+    current_bytes = adapter.read_bytes(relative_path)
+    await save_version(session, workspace_id, folder_id, relative_path, current_bytes, actor=actor)
+    return True
+
+
 async def _write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
-    mode: str = "overwrite", title: str | None = None, session_factory=None,
+    mode: str = "overwrite", title: str | None = None, actor: str = "anonymous", session_factory=None,
 ) -> Dict[str, Any]:
     session_factory = session_factory or AsyncSessionFactory
     async with session_factory() as session:
@@ -188,36 +223,55 @@ async def _write_file(
             return {"success": False, "error": "Folder tidak ditemukan di Workspace ini."}
         folder_path, source_type = folder.path, folder.source_type
 
-    if source_type != "Local":
-        return {"success": False, "error": f"source_type={source_type!r} belum didukung."}
+        if source_type != "Local":
+            return {"success": False, "error": f"source_type={source_type!r} belum didukung."}
 
-    ext = relative_path.rsplit(".", 1)[-1].lower() if "." in relative_path else ""
-    if ext not in WRITABLE_EXTENSIONS and ext not in WRITABLE_DOCUMENT_EXTENSIONS:
-        supported = sorted(WRITABLE_EXTENSIONS | WRITABLE_DOCUMENT_EXTENSIONS)
-        return {"success": False, "error": f"Tipe file tidak didukung untuk menulis ({'/'.join(supported)})."}
-    if mode not in ("overwrite", "append"):
-        return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite' atau 'append')."}
-    if ext in WRITABLE_DOCUMENT_EXTENSIONS and mode == "append":
-        return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (cuma 'overwrite')."}
+        ext = relative_path.rsplit(".", 1)[-1].lower() if "." in relative_path else ""
+        if ext not in WRITABLE_EXTENSIONS and ext not in WRITABLE_DOCUMENT_EXTENSIONS:
+            supported = sorted(WRITABLE_EXTENSIONS | WRITABLE_DOCUMENT_EXTENSIONS)
+            return {"success": False, "error": f"Tipe file tidak didukung untuk menulis ({'/'.join(supported)})."}
+        if mode not in ("overwrite", "append"):
+            return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite' atau 'append')."}
+        if ext in WRITABLE_DOCUMENT_EXTENSIONS and mode == "append":
+            return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (cuma 'overwrite')."}
 
-    try:
-        adapter = FilesystemAdapter(folder_path)
-        if ext in WRITABLE_DOCUMENT_EXTENSIONS:
-            from agent.tools.writers import write_docx, write_pdf
+        try:
+            adapter = FilesystemAdapter(folder_path)
+            # Fase 4: overwriting an append is a no-op for versioning purposes
+            # too (append never destroys prior content) — only a genuine
+            # overwrite of an existing file needs a pre-write snapshot.
+            versioned = False
+            if mode == "overwrite":
+                versioned = await _snapshot_if_exists(session, workspace_id, folder_id, relative_path, adapter, actor)
+            action = "overwritten" if versioned else "created"
 
-            abs_path = str(adapter.absolute_path(relative_path))
-            generator = write_pdf if ext == "pdf" else write_docx
-            result = generator(abs_path, title or _default_title(relative_path), content)
-            if not result.get("success"):
-                return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
-            return {"success": True, "path": relative_path, "action": "overwrite",
-                     "type": ext, "size": result["size"]}
-        path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
-        return {"success": True, "path": relative_path, "action": mode, "size": path.stat().st_size}
-    except PathEscapesRootError as e:
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            if ext in WRITABLE_DOCUMENT_EXTENSIONS:
+                from agent.tools.writers import write_docx, write_pdf
+
+                abs_path = str(adapter.absolute_path(relative_path))
+                generator = write_pdf if ext == "pdf" else write_docx
+                result = generator(abs_path, title or _default_title(relative_path), content)
+                if not result.get("success"):
+                    return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+                await audit_log.record(
+                    "workspace.file_written", actor=actor,
+                    detail={"workspace_id": workspace_id, "folder_id": folder_id,
+                            "path": relative_path, "action": action},
+                )
+                return {"success": True, "path": relative_path, "action": action,
+                         "type": ext, "size": result["size"]}
+            path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
+            await audit_log.record(
+                "workspace.file_written", actor=actor,
+                detail={"workspace_id": workspace_id, "folder_id": folder_id,
+                        "path": relative_path, "action": "appended" if mode == "append" else action},
+            )
+            return {"success": True, "path": relative_path,
+                     "action": "appended" if mode == "append" else action, "size": path.stat().st_size}
+        except PathEscapesRootError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
 
 def _build_fresh_engine():
@@ -263,19 +317,22 @@ def workspace_read_file(workspace_id: str, folder_id: str, relative_path: str) -
 
 def workspace_write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
-    mode: str = "overwrite", title: str | None = None,
+    mode: str = "overwrite", title: str | None = None, actor: str | None = None,
 ) -> Dict[str, Any]:
     """Tulis (buat/timpa/tambah) satu file di Project Workspace — teks
     apa adanya, atau PDF/DOCX sungguhan (Tahap 33) kalau ekstensinya
     begitu (``title`` cuma dipakai untuk PDF/DOCX). ``workspace_id`` selalu
     disuntik oleh `ChatEngine._run_tool`; izin ``write_output`` dicek DI
-    SANA sebelum fungsi ini pernah dipanggil — lihat modul docstring."""
+    SANA sebelum fungsi ini pernah dipanggil — lihat modul docstring.
+    ``actor`` (Fase 4, same injection rule) identifies who triggered an
+    overwrite, for the version snapshot and audit log entry."""
 
     async def _run():
         engine, factory = _build_fresh_engine()
         try:
             return await _write_file(
-                workspace_id, folder_id, relative_path, content, mode, title, session_factory=factory
+                workspace_id, folder_id, relative_path, content, mode, title,
+                actor=actor or "anonymous", session_factory=factory,
             )
         finally:
             await engine.dispose()

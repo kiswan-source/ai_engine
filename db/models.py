@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Float, Integer, DateTime, Text, JSON, ForeignKey, UniqueConstraint, func
+from sqlalchemy import String, Float, Integer, DateTime, Text, JSON, ForeignKey, UniqueConstraint, LargeBinary, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 from api.config import settings
@@ -243,3 +243,28 @@ class WorkspaceFolder(Base):
     path: Mapped[str] = mapped_column(String(1024))
     alias: Mapped[str | None] = mapped_column(String(256), nullable=True)
     registered_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WorkspaceFileVersion(Base):
+    """Snapshot of a Workspace file's content taken right before it was
+    overwritten (Fase 4, DCF v5 mandate "Workspace Autonomous Capability" —
+    CONTROL: version tracking + rollback, "tidak boleh ada silent
+    modification"). Written by `agent/tools/workspace_reader.py::_write_file`
+    before every overwrite of a file that already existed (never for a
+    brand-new file — nothing to snapshot); read by
+    `api/routes/workspace.py`'s versions/restore endpoints (human-facing
+    only, not a chat tool — see that module for why). `content` is raw
+    bytes regardless of format (text formats included) so one column and
+    one restore path covers both, rather than branching storage by
+    extension."""
+
+    __tablename__ = "workspace_file_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), index=True)
+    folder_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspace_folders.id"), index=True)
+    relative_path: Mapped[str] = mapped_column(String(1024), index=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    actor: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

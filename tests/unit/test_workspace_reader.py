@@ -19,14 +19,17 @@ from agent.tools.workspace_reader import (
     workspace_read_file,
     workspace_write_file,
 )
-from db.models import Workspace, WorkspaceFolder
+from db.models import Workspace, WorkspaceFileVersion, WorkspaceFolder
 
 
 @pytest.fixture
 async def sqlite_session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
-        await conn.run_sync(Workspace.metadata.create_all, tables=[Workspace.__table__, WorkspaceFolder.__table__])
+        await conn.run_sync(
+            Workspace.metadata.create_all,
+            tables=[Workspace.__table__, WorkspaceFolder.__table__, WorkspaceFileVersion.__table__],
+        )
     factory = async_sessionmaker(engine, expire_on_commit=False)
     yield factory
     await engine.dispose()
@@ -114,7 +117,10 @@ async def test_write_file_creates_new_file(sqlite_session_factory, tmp_path):
     )
 
     assert result["success"] is True
-    assert result["action"] == "overwrite"
+    # Fase 4: distinct from "overwritten" — a brand-new file has nothing to
+    # snapshot, and the model/user should be able to tell the difference
+    # (the "tidak boleh ada silent modification" mandate requirement).
+    assert result["action"] == "created"
     assert (tmp_path / "catatan.txt").read_text() == "isi baru"
 
 
@@ -127,7 +133,61 @@ async def test_write_file_overwrite_replaces_content(sqlite_session_factory, tmp
     )
 
     assert result["success"] is True
+    assert result["action"] == "overwritten"
     assert (tmp_path / "catatan.txt").read_text() == "baru"
+
+
+async def test_write_file_overwrite_saves_a_version_of_the_old_content(sqlite_session_factory, tmp_path):
+    """Fase 4 — the whole point: an overwrite must never be silent/
+    unrecoverable. The OLD content, not the new one, is what gets snapshotted."""
+    from workspace.versioning import list_versions
+
+    (tmp_path / "catatan.txt").write_text("isi lama yang akan hilang")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "catatan.txt", "isi baru", mode="overwrite",
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+    assert result["success"] is True
+
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "catatan.txt")
+    assert len(versions) == 1
+    assert versions[0]["actor"] == "alice"
+    assert versions[0]["size_bytes"] == len(b"isi lama yang akan hilang")
+
+
+async def test_write_file_creating_new_file_saves_no_version(sqlite_session_factory, tmp_path):
+    """Nothing to snapshot for a file that didn't exist before."""
+    from workspace.versioning import list_versions
+
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    await _write_file(
+        workspace_id, folder_id, "baru.txt", "isi", session_factory=sqlite_session_factory
+    )
+
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "baru.txt")
+    assert versions == []
+
+
+async def test_write_file_append_saves_no_version(sqlite_session_factory, tmp_path):
+    """Append never destroys prior content, so no pre-write snapshot is needed."""
+    from workspace.versioning import list_versions
+
+    (tmp_path / "catatan.txt").write_text("baris 1\n")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "catatan.txt", "baris 2\n", mode="append", session_factory=sqlite_session_factory
+    )
+    assert result["action"] == "appended"
+
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "catatan.txt")
+    assert versions == []
 
 
 async def test_write_file_append_adds_to_existing_content(sqlite_session_factory, tmp_path):

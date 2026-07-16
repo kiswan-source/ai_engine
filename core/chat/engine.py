@@ -388,6 +388,11 @@ class ChatEngine:
             if not workspace_id:
                 return {"error": "Sesi ini belum terhubung ke Project Workspace.", "success": False}
             args["workspace_id"] = workspace_id
+        if name == "workspace_write_file":
+            # Fase 4 — identifies who triggered an overwrite, for the version
+            # snapshot + audit log entry _write_file records. Same
+            # never-trust-the-model rule as workspace_id/owner above.
+            args["actor"] = owner or role or "anonymous"
         if name in MEMORY_TOOL_NAMES:
             # Fase 3 — same rule as workspace_id above: never let the model
             # supply its own owner, or one session could recall/overwrite
