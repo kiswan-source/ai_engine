@@ -56,6 +56,9 @@ don't exist yet.
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -66,7 +69,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.routes.knowledge import _retriever as _knowledge_retriever
 from api.routes.projects import _role_for
 from db.connection import get_session
-from db.models import Project, Workspace, WorkspaceFolder
+from db.models import Project, ProjectMember, Workspace, WorkspaceFolder
 from security import audit_log
 from security.auth import Principal, get_current_principal
 from security.permissions import require_workspace_permission
@@ -80,6 +83,52 @@ router = APIRouter()
 
 VALID_SOURCE_TYPES = ("Local", "Network", "Server", "Upload")
 IMPLEMENTED_SOURCE_TYPES = ("Local",)
+
+# Fase 9 (DCF v5 mandate "Workspace Manager UI — Native Windows Folder
+# Connection") — Owner decision (Gate 1): a browser can never hand JS a real
+# OS path (no showDirectoryPicker()/webkitdirectory API exposes one — a
+# deliberate browser security boundary, not a gap here), so "native folder
+# picker -> registerWorkspace(path)" is impossible as literally specified.
+# The chosen substitute is an in-app folder browser: browse-fs lists real
+# server-side directories so the frontend can render a click-to-navigate tree
+# instead of a text input. Owner also decided this endpoint may browse
+# anywhere the process can reach (no allow-list) — permission is the act of
+# picking a folder, same posture Workspace registration already has.
+_WSL_DRIVE_RE = re.compile(r"^/mnt/([a-zA-Z])(/.*)?$")
+
+
+def _friendly_path(path: str) -> str:
+    """Display-only conversion so a WSL-mounted Windows drive shows as
+    ``D:\\Archive`` instead of ``/mnt/d/Archive`` — the mandate's "user never
+    sees the WSL path" requirement. Anything else (native Linux/macOS paths)
+    passes through unchanged."""
+    m = _WSL_DRIVE_RE.match(path)
+    if not m:
+        return path
+    letter, rest = m.group(1).upper(), (m.group(2) or "")
+    return f"{letter}:{rest.replace('/', chr(92))}" if rest else f"{letter}:\\"
+
+
+def _browse_roots() -> list[dict]:
+    """Starting points for the folder browser when no ``path`` is given —
+    surfaces WSL-mounted Windows drives (``/mnt/c``, ``/mnt/d``, ...)
+    prominently since that's how ``D:\\`` reaches this process, plus the
+    home directory and ``/`` as a full-filesystem fallback."""
+    roots = []
+    home = os.path.expanduser("~")
+    if os.path.isdir(home):
+        roots.append({"name": "Home", "path": home, "friendly_path": _friendly_path(home)})
+    mnt = "/mnt"
+    if os.path.isdir(mnt):
+        try:
+            for entry in sorted(os.listdir(mnt)):
+                p = os.path.join(mnt, entry)
+                if len(entry) == 1 and os.path.isdir(p):
+                    roots.append({"name": f"{entry.upper()}:\\", "path": p, "friendly_path": _friendly_path(p)})
+        except OSError:
+            pass
+    roots.append({"name": "/ (root filesystem)", "path": "/", "friendly_path": "/"})
+    return roots
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -99,6 +148,11 @@ class MountRequest(BaseModel):
 class RestoreVersionRequest(BaseModel):
     relative_path: str = Field(..., min_length=1)
     version_id: int
+
+
+class QuickConnectRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    alias: str | None = Field(None, max_length=256)  # parity with ProjectCreateRequest.name/Project.name column
 
 
 def _folder_dict(folder: WorkspaceFolder) -> dict:
@@ -183,6 +237,153 @@ async def _require_write(session: AsyncSession, workspace: Workspace, principal:
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return role
+
+
+@router.get("/browse-fs")
+async def browse_filesystem(
+    path: str | None = None,
+    principal: Principal = Depends(get_current_principal),
+):
+    """In-app folder browser (Fase 9) — the practical substitute for a
+    literal native OS picker (see module-level comment above
+    ``_browse_roots``). Lists only immediate subdirectories of ``path`` (not
+    files — this endpoint exists to let the user navigate to and pick a
+    FOLDER for Add Folder, not to browse file contents); omit ``path`` to get
+    the curated starting points instead. Authenticated callers only — no
+    further scoping, per Owner decision (Gate 1) that browsing anywhere the
+    process can reach is the intended permission model, same posture
+    Workspace registration itself already has."""
+    if not path:
+        return {"path": None, "parent": None, "entries": _browse_roots()}
+
+    if not os.path.isdir(path):
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+    entries = []
+    try:
+        for name in sorted(os.listdir(path)):
+            full = os.path.join(path, name)
+            if os.path.isdir(full) and not name.startswith("."):
+                entries.append({"name": name, "path": full, "friendly_path": _friendly_path(full)})
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Cannot list directory: {e}")
+
+    parent = os.path.dirname(path.rstrip("/")) or None
+    if parent == path:
+        parent = None
+    return {"path": path, "friendly_path": _friendly_path(path), "parent": parent, "entries": entries}
+
+
+@router.get("/mine")
+async def list_my_workspaces(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Every Workspace the caller can reach (owns or is a member of the
+    owning Project), across Projects — the "connected folders" list the
+    Workspace Manager sidebar shows without the user ever picking a Project
+    first (Fase 9). Reuses `api/routes/projects.py::list_projects`'s exact
+    owned-or-member query shape rather than duplicating it under a new name."""
+    owned = await session.execute(select(Project).where(Project.owner_key == principal.api_key))
+    member_rows = await session.execute(
+        select(Project)
+        .join(ProjectMember, ProjectMember.project_id == Project.id)
+        .where(ProjectMember.principal_key == principal.api_key)
+    )
+    project_ids = {p.id for p in [*owned.scalars().all(), *member_rows.scalars().all()]}
+    if not project_ids:
+        return {"workspaces": []}
+
+    result = await session.execute(
+        select(Workspace).where(Workspace.project_id.in_(project_ids), Workspace.deleted_at.is_(None))
+    )
+    workspaces = result.scalars().all()
+    out = []
+    for ws in workspaces:
+        folders = await _folders_for(session, ws.id)
+        d = _workspace_dict(ws, folders)
+        d["friendly_root_path"] = _friendly_path(ws.root_path) if ws.root_path else None
+        out.append(d)
+    out.sort(key=lambda d: d["updated_at"], reverse=True)
+    return {"workspaces": out}
+
+
+@router.post("/quick-connect")
+async def quick_connect(
+    req: QuickConnectRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """One call that does everything "Add Folder" needs (Fase 9) — auto
+    Project + Workspace + WorkspaceFolder + scan, so the frontend never has
+    to manage a Project, a Workspace id, or a mount step separately. Reuses
+    the exact same primitives `create_project`/`create_workspace`/
+    `mount_folder`/`scan_workspace` already use (Project/Workspace/
+    WorkspaceFolder models, ``FilesystemAdapter``, ``scan_folders``) — this
+    is a convenience composition over existing Workspace Engine internals,
+    not a new system (Owner's explicit non-negotiable constraint)."""
+    try:
+        FilesystemAdapter(req.path)  # validates the directory exists, doesn't read it
+    except NotADirectoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    friendly = _friendly_path(req.path)
+    name = req.alias or os.path.basename(req.path.rstrip("/\\")) or friendly
+
+    project = Project(name=name, owner_key=principal.api_key)
+    session.add(project)
+    await session.flush()
+
+    workspace = Workspace(project_id=project.id, root_path=req.path)
+    session.add(workspace)
+    await session.flush()
+
+    folder = WorkspaceFolder(workspace_id=workspace.id, source_type="Local", path=req.path, alias=req.alias or name)
+    session.add(folder)
+
+    try:
+        adapter = FilesystemAdapter(req.path)
+        # Found by adversarial Gate 2 review: a recursive os.walk (scan_folders
+        # -> FilesystemAdapter._walk) run directly on the request coroutine
+        # blocks the WHOLE asyncio event loop — every other API request,
+        # everyone's — for as long as the walk takes. The "Add Folder" flow
+        # makes triggering a full-drive-or-root scan a couple of clicks away
+        # (the browse-fs roots deliberately include "/"), a materially easier
+        # trigger than the pre-existing scan_workspace route (same root
+        # cause, not fixed here — no UI shortcut made it a casual click
+        # before this Fase). asyncio.to_thread keeps this request itself
+        # just as slow, but stops it from stalling every OTHER caller.
+        summary = await asyncio.to_thread(scan_folders, {folder.id: adapter})
+    except (NotADirectoryError, OSError) as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Scan failed: {e}")
+
+    workspace.status = "Active"
+    workspace.last_scan_at = datetime.utcnow()
+    await session.commit()
+    # workspace.updated_at has onupdate=func.now() — the UPDATE above expires
+    # it (SQLite/aiosqlite doesn't eagerly re-fetch onupdate defaults via
+    # RETURNING the way flush()-time INSERT defaults get fetched), so a bare
+    # attribute access after commit tries an implicit lazy-load outside any
+    # awaited context ("MissingGreenlet"). Explicit refresh avoids it.
+    await session.refresh(workspace)
+    await session.refresh(folder)
+
+    await audit_log.record(
+        "workspace.quick_connected", actor=principal.api_key,
+        detail={"workspace_id": workspace.id, "project_id": project.id, "path": req.path},
+    )
+
+    d = _workspace_dict(workspace, [folder])
+    d["friendly_root_path"] = friendly
+    d["scan"] = {
+        "document_count": summary.document_count,
+        "image_count": summary.image_count,
+        "gis_count": summary.gis_count,
+        "other_count": summary.other_count,
+        "total_size_bytes": summary.total_size_bytes,
+    }
+    return d
 
 
 @router.get("")

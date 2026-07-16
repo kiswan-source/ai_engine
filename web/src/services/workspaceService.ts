@@ -1,6 +1,9 @@
 /** Talks to `api/routes/workspace.py` — `/api/v1/workspace/*`. */
 import { apiClient } from './apiClient'
 import type {
+  BrowseFsResult,
+  MyWorkspace,
+  QuickConnectResult,
   Workspace,
   WorkspaceFolder,
   WorkspaceIndexResult,
@@ -36,4 +39,12 @@ export const workspaceService = {
     ),
   status: (workspaceId: string) =>
     apiClient.get<WorkspaceStatusSnapshot>(`/api/v1/workspace/${encodeURIComponent(workspaceId)}/status`),
+  // Fase 9 (Workspace Manager UI) — in-app folder browser + one-call connect.
+  browseFs: (path?: string) =>
+    apiClient.get<BrowseFsResult>(
+      path ? `/api/v1/workspace/browse-fs?path=${encodeURIComponent(path)}` : '/api/v1/workspace/browse-fs',
+    ),
+  quickConnect: (path: string, alias?: string) =>
+    apiClient.post<QuickConnectResult>('/api/v1/workspace/quick-connect', { path, alias }),
+  mine: () => apiClient.get<{ workspaces: MyWorkspace[] }>('/api/v1/workspace/mine'),
 }

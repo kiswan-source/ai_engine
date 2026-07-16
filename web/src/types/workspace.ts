@@ -60,3 +60,26 @@ export interface WorkspaceStatusSnapshot {
   root_path: string | null
   last_scan_at: string | null
 }
+
+/** Fase 9 (Workspace Manager UI) — in-app folder browser + quick-connect. */
+export interface BrowseFsEntry {
+  name: string
+  path: string
+  friendly_path: string
+}
+
+export interface BrowseFsResult {
+  path: string | null
+  friendly_path?: string
+  parent: string | null
+  entries: BrowseFsEntry[]
+}
+
+export interface QuickConnectResult extends Workspace {
+  friendly_root_path: string | null
+  scan: WorkspaceScanResult
+}
+
+export interface MyWorkspace extends Workspace {
+  friendly_root_path: string | null
+}

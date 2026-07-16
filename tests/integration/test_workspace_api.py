@@ -325,3 +325,144 @@ async def test_stranger_cannot_delete_workspace(client):
 
     res = await client.delete(f"/api/v1/workspace/{workspace_id}", headers=_as("strangerkey"))
     assert res.status_code == 403
+
+
+# ─── Fase 9 (DCF v5 mandate "Workspace Manager UI") ────────────────────────
+# browse-fs / mine / quick-connect — the in-app folder browser + one-call
+# auto-provisioning that replaces manual Project/Workspace/mount management
+# for the "Add Folder" flow. See api/routes/workspace.py module comment
+# above _browse_roots for why this isn't a literal native OS picker.
+
+async def test_browse_fs_no_path_returns_roots(client):
+    res = await client.get("/api/v1/workspace/browse-fs", headers=_as("ownerkey"))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["path"] is None
+    assert isinstance(body["entries"], list)
+    assert len(body["entries"]) > 0
+
+
+async def test_browse_fs_lists_subdirectories(client, tmp_path):
+    (tmp_path / "Document").mkdir()
+    (tmp_path / "Legal").mkdir()
+    (tmp_path / "report.txt").write_text("not a directory")
+
+    res = await client.get(f"/api/v1/workspace/browse-fs?path={tmp_path}", headers=_as("ownerkey"))
+    assert res.status_code == 200
+    body = res.json()
+    names = {e["name"] for e in body["entries"]}
+    assert names == {"Document", "Legal"}  # the file is excluded, only dirs
+
+
+async def test_browse_fs_hides_dotfolders(client, tmp_path):
+    (tmp_path / "Document").mkdir()
+    (tmp_path / ".git").mkdir()
+
+    res = await client.get(f"/api/v1/workspace/browse-fs?path={tmp_path}", headers=_as("ownerkey"))
+    names = {e["name"] for e in res.json()["entries"]}
+    assert names == {"Document"}
+
+
+async def test_browse_fs_rejects_nonexistent_path(client):
+    res = await client.get("/api/v1/workspace/browse-fs?path=/no/such/directory/anywhere", headers=_as("ownerkey"))
+    assert res.status_code == 400
+
+
+async def test_browse_fs_windows_drive_gets_friendly_path(client, tmp_path, monkeypatch):
+    """/mnt/<letter>/... must display as D:\\... (mandate: user never sees
+    the WSL path) — simulated here since the test sandbox isn't actually WSL."""
+    from api.routes import workspace as workspace_route
+
+    fake_drive = tmp_path / "mnt" / "d"
+    fake_drive.mkdir(parents=True)
+    (fake_drive / "04_Archive").mkdir()
+    import re as _re
+
+    monkeypatch.setattr(workspace_route, "_WSL_DRIVE_RE", _re.compile(rf"^{_re.escape(str(tmp_path))}/mnt/([a-zA-Z])(/.*)?$"))
+
+    res = await client.get(f"/api/v1/workspace/browse-fs?path={fake_drive}", headers=_as("ownerkey"))
+    body = res.json()
+    assert body["friendly_path"] == "D:\\"
+    assert body["entries"][0]["friendly_path"] == "D:\\04_Archive"
+
+
+async def test_quick_connect_creates_project_workspace_folder_and_scans(client, tmp_path):
+    (tmp_path / "laporan.pdf").write_bytes(b"%PDF-fake")
+    (tmp_path / "site.png").write_bytes(b"\x89PNG-fake")
+
+    res = await client.post(
+        "/api/v1/workspace/quick-connect", json={"path": str(tmp_path)}, headers=_as("ownerkey")
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "Active"
+    assert body["root_path"] == str(tmp_path)
+    assert len(body["folders"]) == 1
+    assert body["folders"][0]["path"] == str(tmp_path)
+    assert body["scan"]["document_count"] == 1
+    assert body["scan"]["image_count"] == 1
+
+
+async def test_quick_connect_rejects_nonexistent_path(client):
+    res = await client.post(
+        "/api/v1/workspace/quick-connect", json={"path": "/no/such/directory/anywhere"}, headers=_as("ownerkey")
+    )
+    assert res.status_code == 400
+
+
+async def test_quick_connect_uses_alias_as_folder_alias_and_project_name(client, tmp_path):
+    res = await client.post(
+        "/api/v1/workspace/quick-connect", json={"path": str(tmp_path), "alias": "Arsip Utama"},
+        headers=_as("ownerkey"),
+    )
+    body = res.json()
+    assert body["folders"][0]["alias"] == "Arsip Utama"
+
+
+async def test_quick_connect_twice_creates_two_independent_workspaces(client, tmp_path):
+    """Unlike POST /workspace (one Workspace per Project, 409 on a second),
+    quick-connect always creates a fresh Project+Workspace pair — the sidebar
+    is meant to hold multiple independently-connected top-level folders."""
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    res_a = await client.post("/api/v1/workspace/quick-connect", json={"path": str(dir_a)}, headers=_as("ownerkey"))
+    res_b = await client.post("/api/v1/workspace/quick-connect", json={"path": str(dir_b)}, headers=_as("ownerkey"))
+    assert res_a.status_code == 200
+    assert res_b.status_code == 200
+    assert res_a.json()["id"] != res_b.json()["id"]
+
+
+async def test_mine_lists_all_connected_workspaces_for_owner(client, tmp_path):
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    await client.post("/api/v1/workspace/quick-connect", json={"path": str(dir_a)}, headers=_as("ownerkey"))
+    await client.post("/api/v1/workspace/quick-connect", json={"path": str(dir_b)}, headers=_as("ownerkey"))
+
+    res = await client.get("/api/v1/workspace/mine", headers=_as("ownerkey"))
+    assert res.status_code == 200
+    paths = {ws["root_path"] for ws in res.json()["workspaces"]}
+    assert paths == {str(dir_a), str(dir_b)}
+
+
+async def test_mine_excludes_other_users_workspaces(client, tmp_path):
+    await client.post("/api/v1/workspace/quick-connect", json={"path": str(tmp_path)}, headers=_as("ownerkey"))
+
+    res = await client.get("/api/v1/workspace/mine", headers=_as("strangerkey"))
+    assert res.status_code == 200
+    assert res.json()["workspaces"] == []
+
+
+async def test_mine_excludes_soft_deleted_workspaces(client, tmp_path):
+    connect_res = await client.post(
+        "/api/v1/workspace/quick-connect", json={"path": str(tmp_path)}, headers=_as("ownerkey")
+    )
+    workspace_id = connect_res.json()["id"]
+    await client.delete(f"/api/v1/workspace/{workspace_id}", headers=_as("ownerkey"))
+
+    res = await client.get("/api/v1/workspace/mine", headers=_as("ownerkey"))
+    assert res.json()["workspaces"] == []

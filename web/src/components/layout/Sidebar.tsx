@@ -7,6 +7,7 @@ import { NavLink } from 'react-router-dom'
 import {
   MessageSquare,
   FolderKanban,
+  FolderOpen,
   File,
   BookOpen,
   Brain,
@@ -23,6 +24,9 @@ import { useUiStore } from '@/stores/uiStore'
 
 const NAV_ITEMS = [
   { to: '/chat', label: 'Chat', icon: MessageSquare },
+  // Fase 9 (DCF v5 mandate "Workspace Manager UI") — a deliberate 12th
+  // top-level area, see app/router.tsx's docstring.
+  { to: '/workspace', label: 'Workspace', icon: FolderOpen },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/files', label: 'Files', icon: File },
   { to: '/knowledge', label: 'Knowledge', icon: BookOpen },
