@@ -1,5 +1,12 @@
 # GIS Worker (RQ, gis_queue) — see worker-ai-deployment.yaml's header for why
 # this is a separate Deployment and why it has no liveness/readiness probe.
+#
+# replicas: 2 (Fase 1 / AA-2) — DCF_ARCHITECTURE_AUDIT_2026-07-11.md temuan #2
+# named this worker alongside Postgres/Redis as a single-instance SPOF; the
+# Postgres/Redis half of that finding is deliberately NOT hand-rolled here
+# (needs a real HA operator — Patroni/CloudNativePG, Redis Sentinel/Cluster —
+# which depends on an infra/budget decision that's still open), but bumping
+# a stateless RQ worker's replica count carries none of that risk.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +16,7 @@ metadata:
     app.kubernetes.io/name: ai-engine-worker-gis
     app.kubernetes.io/part-of: ai-engine
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: ai-engine-worker-gis
