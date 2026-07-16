@@ -44,6 +44,54 @@ def test_count_tokens_heuristic():
     assert prov.count_tokens("a" * 40) == 10
 
 
+# ─── base_url (Fase 1, SEC-4 — security.endpoint_policy reads this) ───────────
+
+def test_ollama_base_url_reflects_configured_endpoint():
+    prov = OllamaProvider(model="test", base_url="http://172.29.239.93:11434")
+    assert prov.base_url == "http://172.29.239.93:11434"
+
+
+def test_openai_base_url_defaults_to_settings():
+    prov = OpenAIProvider(model="gpt-4o", api_key="")
+    assert prov.base_url.startswith("https://api.openai.com")
+
+
+def test_claude_base_url_defaults_to_settings():
+    prov = ClaudeProvider(model="claude-sonnet-5", api_key="")
+    assert prov.base_url.startswith("https://api.anthropic.com")
+
+
+def test_gemini_base_url_defaults_to_settings():
+    prov = GeminiProvider(model="gemini-1.5-pro", api_key="")
+    assert prov.base_url.startswith("https://generativelanguage.googleapis.com")
+
+
+def test_openai_base_url_honors_explicit_override():
+    prov = OpenAIProvider(model="gpt-4o", api_key="", base_url="https://internal-proxy.local/v1")
+    assert prov.base_url == "https://internal-proxy.local/v1"
+
+
+def test_base_provider_default_base_url_is_empty():
+    """A provider that never sets ``_base_url`` (e.g. a bare BaseProvider
+    subclass) must not crash — empty string, fail-closed via
+    endpoint_policy.is_internal_endpoint (treated as external)."""
+
+    class _Bare(BaseProvider):
+        name = "bare"
+
+        async def generate(self, prompt, params=None):
+            raise NotImplementedError
+
+        async def stream(self, prompt, params=None):
+            raise NotImplementedError
+            yield  # pragma: no cover
+
+        async def health_check(self):
+            return True
+
+    assert _Bare(model="x").base_url == ""
+
+
 def test_exception_hierarchy():
     assert issubclass(ProviderError, AIEngineError)
     err = ProviderError("boom", provider="openai")

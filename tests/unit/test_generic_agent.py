@@ -13,6 +13,7 @@ from security import audit_log
 class StubProvider:
     name = "openai"
     model = "gpt-4o"
+    base_url = "https://api.openai.com/v1"  # external by default (Fase 1, SEC-4)
 
     def __init__(self, text: str = "ok", finish_reason: str | None = "stop") -> None:
         self._text = text
@@ -68,14 +69,30 @@ async def test_redacts_pii_for_external_provider():
     assert "budi@example.com" not in provider.last_prompt
 
 
-async def test_does_not_redact_pii_for_ollama():
+async def test_does_not_redact_pii_for_internal_endpoint():
     provider = StubProvider()
     provider.name = "ollama"
+    provider.base_url = "http://172.29.239.93:11434"  # this deployment's real Docker Compose value
     agent = GenericLLMAgent("writer", provider=provider)
 
     await agent.execute(Task(role="writer", prompt="Hubungi saya di budi@example.com"))
 
     assert "budi@example.com" in provider.last_prompt
+
+
+async def test_redacts_pii_even_for_ollama_when_endpoint_is_external():
+    """Fase 1 / SEC-4 regression test: the fixed check classifies by the
+    provider's real endpoint, not by its name — "ollama" alone must no
+    longer be an automatic exemption."""
+    provider = StubProvider()
+    provider.name = "ollama"
+    provider.base_url = "https://external-ollama.example.com"
+    agent = GenericLLMAgent("writer", provider=provider)
+
+    await agent.execute(Task(role="writer", prompt="Hubungi saya di budi@example.com"))
+
+    assert "[EMAIL_REDACTED]" in provider.last_prompt
+    assert "budi@example.com" not in provider.last_prompt
 
 
 async def test_pii_redaction_records_audit_entry():

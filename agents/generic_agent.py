@@ -14,7 +14,19 @@ Tahap 7: every dispatch passes through ``security.prompt_guard`` (Bab 30 rule
 one choke point every role shares, so it's the one place these guardrails
 need wiring rather than duplicating checks per provider. PII redaction (Bab
 30 — "sebelum dikirim ke provider eksternal") only applies when the resolved
-provider isn't Ollama (local, never leaves the system).
+provider's ACTUAL configured endpoint is external.
+
+Fase 1 (SEC-4, DCF_SECURITY_AUDIT_2026-07-11.md temuan #4): the check above
+used to be ``provider.name != "ollama"`` — wrong on two live deployment
+modes at once, since "ollama" the name says nothing about where
+``OLLAMA_BASE_URL`` actually points (Docker Compose's is the WSL host's
+virtual-network IP, not loopback; the Kubernetes manifest set lets it be
+any host). Replaced with ``security.endpoint_policy.is_internal_endpoint``,
+which classifies the provider's real ``base_url`` (loopback/private-range/
+well-known-internal-suffix vs. everything else) — see that module's
+docstring for the full rationale. Same fix applied to ``core/chat/engine.py``
+and ``agent/core.py``, the two HTTP-facing agent paths, which call Ollama
+directly and never had any PII-redaction check at all until now.
 
 Tahap 34 (Bab 68 Prioritas 13, Security Dashboard): PII redaction now also
 calls ``security.audit_log.record("pii.redacted", ...)`` when
@@ -29,6 +41,7 @@ from __future__ import annotations
 from core.utils.logger import get_logger
 from providers import GenerationParams, ImageInput, create_for_role
 from providers.base_provider import BaseProvider
+from security.endpoint_policy import is_internal_endpoint
 
 from .base_agent import AgentResult, BaseAgent, Task
 
@@ -103,7 +116,7 @@ class GenericLLMAgent(BaseAgent):
                 )
                 prompt = guard.sanitized_text
 
-        if settings.ENABLE_PII_REDACTION and self._provider.name != "ollama":
+        if settings.ENABLE_PII_REDACTION and not is_internal_endpoint(self._provider.base_url):
             pii_matches = detect_pii(prompt)
             if pii_matches:
                 prompt = redact_pii(prompt)

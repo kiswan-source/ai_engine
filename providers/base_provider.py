@@ -95,6 +95,17 @@ class BaseProvider(ABC):
     def __init__(self, model: str) -> None:
         self.model = model
 
+    @property
+    def base_url(self) -> str:
+        """Actual endpoint this provider talks to — used by
+        ``security.endpoint_policy.is_internal_endpoint`` to decide whether
+        PII redaction is needed (Fase 1, SEC-4: classify by real location,
+        not provider name). Default reads ``self._base_url`` (the attribute
+        name OpenAI/Gemini/Claude providers already use); override directly
+        for providers that store it elsewhere (e.g. ``OllamaProvider`` wraps
+        ``GemmaClient``, which owns its own ``base_url``)."""
+        return getattr(self, "_base_url", "")
+
     @abstractmethod
     async def generate(self, prompt: str, params: GenerationParams | None = None) -> ProviderResponse:
         """Produce a single (non-streamed) completion.

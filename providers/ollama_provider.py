@@ -34,6 +34,10 @@ class OllamaProvider(BaseProvider):
         if base_url:
             self._client.base_url = base_url
 
+    @property
+    def base_url(self) -> str:
+        return self._client.base_url
+
     async def generate(self, prompt: str, params: GenerationParams | None = None) -> ProviderResponse:
         params = params or GenerationParams()
         try:
