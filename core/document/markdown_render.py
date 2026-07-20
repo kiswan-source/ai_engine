@@ -280,6 +280,16 @@ def edit_docx_section(doc, heading_text: str, content: str, heading_level: int |
     from docx.oxml.ns import qn
     from docx.text.paragraph import Paragraph
 
+    # Gate 2 fix: the chat-facing wrapper (workspace_write_file) already
+    # rejects a blank heading before this is ever called, but this function
+    # is itself public — called directly (as it is by its own test suite),
+    # a blank/whitespace-only heading_text would previously match nothing,
+    # fall to the "not found" branch, and silently append a real Heading 1
+    # paragraph with EMPTY text. Guard here too rather than relying solely
+    # on one caller's validation.
+    if not heading_text or not heading_text.strip():
+        raise ValueError("heading_text tidak boleh kosong")
+
     def heading_level_of(paragraph) -> int | None:
         style_name = paragraph.style.name if paragraph.style else ""
         if not style_name.startswith("Heading"):
@@ -357,6 +367,18 @@ def edit_docx_section(doc, heading_text: str, content: str, heading_level: int |
     return "edited"
 
 
+def esc_pdf_markup(text: str) -> str:
+    """Escape plain text for ReportLab's Paragraph mini-XML markup — module-
+    level (not a render_pdf_story-local closure) so any caller that hands
+    literal text to a ReportLab Paragraph outside a parsed Block (e.g.
+    write_pdf's/append_pdf_section's `title` argument, Gate 2 fix) can
+    reuse it instead of duplicating this or, worse, skipping it. An
+    unescaped `&`/`<`/`>` either breaks ReportLab's markup parser outright
+    (a real inline tag left unclosed) or silently drops the offending
+    substring (parsed as an unknown empty tag)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def render_pdf_story(content: str, styles: dict) -> list:
     """Parsed ``content`` -> a list of ReportLab flowables. ``styles`` must
     provide ``body``/``h1``/``h2``/``bullet``/``quote``/``code``/
@@ -367,8 +389,7 @@ def render_pdf_story(content: str, styles: dict) -> list:
     from reportlab.lib.units import cm
     from reportlab.platypus import HRFlowable, Paragraph, Spacer, Table, TableStyle
 
-    def esc(text: str) -> str:
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    esc = esc_pdf_markup
 
     def heading_style(level: int):
         if level <= 1:
@@ -583,24 +604,49 @@ def render_pptx_slides(content: str, default_title: str = "Ringkasan"):
         first_line = True
         table_blocks = []
 
+        def add_line(text: str, level: int = 0) -> None:
+            nonlocal first_line
+            if first_line:
+                text_frame.text = text
+                para = text_frame.paragraphs[0]
+                first_line = False
+            else:
+                para = text_frame.add_paragraph()
+                para.text = text
+            para.level = level
+
         for block in group_blocks:
             if block.kind == "table":
                 table_blocks.append(block)
                 continue
             if block.kind in ("bullet_list", "ordered_list"):
-                lines = ["  " * (depth - 1) + _runs_to_plain_text(item_runs) for depth, item_runs in block.items]
-            elif block.kind in ("heading", "paragraph", "blockquote"):
+                # Gate 2 fix: list items used to render as bare text with
+                # no marker at all (not even a literal "•"/"N.", unlike the
+                # xlsx/PDF renderers built from the same IR) and depth was
+                # marked only by literal leading spaces rather than
+                # `paragraph.level` — so PowerPoint's own per-level bullet/
+                # indent styling never applied either. Per-depth counters
+                # (reset on returning to a shallower depth) match the same
+                # pattern render_pdf_story already uses for ordered lists.
+                counters: dict[int, int] = {}
+                for depth, item_runs in block.items:
+                    for d in [d for d in counters if d > depth]:
+                        del counters[d]
+                    if block.kind == "ordered_list":
+                        counters[depth] = counters.get(depth, 0) + 1
+                        prefix = f"{counters[depth]}. "
+                    else:
+                        prefix = "• "
+                    add_line(prefix + _runs_to_plain_text(item_runs), level=min(depth - 1, 8))
+                continue
+            if block.kind in ("heading", "paragraph", "blockquote"):
                 lines = [_runs_to_plain_text(block.runs)]
             elif block.kind == "code_block":
                 lines = [block.text]
             else:  # hr — no textual content to add to the body
                 lines = []
             for line in lines:
-                if first_line:
-                    text_frame.text = line
-                    first_line = False
-                else:
-                    text_frame.add_paragraph().text = line
+                add_line(line)
 
         for tbl_block in table_blocks:
             n_cols = len(tbl_block.header) if tbl_block.header else (len(tbl_block.rows[0]) if tbl_block.rows else 0)

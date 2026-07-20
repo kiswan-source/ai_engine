@@ -116,13 +116,13 @@ def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
         from reportlab.lib.colors import HexColor
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
         from reportlab.lib.enums import TA_CENTER
-        from core.document.markdown_render import render_pdf_story
+        from core.document.markdown_render import esc_pdf_markup, render_pdf_story
         doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
         styles = getSampleStyleSheet()
         accent = HexColor("#00c896")
         content_styles = _pdf_content_styles(styles, accent)
         s_title = ParagraphStyle("T", parent=styles["Title"], textColor=accent, fontSize=18, spaceAfter=6, alignment=TA_CENTER)
-        story = [Paragraph(title, s_title), HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8), Spacer(1, 0.3*cm)]
+        story = [Paragraph(esc_pdf_markup(title), s_title), HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8), Spacer(1, 0.3*cm)]
         story.extend(render_pdf_story(content, content_styles))
         doc.build(story)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pdf"}
@@ -149,7 +149,7 @@ def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[s
     from reportlab.lib.units import cm
     from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
-    from core.document.markdown_render import render_pdf_story
+    from core.document.markdown_render import esc_pdf_markup, render_pdf_story
 
     path = _path(filename)
     if not os.path.exists(path):
@@ -165,7 +165,7 @@ def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[s
         story = []
         if title:
             s_title = ParagraphStyle("T", parent=styles["Heading1"], textColor=accent, fontSize=16, spaceAfter=6)
-            story += [Paragraph(title, s_title), HRFlowable(width="100%", thickness=1, color=accent, spaceAfter=8), Spacer(1, 0.2*cm)]
+            story += [Paragraph(esc_pdf_markup(title), s_title), HRFlowable(width="100%", thickness=1, color=accent, spaceAfter=8), Spacer(1, 0.2*cm)]
         story.extend(render_pdf_story(content, _pdf_content_styles(styles, accent)))
         new_doc.build(story)
         buf.seek(0)

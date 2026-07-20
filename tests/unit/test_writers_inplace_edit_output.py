@@ -33,6 +33,22 @@ def test_append_pdf_section_adds_pages_without_touching_existing_ones(tmp_path):
     assert out.read_bytes() != original_bytes
 
 
+def test_append_pdf_section_title_with_markup_special_characters_does_not_break_or_drop_text(tmp_path):
+    """Gate 2 fix: same unescaped-title bug as write_pdf, in the new
+    append_pdf_section code path — a title like "Report <b>Final" broke the
+    append outright (ReportLab saw an unclosed <b> tag)."""
+    from pypdf import PdfReader
+
+    out = tmp_path / "laporan.pdf"
+    write_pdf(str(out), "Laporan Awal", "isi awal")
+
+    result = append_pdf_section(str(out), "isi tambahan", title="Report <b>Final & Co")
+
+    assert result["success"] is True
+    text = "\n".join(p.extract_text() for p in PdfReader(str(out)).pages)
+    assert "Report <b>Final & Co" in text
+
+
 def test_append_pdf_section_without_title_has_no_extra_heading(tmp_path):
     from pypdf import PdfReader
 

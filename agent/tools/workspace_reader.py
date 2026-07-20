@@ -474,7 +474,16 @@ async def _write_file(
 
                         doc = Document(abs_path)
                         action = edit_docx_section(doc, heading, content)
-                        doc.save(abs_path)
+                        # Gate 2 fix: write-then-replace, same protection
+                        # append_pdf_section already had — a crash/disk-full
+                        # during Document.save()'s zip write must never leave
+                        # a corrupted .docx in place (recoverable via the
+                        # pre-write WorkspaceFileVersion snapshot either way,
+                        # but no reason to accept the corruption window when
+                        # avoiding it costs one extra os.replace).
+                        tmp_abs_path = f"{abs_path}.tmp"
+                        doc.save(tmp_abs_path)
+                        os.replace(tmp_abs_path, abs_path)
                         result = {"success": True, "size": os.path.getsize(abs_path)}
                     elif mode == "append" and ext == "pdf":
                         from agent.tools.writers import append_pdf_section

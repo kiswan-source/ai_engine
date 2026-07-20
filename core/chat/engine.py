@@ -196,7 +196,16 @@ WORKSPACE_MUTATING_TOOL_NAMES = {"workspace_write_file", "workspace_create_folde
 # the model reliably choosing workspace_write_file instead (the same
 # small-model tool-selection unreliability already worked around for reads
 # via _auto_resolve_workspace_file).
-REPORT_WRITER_TOOL_NAMES = {"write_docx", "write_pdf", "write_txt", "write_html", "write_json", "write_geojson", "write_shp"}
+# Gate 2 fix (Workspace Slice 3, Fase 12): write_xlsx/write_pptx were added
+# as chat tools with the exact same {filename, title, content} shape as
+# write_docx/write_pdf but never added here — the model calling either
+# directly (instead of workspace_write_file) with a Workspace connected
+# silently skipped the auto-copy, the same class of gap this whole set was
+# built to close for every other writer.
+REPORT_WRITER_TOOL_NAMES = {
+    "write_docx", "write_pdf", "write_txt", "write_html", "write_json", "write_geojson", "write_shp",
+    "write_xlsx", "write_pptx",
+}
 # Fase 8 (DCF v5 mandate "Workspace Native File Access & Chat UX Repair",
 # Slice 1) — Chat Decision Flow. Injected into every user turn a Workspace is
 # bound to (see _build_user_message). Encodes the mandate's mandatory STEP

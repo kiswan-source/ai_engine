@@ -52,3 +52,18 @@ def test_write_pdf_produces_valid_pdf_no_literal_markdown(tmp_path):
     assert "Blok A" in text
     for leaked in ("###", "**", "| Nama"):
         assert leaked not in text
+
+
+def test_write_pdf_title_with_markup_special_characters_does_not_break_or_drop_text(tmp_path):
+    """Gate 2 fix: title went straight into ReportLab's markup parser
+    unescaped — "A & B <Report>" either broke the whole write (a real
+    inline tag left unclosed) or silently dropped the bracketed substring
+    (parsed as an unknown empty tag), with zero error surfaced either way."""
+    from pypdf import PdfReader
+
+    out = tmp_path / "laporan.pdf"
+    result = write_pdf(str(out), "A & B <Report>", "isi")
+
+    assert result["success"] is True
+    text = PdfReader(str(out)).pages[0].extract_text()
+    assert "A & B <Report>" in text

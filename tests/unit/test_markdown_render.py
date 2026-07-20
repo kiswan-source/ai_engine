@@ -4,6 +4,8 @@ hand-parse markdown line by line and left literal "###"/"**"/"|" characters
 in generated documents — these tests lock in the real, structured output a
 single markdown-it-py pass now produces for both formats.
 """
+import pytest
+
 from core.document.markdown_render import (
     Run,
     edit_docx_section,
@@ -278,11 +280,35 @@ def test_render_pptx_slides_h1_starts_new_slide():
 
 
 def test_render_pptx_slides_body_gets_bullet_lines():
+    """Gate 2 fix: this used to only assert substring presence, which
+    passed regardless of whether a "•" marker was actually there — list
+    items rendered as bare text with zero marker at all, unlike the xlsx/
+    PDF renderers built from the same IR. Assert the real marker now."""
     md = "# Ringkasan\n- Poin satu\n- Poin dua"
     prs = render_pptx_slides(md, default_title="Laporan")
     slide = next(iter(prs.slides))
-    body_text = slide.placeholders[1].text_frame.text
-    assert "Poin satu" in body_text
+    paragraphs = slide.placeholders[1].text_frame.paragraphs
+    assert [p.text for p in paragraphs] == ["• Poin satu", "• Poin dua"]
+    assert all(p.level == 0 for p in paragraphs)
+
+
+def test_render_pptx_slides_ordered_list_gets_number_markers():
+    md = "# Ringkasan\n1. Langkah satu\n2. Langkah dua"
+    prs = render_pptx_slides(md, default_title="Laporan")
+    slide = next(iter(prs.slides))
+    texts = [p.text for p in slide.placeholders[1].text_frame.paragraphs]
+    assert texts == ["1. Langkah satu", "2. Langkah dua"]
+
+
+def test_render_pptx_slides_nested_list_uses_paragraph_level():
+    md = "# Ringkasan\n- Item 1\n  - Nested A\n- Item 2"
+    prs = render_pptx_slides(md, default_title="Laporan")
+    slide = next(iter(prs.slides))
+    paragraphs = slide.placeholders[1].text_frame.paragraphs
+    levels = {p.text: p.level for p in paragraphs}
+    assert levels["• Item 1"] == 0
+    assert levels["• Nested A"] == 1
+    assert levels["• Item 2"] == 0
 
 
 def test_render_pptx_slides_table_gets_its_own_slide_with_real_table_shape():
@@ -316,6 +342,16 @@ def _doc_with_sections():
         "# Ringkasan\nIsi ringkasan lama.\n\n# Data\nIsi data lama.\n\n# Penutup\nIsi penutup.",
     )
     return doc
+
+
+def test_edit_docx_section_rejects_blank_heading_text():
+    """Gate 2 fix: the chat-facing wrapper already guards against a blank
+    heading, but this function is itself public — a blank/whitespace-only
+    heading_text used to match nothing, fall to the "not found" branch, and
+    silently append a real Heading 1 paragraph with EMPTY text."""
+    doc = _doc_with_sections()
+    with pytest.raises(ValueError):
+        edit_docx_section(doc, "   ", "isi baru")
 
 
 def test_edit_docx_section_replaces_only_the_matched_section_body():

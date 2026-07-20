@@ -379,6 +379,26 @@ async def test_write_file_docx_edit_mode_snapshots_before_editing(sqlite_session
     assert len(versions) == 1
 
 
+async def test_write_file_docx_edit_mode_leaves_no_leftover_tmp_file(sqlite_session_factory, tmp_path):
+    """Gate 2 fix: edit mode used to doc.save() straight onto the target
+    path, unlike append_pdf_section's write-to-tmp-then-replace protection
+    — now both go through the same pattern."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "# Data\nIsi lama.",
+        session_factory=sqlite_session_factory,
+    )
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.docx", "Isi baru.",
+        mode="edit", heading="Data", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert not (tmp_path / "laporan.docx.tmp").exists()
+    assert (tmp_path / "laporan.docx").exists()
+
+
 async def test_write_file_docx_edit_mode_requires_heading_argument(sqlite_session_factory, tmp_path):
     workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
     await _write_file(

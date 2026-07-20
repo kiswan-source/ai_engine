@@ -464,6 +464,28 @@ async def test_run_tool_copies_generated_report_into_connected_workspace(engine,
     assert result["workspace_folder_id"] == "f1"
 
 
+@pytest.mark.parametrize("tool_name", ["write_xlsx", "write_pptx"])
+async def test_run_tool_copies_generated_xlsx_pptx_into_connected_workspace(engine, monkeypatch, tool_name):
+    """Gate 2 fix (Workspace Slice 3 review): write_xlsx/write_pptx were
+    added as chat tools with the exact same {filename, title, content}
+    shape as write_docx/write_pdf but never added to
+    REPORT_WRITER_TOOL_NAMES — the auto-copy silently never fired for
+    these two, the same class of gap Gate 2 already found and fixed once
+    for the report-writer auto-save path in general."""
+    async def _fake_copy(workspace_id, source_abs_path, actor, session_factory=None):
+        return {"success": True, "relative_path": "laporan.docx", "folder_id": "f1"}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = _report_writer_registry(tool_name)
+    result = await engine._run_tool(
+        registry, tool_name, {"filename": "laporan.docx"}, role=None, workspace_id="ws-1", workspace_role="owner",
+    )
+
+    assert result["workspace_saved_path"] == "laporan.docx"
+    assert result["workspace_folder_id"] == "f1"
+
+
 # ─── Gate 2 fix: report-writer auto-save must honor write_output too ──────
 # Previously this path had NO permission check at all — a viewer-role member
 # could get chat to generate a report and have it silently planted in the
