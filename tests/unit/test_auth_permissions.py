@@ -80,6 +80,29 @@ def test_require_permission_passes_for_allowed_role():
     require_permission("approver", "approve_workflow")  # must not raise
 
 
+# ─── Workspace Slice 2: delete_output is owner-only, unlike write_output ──
+
+def test_owner_has_delete_output():
+    assert has_workspace_permission("owner", "delete_output")
+
+
+def test_editor_lacks_delete_output():
+    """Editor has write_output but NOT delete_output — delete is the one
+    Workspace mutation the DCF decision engine classifies HUMAN-ONLY, so it
+    gets the narrowest permission tier, unlike every other mutation."""
+    assert has_workspace_permission("editor", "write_output")
+    assert not has_workspace_permission("editor", "delete_output")
+
+
+def test_viewer_lacks_delete_output():
+    assert not has_workspace_permission("viewer", "delete_output")
+
+
+def test_require_workspace_permission_raises_for_editor_delete():
+    with pytest.raises(PermissionError):
+        require_workspace_permission("editor", "delete_output")
+
+
 async def test_require_role_dependency_allows_permitted_principal():
     checker = require_role("approve_workflow")
     principal = Principal(api_key="k", role="approver")

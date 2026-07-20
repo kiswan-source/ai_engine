@@ -49,3 +49,15 @@ def _isolated_shared_orchestrator(monkeypatch):
     from orchestrator import orchestrator as orchestrator_module
 
     monkeypatch.setattr(orchestrator_module, "_shared_orchestrator", None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_shared_delete_gate(monkeypatch):
+    """Fresh get_shared_delete_gate() singleton per test (Workspace Slice 2,
+    Fase 12) — same reasoning as the memory manager/orchestrator above:
+    pending delete-confirmation tokens live on the singleton instance for
+    the in-memory default backend, so one test's token must not be visible
+    to (or hold up expiry timing assumptions in) another."""
+    from workspace import delete_gate
+
+    monkeypatch.setattr(delete_gate, "_shared_gate", None)

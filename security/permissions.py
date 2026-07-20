@@ -121,7 +121,12 @@ def check_tool_permission(role: str, tool_name: str) -> None:
 # owner/editor distinction for Workspace specifically, unlike e.g. archiving
 # a Project, which projects.py restricts to owner-only).
 WORKSPACE_PERMISSIONS_BY_PROJECT_ROLE: dict[str, frozenset[str]] = {
-    "owner": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
+    # "delete_output" (Workspace Slice 2) is deliberately owner-only, not
+    # shared with editor like every other action here — the DCF decision
+    # engine classifies the underlying delete ACT as HUMAN-ONLY/irreversible
+    # (Constitution-level, not just a design preference), so this permission
+    # tier is intentionally the narrowest one in this table.
+    "owner": frozenset({"read", "write_output", "delete_output", "generated", "knowledge", "vector", "temporary", "admin"}),
     "editor": frozenset({"read", "write_output", "generated", "knowledge", "vector", "temporary", "admin"}),
     # "read" added here Tahap 30 — bug found while wiring write_output:
     # api/routes/chat.py::_check_workspace_access has only ever checked the

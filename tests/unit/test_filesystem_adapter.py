@@ -176,3 +176,30 @@ def test_adapter_search_matches_by_substring_case_insensitive(workspace_root):
 def test_adapter_search_no_match_returns_empty_list(workspace_root):
     adapter = FilesystemAdapter(workspace_root)
     assert adapter.search("nonexistent-name") == []
+
+
+# ─── delete (Workspace Slice 2) ────────────────────────────────────────────
+
+def test_adapter_delete_removes_file(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    adapter.delete("docs/report.txt")
+    assert not (workspace_root / "docs" / "report.txt").exists()
+
+
+def test_adapter_delete_missing_file_raises(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(FileNotFoundError):
+        adapter.delete("docs/does-not-exist.txt")
+
+
+def test_adapter_delete_rejects_directory(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(IsADirectoryError):
+        adapter.delete("docs")
+    assert (workspace_root / "docs").is_dir()  # untouched
+
+
+def test_adapter_delete_rejects_root_escape(workspace_root):
+    adapter = FilesystemAdapter(workspace_root)
+    with pytest.raises(PathEscapesRootError):
+        adapter.delete("../outside.txt")

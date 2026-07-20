@@ -179,6 +179,22 @@ class FilesystemAdapter:
             shutil.copy2(str(src), str(dst))
         return dst
 
+    def delete(self, relative_path: str) -> None:
+        """Permanently remove one file under this root — Workspace Slice 2
+        (delete). File-only for this slice (deliberately narrower scope than
+        move/copy, which already handle directories) — a caller must refuse
+        or handle directories one level up, since recursive folder delete is
+        a separate, higher-blast-radius slice not built yet. Callers are
+        responsible for snapshotting the content first if recoverability is
+        wanted (this method is the irreversible primitive, not the policy
+        that wraps it)."""
+        path = resolve_within_root(self.root, relative_path)
+        if not path.exists():
+            raise FileNotFoundError(f"{relative_path!r} tidak ditemukan di Workspace ini.")
+        if path.is_dir():
+            raise IsADirectoryError(f"{relative_path!r} adalah folder — delete folder belum didukung slice ini.")
+        path.unlink()
+
     def search(self, query: str) -> list[WorkspaceFile]:
         """Case-insensitive filename search across the whole tree under this
         root (Smart Search) — matches on substring, not just exact name, so

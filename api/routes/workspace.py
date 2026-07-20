@@ -66,6 +66,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.tools.workspace_reader import _lock_for
 from api.routes.knowledge import _retriever as _knowledge_retriever
 from api.routes.projects import _role_for
 from db.connection import get_session
@@ -75,6 +76,7 @@ from security.auth import Principal, get_current_principal
 from security.permissions import require_workspace_permission
 from tools.adapters.filesystem import FilesystemAdapter
 from tools.tool_validator import PathEscapesRootError
+from workspace.delete_gate import get_shared_delete_gate
 from workspace.indexer import index_folder
 from workspace.scanner import scan_folders
 from workspace.versioning import get_version, list_versions, save_version
@@ -148,6 +150,15 @@ class MountRequest(BaseModel):
 class RestoreVersionRequest(BaseModel):
     relative_path: str = Field(..., min_length=1)
     version_id: int
+
+
+class DeleteRequestRequest(BaseModel):
+    relative_path: str = Field(..., min_length=1)
+
+
+class DeleteConfirmRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    reason: str = Field("", max_length=500)
 
 
 class QuickConnectRequest(BaseModel):
@@ -234,6 +245,20 @@ async def _require_write(session: AsyncSession, workspace: Workspace, principal:
     role = await _project_role_for_workspace(session, workspace, principal)
     try:
         require_workspace_permission(role, "write_output")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return role
+
+
+async def _require_delete(session: AsyncSession, workspace: Workspace, principal: Principal) -> str | None:
+    """Workspace Permission "delete_output" (Workspace Slice 2) — a
+    deliberately separate, narrower action than "write_output". The DCF
+    decision engine classifies the delete ACT itself HUMAN-ONLY
+    (irreversible), so this permission tier is owner-only — unlike every
+    other mutating action in this file, which editor also holds."""
+    role = await _project_role_for_workspace(session, workspace, principal)
+    try:
+        require_workspace_permission(role, "delete_output")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return role
@@ -695,3 +720,112 @@ async def restore_file_version(
                 "path": req.relative_path, "restored_version_id": req.version_id},
     )
     return {"success": True, "path": req.relative_path, "restored_from_version_id": req.version_id}
+
+
+# ─── Workspace Slice 2: delete (two-step confirmation) ────────────────────
+# The DCF decision engine classifies the delete ACT itself HUMAN-ONLY
+# (irreversible) — see workspace/delete_gate.py's module docstring for the
+# full mechanism this pair of routes implements. Deliberately human-facing
+# HTTP endpoints only, never a chat tool (mirrors why restore, above, is
+# also API-only) — no route here is registered as an agent/chat tool
+# anywhere, and none should be added without revisiting that decision.
+# File-only this slice (folder/recursive delete is a separate, later slice).
+
+@router.post("/{workspace_id}/files/{folder_id}/delete-request")
+async def request_file_delete(
+    workspace_id: str,
+    folder_id: str,
+    req: DeleteRequestRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Step 1 of 2 — opens a short-lived confirmation token, touches nothing
+    on disk. Returns enough info (size, path) for a confirmation UI to show
+    the human what they're about to remove."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    await _require_delete(session, workspace, principal)
+    folder = await _get_folder_or_404(session, workspace_id, folder_id)
+    if folder.source_type != "Local":
+        raise HTTPException(status_code=400, detail=f"source_type={folder.source_type!r} belum didukung.")
+
+    try:
+        adapter = FilesystemAdapter(folder.path)
+        if not adapter.exists(req.relative_path):
+            raise HTTPException(status_code=404, detail=f"{req.relative_path!r} tidak ditemukan di Workspace ini.")
+        abs_path = adapter.absolute_path(req.relative_path)
+        if abs_path.is_dir():
+            raise HTTPException(status_code=400, detail="Delete folder belum didukung slice ini — hanya file.")
+        size_bytes = abs_path.stat().st_size
+    except PathEscapesRootError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    gate = get_shared_delete_gate()
+    delete_req = await gate.request(workspace_id, folder_id, req.relative_path, requested_by=principal.api_key)
+    return {
+        "token": delete_req.token,
+        "relative_path": req.relative_path,
+        "size_bytes": size_bytes,
+        "expires_at": delete_req.requested_at + delete_req.ttl_seconds,
+    }
+
+
+@router.post("/{workspace_id}/files/{folder_id}/delete-confirm")
+async def confirm_file_delete(
+    workspace_id: str,
+    folder_id: str,
+    req: DeleteConfirmRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Step 2 of 2 — the only place that actually removes bytes from disk.
+    Re-checks delete_output (a token alone is never treated as sufficient
+    authorization — same defense-in-depth posture every other mutating
+    route here already has). The token must have been issued for this
+    exact (workspace_id, folder_id, relative_path) — prevents a token
+    leaked or reused within its TTL from being replayed against a
+    different file. Snapshots the content first (same `WorkspaceFileVersion`
+    mechanism every other Workspace write/restore already uses), so a
+    confirmed delete is still recoverable via the existing restore endpoint
+    — this is closer to a soft delete than a true unrecoverable one, by
+    Owner's explicit choice."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    await _require_delete(session, workspace, principal)
+    folder = await _get_folder_or_404(session, workspace_id, folder_id)
+    if folder.source_type != "Local":
+        raise HTTPException(status_code=400, detail=f"source_type={folder.source_type!r} belum didukung.")
+
+    gate = get_shared_delete_gate()
+    pending = await gate.get(req.token)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="Delete confirmation token tidak ditemukan.")
+    if pending.workspace_id != workspace_id or pending.folder_id != folder_id:
+        raise HTTPException(status_code=400, detail="Token tidak berlaku untuk Workspace/folder ini.")
+    if pending.decided:
+        raise HTTPException(status_code=409, detail="Token sudah dipakai.")
+    if pending.expired:
+        raise HTTPException(status_code=410, detail="Token sudah kedaluwarsa, minta token baru.")
+
+    relative_path = pending.relative_path
+    # Gate 2/3 lesson applied proactively this time (not found by a later
+    # adversarial pass): the same check-then-act TOCTOU class already fixed
+    # for write/move/copy applies here too, and reuses the exact same lock
+    # dict — so a concurrent chat-triggered write and an API-triggered
+    # delete of the same file are also serialized against each other, not
+    # just concurrent deletes against themselves.
+    async with _lock_for(workspace_id, folder_id, relative_path):
+        try:
+            adapter = FilesystemAdapter(folder.path)
+            current_bytes = adapter.read_bytes(relative_path)
+            await save_version(session, workspace_id, folder_id, relative_path, current_bytes, actor=principal.api_key)
+            adapter.delete(relative_path)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except (PathEscapesRootError, IsADirectoryError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    await gate.confirm(req.token, decided_by=principal.api_key, reason=req.reason)
+    await audit_log.record(
+        "workspace.file_deleted", actor=principal.api_key,
+        detail={"workspace_id": workspace_id, "folder_id": folder_id, "path": relative_path, "reason": req.reason},
+    )
+    return {"success": True, "path": relative_path, "deleted": True}
