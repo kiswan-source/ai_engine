@@ -181,11 +181,15 @@ def parse_markdown(content: str) -> list[Block]:
     return blocks
 
 
-def render_docx_body(doc, content: str) -> None:
-    """Append parsed ``content`` to an existing python-docx ``Document`` —
-    called after the title/heading-0 block `write_docx` already added, so
-    markdown headings map to docx levels 1-4 (never 0, reserved for the
-    document title)."""
+def _add_docx_blocks(blocks: list[Block], add_paragraph, add_table) -> None:
+    """Shared block-rendering logic for docx, parameterized over WHERE new
+    paragraphs/tables land: ``add_paragraph(text="", style=None)`` and
+    ``add_table(cols)`` abstract over "append at the end of the document"
+    (render_docx_body) vs "insert at a specific position" (edit_docx_section,
+    Workspace Slice 4, Fase 12) — one block-kind dispatch, not two copies
+    drifting apart. Signature-compatible with both `Document.add_paragraph`
+    and `Paragraph.insert_paragraph_before`, so either can be passed directly
+    with no wrapper needed for the "append" case."""
     from docx.shared import Pt
 
     def add_runs(paragraph, runs: list[Run]) -> None:
@@ -200,26 +204,25 @@ def render_docx_body(doc, content: str) -> None:
                 run.font.name = "Consolas"
                 run.font.size = Pt(10)
 
-    for block in parse_markdown(content):
+    for block in blocks:
         if block.kind == "heading":
-            add_runs(doc.add_heading("", level=min(max(block.level, 1), 4)), block.runs)
+            level = min(max(block.level, 1), 4)
+            add_runs(add_paragraph(style=f"Heading {level}"), block.runs)
         elif block.kind == "paragraph":
-            add_runs(doc.add_paragraph(), block.runs)
+            add_runs(add_paragraph(), block.runs)
         elif block.kind == "bullet_list":
-            base_style = "List Bullet"
             for depth, item_runs in block.items:
-                style = f"{base_style} {min(depth, 3)}" if depth > 1 else base_style
-                add_runs(doc.add_paragraph(style=style), item_runs)
+                style = f"List Bullet {min(depth, 3)}" if depth > 1 else "List Bullet"
+                add_runs(add_paragraph(style=style), item_runs)
         elif block.kind == "ordered_list":
-            base_style = "List Number"
             for depth, item_runs in block.items:
-                style = f"{base_style} {min(depth, 3)}" if depth > 1 else base_style
-                add_runs(doc.add_paragraph(style=style), item_runs)
+                style = f"List Number {min(depth, 3)}" if depth > 1 else "List Number"
+                add_runs(add_paragraph(style=style), item_runs)
         elif block.kind == "table":
             n_cols = len(block.header) if block.header else (len(block.rows[0]) if block.rows else 0)
             if n_cols == 0:
                 continue
-            table = doc.add_table(rows=0, cols=n_cols)
+            table = add_table(n_cols)
             table.style = "Light Grid Accent 1"
             if block.header:
                 cells = table.add_row().cells
@@ -233,16 +236,125 @@ def render_docx_body(doc, content: str) -> None:
                     if i < n_cols:
                         add_runs(cells[i].paragraphs[0], cell_runs)
         elif block.kind == "blockquote":
-            p = doc.add_paragraph()
+            p = add_paragraph()
             p.paragraph_format.left_indent = Pt(18)
             add_runs(p, block.runs)
         elif block.kind == "code_block":
-            p = doc.add_paragraph()
+            p = add_paragraph()
             run = p.add_run(block.text)
             run.font.name = "Consolas"
             run.font.size = Pt(9)
         elif block.kind == "hr":
-            doc.add_paragraph("─" * 40)
+            add_paragraph("─" * 40)
+
+
+def render_docx_body(doc, content: str) -> None:
+    """Append parsed ``content`` to an existing python-docx ``Document`` —
+    called after the title/heading-0 block `write_docx` already added, so
+    markdown headings map to docx levels 1-4 (never 0, reserved for the
+    document title)."""
+    _add_docx_blocks(parse_markdown(content), doc.add_paragraph, lambda cols: doc.add_table(rows=0, cols=cols))
+
+
+def edit_docx_section(doc, heading_text: str, content: str, heading_level: int | None = None) -> str:
+    """In-place section edit (Workspace Slice 4, Fase 12) — replaces the
+    BODY of the section under the paragraph whose text matches
+    ``heading_text`` (case-insensitive, a "Heading 1"-"Heading 4" style
+    paragraph — the first one found in document order, or a specific level
+    if ``heading_level`` disambiguates) with freshly-rendered ``content``.
+    "Body" is everything from just after that heading up to (not including)
+    the next heading at the same or higher level, or the end of the
+    document if there is none — the heading paragraph itself is left
+    untouched, only what's under it changes. If no paragraph matches
+    ``heading_text`` (create-if-missing), the heading + content are
+    appended at the end of the document instead. Returns "edited" or
+    "appended".
+
+    Owner decision (Gate 1, Fase 12): this is the DOCX half of Workspace
+    Slice 4 — full mid-document PDF text editing was deliberately NOT built
+    the same way (would need PyMuPDF, AGPL-3.0-licensed, classified
+    HUMAN-ONLY/HALT by the DCF decision engine over the license exposure).
+    PDF instead gets a narrower append-only operation — see
+    `agent/tools/workspace_reader.py::_append_pdf_in_place`.
+    """
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+
+    def heading_level_of(paragraph) -> int | None:
+        style_name = paragraph.style.name if paragraph.style else ""
+        if not style_name.startswith("Heading"):
+            return None
+        try:
+            return int(style_name.rsplit(" ", 1)[-1])
+        except ValueError:
+            return None
+
+    needle = heading_text.strip().lower()
+    target, target_level = None, None
+    for p in doc.paragraphs:
+        level = heading_level_of(p)
+        if level is None or p.text.strip().lower() != needle:
+            continue
+        if heading_level is not None and level != heading_level:
+            continue
+        target, target_level = p, level
+        break
+
+    blocks = parse_markdown(content)
+
+    if target is None:
+        level = min(max(heading_level or 1, 1), 4)
+        doc.add_paragraph(heading_text, style=f"Heading {level}")
+        _add_docx_blocks(blocks, doc.add_paragraph, lambda cols: doc.add_table(rows=0, cols=cols))
+        return "appended"
+
+    # Delete every paragraph/table between the target heading and the next
+    # same-or-higher-level heading — a deeper heading (e.g. an H2 under this
+    # H1) is part of the section being replaced, not a boundary, so it's
+    # removed along with everything else. Found by adversarial review: when
+    # the target is the LAST section (no boundary heading found, end_idx
+    # defaults to len(children)), deleting EVERY body child in range used to
+    # include the document's trailing <w:sectPr> (page size/margins/
+    # header-footer refs, always the final body child) — silently dropping
+    # it corrupts the document (doc.sections goes from 1 to 0, survives
+    # save+reload). Restricting the sweep to w:p/w:tbl only — the two
+    # element types this section-replace ever creates or means to remove —
+    # leaves sectPr (and any other structural element) untouched regardless
+    # of whether a boundary was found.
+    children = list(doc.element.body)
+    start_idx = children.index(target._p)
+    boundary_el = None
+    for el in children[start_idx + 1:]:
+        if el.tag != qn("w:p"):
+            continue
+        lvl = heading_level_of(Paragraph(el, doc))
+        if lvl is not None and lvl <= target_level:
+            boundary_el = el
+            break
+    end_idx = children.index(boundary_el) if boundary_el is not None else len(children)
+    for el in children[start_idx + 1:end_idx]:
+        if el.tag in (qn("w:p"), qn("w:tbl")):
+            el.getparent().remove(el)
+
+    if boundary_el is not None:
+        ref_paragraph = Paragraph(boundary_el, doc)
+
+        def add_paragraph(text="", style=None):
+            return ref_paragraph.insert_paragraph_before(text, style)
+
+        def add_table(cols):
+            table = doc.add_table(rows=0, cols=cols)
+            ref_paragraph._p.addprevious(table._tbl)
+            return table
+    else:
+        # Target was the last section in the document — inserting "before
+        # the next heading" has no anchor, so appending at the very end of
+        # the document body is equivalent (nothing comes after it anyway).
+        add_paragraph = doc.add_paragraph
+        add_table = lambda cols: doc.add_table(rows=0, cols=cols)  # noqa: E731
+
+    _add_docx_blocks(blocks, add_paragraph, add_table)
+    return "edited"
 
 
 def render_pdf_story(content: str, styles: dict) -> list:

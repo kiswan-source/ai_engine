@@ -86,6 +86,27 @@ def write_pptx(filename: str, title: str, content: str) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+def _pdf_content_styles(styles, accent) -> Dict[str, Any]:
+    """The ParagraphStyle set render_pdf_story requires (h1/h2/body/bullet/
+    quote/code/table_header/table_cell) — factored out of write_pdf so
+    append_pdf_section (Workspace Slice 4, Fase 12) can build visually
+    consistent appended pages without duplicating this construction."""
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.enums import TA_JUSTIFY
+    from reportlab.lib.styles import ParagraphStyle
+    return {
+        "h1": ParagraphStyle("H1", parent=styles["Heading1"], fontSize=14, spaceBefore=12, spaceAfter=4),
+        "h2": ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=8, spaceAfter=3),
+        "body": ParagraphStyle("B", parent=styles["Normal"], fontSize=10, leading=16, alignment=TA_JUSTIFY),
+        "bullet": ParagraphStyle("BU", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16),
+        "quote": ParagraphStyle("Q", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16,
+                                 textColor=HexColor("#495057")),
+        "code": ParagraphStyle("C", parent=styles["Normal"], fontName="Courier", fontSize=9, leading=12,
+                                backColor=HexColor("#f1f3f5"), borderPadding=6),
+        "table_header": ParagraphStyle("TH", parent=styles["Normal"], fontSize=9, leading=12),
+        "table_cell": ParagraphStyle("TC", parent=styles["Normal"], fontSize=9, leading=12),
+    }
+
 def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
     path = _path(filename)
     try:
@@ -94,27 +115,80 @@ def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
         from reportlab.lib.units import cm
         from reportlab.lib.colors import HexColor
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-        from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+        from reportlab.lib.enums import TA_CENTER
         from core.document.markdown_render import render_pdf_story
         doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
         styles = getSampleStyleSheet()
         accent = HexColor("#00c896")
-        content_styles = {
-            "h1": ParagraphStyle("H1", parent=styles["Heading1"], fontSize=14, spaceBefore=12, spaceAfter=4),
-            "h2": ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=8, spaceAfter=3),
-            "body": ParagraphStyle("B", parent=styles["Normal"], fontSize=10, leading=16, alignment=TA_JUSTIFY),
-            "bullet": ParagraphStyle("BU", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16),
-            "quote": ParagraphStyle("Q", parent=styles["Normal"], fontSize=10, leading=14, leftIndent=16,
-                                     textColor=HexColor("#495057")),
-            "code": ParagraphStyle("C", parent=styles["Normal"], fontName="Courier", fontSize=9, leading=12,
-                                    backColor=HexColor("#f1f3f5"), borderPadding=6),
-            "table_header": ParagraphStyle("TH", parent=styles["Normal"], fontSize=9, leading=12),
-            "table_cell": ParagraphStyle("TC", parent=styles["Normal"], fontSize=9, leading=12),
-        }
+        content_styles = _pdf_content_styles(styles, accent)
         s_title = ParagraphStyle("T", parent=styles["Title"], textColor=accent, fontSize=18, spaceAfter=6, alignment=TA_CENTER)
         story = [Paragraph(title, s_title), HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8), Spacer(1, 0.3*cm)]
         story.extend(render_pdf_story(content, content_styles))
         doc.build(story)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pdf"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[str, Any]:
+    """Workspace Slice 4 (Fase 12) — PDF half of in-place edit. Appends new
+    pages built from ``content`` (optionally under a new H1-styled
+    ``title``) to the END of the PDF already at ``filename``, leaving every
+    existing page byte-for-byte untouched — never mid-document text
+    editing. Deliberately dependency-free (pypdf + reportlab, both already
+    present) rather than using PyMuPDF (AGPL-3.0-licensed, DCF-classified
+    HUMAN-ONLY/HALT over the license exposure) — Owner's Gate 1 decision
+    was this narrower scope instead. See
+    core/document/markdown_render.py::edit_docx_section's docstring for the
+    DOCX half's different, less-constrained mechanism."""
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+
+    from core.document.markdown_render import render_pdf_story
+
+    path = _path(filename)
+    if not os.path.exists(path):
+        return {"success": False, "error": f"{filename!r} tidak ditemukan — append butuh PDF yang sudah ada."}
+    try:
+        existing_reader = PdfReader(path)
+        pages_before = len(existing_reader.pages)
+
+        buf = io.BytesIO()
+        new_doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+        accent = HexColor("#00c896")
+        story = []
+        if title:
+            s_title = ParagraphStyle("T", parent=styles["Heading1"], textColor=accent, fontSize=16, spaceAfter=6)
+            story += [Paragraph(title, s_title), HRFlowable(width="100%", thickness=1, color=accent, spaceAfter=8), Spacer(1, 0.2*cm)]
+        story.extend(render_pdf_story(content, _pdf_content_styles(styles, accent)))
+        new_doc.build(story)
+        buf.seek(0)
+        new_reader = PdfReader(buf)
+
+        writer = PdfWriter()
+        for page in existing_reader.pages:
+            writer.add_page(page)
+        for page in new_reader.pages:
+            writer.add_page(page)
+
+        # Write-then-replace rather than writing straight into `path` — a
+        # failure mid-write must never leave the original file corrupted or
+        # truncated (the pre-write WorkspaceFileVersion snapshot already
+        # covers "the caller changed their mind", this covers "the process
+        # crashed mid-write").
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "wb") as f:
+            writer.write(f)
+        os.replace(tmp_path, path)
+
+        return {"success": True, "file": path, "filename": filename, "type": "pdf",
+                "pages_before": pages_before, "pages_after": pages_before + len(new_reader.pages),
+                "pages_added": len(new_reader.pages), "size": os.path.getsize(path)}
     except Exception as e:
         return {"success": False, "error": str(e)}

@@ -410,7 +410,8 @@ async def _snapshot_if_exists(
 
 async def _write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
-    mode: str = "overwrite", title: str | None = None, actor: str = "anonymous", session_factory=None,
+    mode: str = "overwrite", title: str | None = None, heading: str | None = None,
+    actor: str = "anonymous", session_factory=None,
 ) -> Dict[str, Any]:
     session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
@@ -426,10 +427,20 @@ async def _write_file(
         if ext not in WRITABLE_EXTENSIONS and ext not in WRITABLE_DOCUMENT_EXTENSIONS:
             supported = sorted(WRITABLE_EXTENSIONS | WRITABLE_DOCUMENT_EXTENSIONS)
             return {"success": False, "error": f"Tipe file tidak didukung untuk menulis ({'/'.join(supported)})."}
-        if mode not in ("overwrite", "append"):
-            return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite' atau 'append')."}
-        if ext in WRITABLE_DOCUMENT_EXTENSIONS and mode == "append":
-            return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (cuma 'overwrite')."}
+        if mode not in ("overwrite", "append", "edit"):
+            return {"success": False, "error": f"mode={mode!r} tidak dikenal (pakai 'overwrite', 'append', atau 'edit')."}
+        # Workspace Slice 4 (Fase 12, in-place edit): 'edit' (section
+        # replace by heading) is docx-only; 'append' (add pages to the end)
+        # now also works for pdf alongside the plain-text extensions it
+        # already worked for. xlsx/pptx stay full-replace-only — no design
+        # was approved for editing those this slice.
+        if mode == "edit":
+            if ext != "docx":
+                return {"success": False, "error": "Mode 'edit' hanya didukung untuk .docx."}
+            if not (heading and heading.strip()):
+                return {"success": False, "error": "Mode 'edit' butuh argumen 'heading' (nama section yang diedit)."}
+        if mode == "append" and ext in WRITABLE_DOCUMENT_EXTENSIONS and ext != "pdf":
+            return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (pakai 'overwrite')."}
 
         # Gate 2 fix: same TOCTOU class _move_or_copy was already locked
         # against — two concurrent overwrite-mode writes to the same new
@@ -442,19 +453,44 @@ async def _write_file(
                 # Fase 4: overwriting an append is a no-op for versioning purposes
                 # too (append never destroys prior content) — only a genuine
                 # overwrite of an existing file needs a pre-write snapshot.
+                # Slice 4: 'edit' and pdf 'append' both rewrite the file's
+                # existing bytes in place (unlike text append, which is
+                # non-destructively additive via open(path, "a")), so they
+                # need the same pre-write snapshot overwrite already gets.
                 versioned = False
-                if mode == "overwrite":
+                if mode == "overwrite" or mode == "edit" or (mode == "append" and ext == "pdf"):
                     versioned = await _snapshot_if_exists(session, workspace_id, folder_id, relative_path, adapter, actor)
                 action = "overwritten" if versioned else "created"
 
                 if ext in WRITABLE_DOCUMENT_EXTENSIONS:
-                    from agent.tools.writers import write_docx, write_pdf, write_pptx, write_xlsx
-
                     abs_path = str(adapter.absolute_path(relative_path))
-                    generator = {"pdf": write_pdf, "docx": write_docx, "xlsx": write_xlsx, "pptx": write_pptx}[ext]
-                    result = generator(abs_path, title or _default_title(relative_path), content)
-                    if not result.get("success"):
-                        return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+
+                    if mode == "edit":
+                        if not os.path.exists(abs_path):
+                            return {"success": False, "error": "Mode 'edit' butuh file .docx yang sudah ada."}
+                        from docx import Document
+
+                        from core.document.markdown_render import edit_docx_section
+
+                        doc = Document(abs_path)
+                        action = edit_docx_section(doc, heading, content)
+                        doc.save(abs_path)
+                        result = {"success": True, "size": os.path.getsize(abs_path)}
+                    elif mode == "append" and ext == "pdf":
+                        from agent.tools.writers import append_pdf_section
+
+                        result = append_pdf_section(abs_path, content, title=title)
+                        if not result.get("success"):
+                            return {"success": False, "error": result.get("error", "Gagal menambah halaman PDF.")}
+                        action = "appended"
+                    else:
+                        from agent.tools.writers import write_docx, write_pdf, write_pptx, write_xlsx
+
+                        generator = {"pdf": write_pdf, "docx": write_docx, "xlsx": write_xlsx, "pptx": write_pptx}[ext]
+                        result = generator(abs_path, title or _default_title(relative_path), content)
+                        if not result.get("success"):
+                            return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+
                     await audit_log.record(
                         "workspace.file_written", actor=actor,
                         detail={"workspace_id": workspace_id, "folder_id": folder_id,
@@ -519,11 +555,22 @@ def workspace_read_file(workspace_id: str, folder_id: str, relative_path: str) -
 
 def workspace_write_file(
     workspace_id: str, folder_id: str, relative_path: str, content: str,
-    mode: str = "overwrite", title: str | None = None, actor: str | None = None,
+    mode: str = "overwrite", title: str | None = None, heading: str | None = None,
+    actor: str | None = None,
 ) -> Dict[str, Any]:
-    """Tulis (buat/timpa/tambah) satu file di Project Workspace — teks
-    apa adanya, atau PDF/DOCX sungguhan (Tahap 33) kalau ekstensinya
-    begitu (``title`` cuma dipakai untuk PDF/DOCX). ``workspace_id`` selalu
+    """Tulis (buat/timpa/tambah/edit) satu file di Project Workspace — teks
+    apa adanya, atau PDF/DOCX/XLSX/PPTX sungguhan (Tahap 33, Fase 12) kalau
+    ekstensinya begitu (``title`` cuma dipakai untuk dokumen). Mode
+    ``"edit"`` (Workspace Slice 4, Fase 12, .docx only) mengganti isi satu
+    section — cari paragraf heading yang cocok dengan ``heading``, ganti
+    isinya (sampai heading setingkat berikutnya) dengan ``content``,
+    heading itu sendiri tak disentuh; kalau ``heading`` belum ada, heading +
+    content ditambahkan di akhir dokumen. Mode ``"append"`` untuk .pdf
+    (Slice 4) menambah halaman baru di akhir PDF yang sudah ada tanpa
+    menyentuh halaman lama sama sekali — beda dari mode ``"edit"``, PDF
+    tidak mendukung ganti isi tengah dokumen (lihat
+    core/document/markdown_render.py::edit_docx_section's docstring untuk
+    alasan lisensi di balik keputusan ini). ``workspace_id`` selalu
     disuntik oleh `ChatEngine._run_tool`; izin ``write_output`` dicek DI
     SANA sebelum fungsi ini pernah dipanggil — lihat modul docstring.
     ``actor`` (Fase 4, same injection rule) identifies who triggered an
@@ -533,7 +580,7 @@ def workspace_write_file(
         engine, factory = _build_fresh_engine()
         try:
             return await _write_file(
-                workspace_id, folder_id, relative_path, content, mode, title,
+                workspace_id, folder_id, relative_path, content, mode, title, heading,
                 actor=actor or "anonymous", session_factory=factory,
             )
         finally:

@@ -309,15 +309,178 @@ async def test_write_file_xlsx_rejects_append_mode(sqlite_session_factory, tmp_p
     assert result["success"] is False
 
 
-async def test_write_file_pdf_rejects_append_mode(sqlite_session_factory, tmp_path):
+# ─── Workspace Slice 4 (Fase 12): in-place edit ───────────────────────────
+# mode="edit" (docx section replace) and mode="append" for pdf (add pages).
+# xlsx/pptx get neither — no design was approved for editing those.
+
+async def test_write_file_docx_edit_mode_replaces_section(sqlite_session_factory, tmp_path):
+    from docx import Document
+
     workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx",
+        "# Ringkasan\nIsi lama.\n\n# Data\nIsi data lama.",
+        session_factory=sqlite_session_factory,
+    )
 
     result = await _write_file(
-        workspace_id, folder_id, "laporan.pdf", "isi", mode="append", session_factory=sqlite_session_factory
+        workspace_id, folder_id, "laporan.docx", "Isi data BARU.",
+        mode="edit", heading="Data", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["action"] == "edited"
+    doc = Document(str(tmp_path / "laporan.docx"))
+    texts = [p.text for p in doc.paragraphs]
+    assert "Isi data BARU." in texts
+    assert "Isi data lama." not in texts
+    assert "Isi lama." in texts  # untouched section
+
+
+async def test_write_file_docx_edit_mode_appends_when_heading_missing(sqlite_session_factory, tmp_path):
+    from docx import Document
+
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "# Ringkasan\nIsi lama.",
+        session_factory=sqlite_session_factory,
+    )
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.docx", "Isi baru.",
+        mode="edit", heading="Rekomendasi", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["action"] == "appended"
+    doc = Document(str(tmp_path / "laporan.docx"))
+    assert doc.paragraphs[-2].text == "Rekomendasi"
+    assert doc.paragraphs[-1].text == "Isi baru."
+
+
+async def test_write_file_docx_edit_mode_snapshots_before_editing(sqlite_session_factory, tmp_path):
+    """Same recoverability guarantee overwrite already has — an in-place
+    edit is still a mutation of existing bytes and must be undoable via the
+    existing restore mechanism."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "# Data\nIsi lama.",
+        session_factory=sqlite_session_factory,
+    )
+
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "Isi baru.",
+        mode="edit", heading="Data", session_factory=sqlite_session_factory,
+    )
+
+    from workspace.versioning import list_versions
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "laporan.docx")
+    assert len(versions) == 1
+
+
+async def test_write_file_docx_edit_mode_requires_heading_argument(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "# Data\nIsi.",
+        session_factory=sqlite_session_factory,
+    )
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.docx", "Isi baru.",
+        mode="edit", session_factory=sqlite_session_factory,  # no heading
     )
 
     assert result["success"] is False
-    assert not (tmp_path / "laporan.pdf").exists()
+
+
+async def test_write_file_docx_edit_mode_requires_existing_file(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "does-not-exist.docx", "Isi baru.",
+        mode="edit", heading="Data", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+
+
+async def test_write_file_edit_mode_rejected_for_non_docx_extensions(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    for ext, content in (("pdf", "isi"), ("xlsx", "isi"), ("txt", "isi")):
+        result = await _write_file(
+            workspace_id, folder_id, f"laporan.{ext}", content,
+            mode="edit", heading="Data", session_factory=sqlite_session_factory,
+        )
+        assert result["success"] is False, ext
+
+
+async def test_write_file_pdf_append_mode_adds_pages(sqlite_session_factory, tmp_path):
+    from pypdf import PdfReader
+
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "# Ringkasan\nIsi lama.",
+        session_factory=sqlite_session_factory,
+    )
+    pages_before = len(PdfReader(str(tmp_path / "laporan.pdf")).pages)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "Isi tambahan.",
+        mode="append", title="Bagian Baru", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["action"] == "appended"
+    pages_after = len(PdfReader(str(tmp_path / "laporan.pdf")).pages)
+    assert pages_after > pages_before
+
+
+async def test_write_file_pdf_append_mode_snapshots_before_appending(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "# Ringkasan\nIsi lama.",
+        session_factory=sqlite_session_factory,
+    )
+
+    await _write_file(
+        workspace_id, folder_id, "laporan.pdf", "Isi tambahan.",
+        mode="append", session_factory=sqlite_session_factory,
+    )
+
+    from workspace.versioning import list_versions
+    async with sqlite_session_factory() as session:
+        versions = await list_versions(session, workspace_id, folder_id, "laporan.pdf")
+    assert len(versions) == 1
+
+
+async def test_write_file_pdf_append_mode_requires_existing_file(sqlite_session_factory, tmp_path):
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "does-not-exist.pdf", "Isi.",
+        mode="append", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+
+
+async def test_write_file_docx_still_rejects_append_mode(sqlite_session_factory, tmp_path):
+    """append is now valid for pdf but must stay rejected for docx — only
+    edit/overwrite are meaningful for docx."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(
+        workspace_id, folder_id, "laporan.docx", "# Data\nIsi.",
+        session_factory=sqlite_session_factory,
+    )
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.docx", "isi",
+        mode="append", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
 
 
 async def test_read_file_folder_not_in_workspace(sqlite_session_factory, tmp_path):

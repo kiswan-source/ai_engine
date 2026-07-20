@@ -167,7 +167,8 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     # workspace_id injection rule as the two tools above; ChatEngine._run_tool
     # also checks the write_output permission before this ever runs.
     registry.register("workspace_write_file", workspace_write_file,
-        "Buat/timpa/tambah satu file teks di Project Workspace. Input: {folder_id, relative_path, content, mode}")
+        "Buat/timpa/tambah/edit satu file di Project Workspace (teks, atau docx/xlsx/pptx/pdf sungguhan). "
+        "Input: {folder_id, relative_path, content, mode: overwrite|append|edit, title?, heading?}")
     # Fase 8 (DCF v5 mandate "Workspace Native File Access", Slice 1) — Smart
     # Search is read-only (no write_output check, same posture as
     # workspace_list_files/workspace_read_file); create/move/copy are

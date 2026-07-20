@@ -6,6 +6,7 @@ single markdown-it-py pass now produces for both formats.
 """
 from core.document.markdown_render import (
     Run,
+    edit_docx_section,
     parse_markdown,
     render_docx_body,
     render_pdf_story,
@@ -301,3 +302,156 @@ def test_render_pptx_slides_no_heading_at_all_uses_one_default_slide():
     prs = render_pptx_slides("Cuma satu paragraf.", default_title="Laporan")
     assert len(list(prs.slides)) == 1
     assert next(iter(prs.slides)).shapes.title.text == "Laporan"
+
+
+# ─── edit_docx_section (Workspace Slice 4, in-place edit, Fase 12) ────────
+
+def _doc_with_sections():
+    from docx import Document
+
+    doc = Document()
+    doc.add_heading("Judul", 0)
+    render_docx_body(
+        doc,
+        "# Ringkasan\nIsi ringkasan lama.\n\n# Data\nIsi data lama.\n\n# Penutup\nIsi penutup.",
+    )
+    return doc
+
+
+def test_edit_docx_section_replaces_only_the_matched_section_body():
+    doc = _doc_with_sections()
+    action = edit_docx_section(doc, "Data", "Isi data BARU.")
+    assert action == "edited"
+    texts = [(p.style.name, p.text) for p in doc.paragraphs]
+    assert ("Normal", "Isi ringkasan lama.") in texts  # untouched
+    assert ("Normal", "Isi penutup.") in texts  # untouched
+    assert ("Normal", "Isi data lama.") not in texts  # replaced
+    assert ("Normal", "Isi data BARU.") in texts
+    # Heading order/structure preserved.
+    headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+    assert headings == ["Ringkasan", "Data", "Penutup"]
+
+
+def test_edit_docx_section_heading_match_is_case_insensitive_and_trims_whitespace():
+    doc = _doc_with_sections()
+    action = edit_docx_section(doc, "  data  ", "Isi BARU.")
+    assert action == "edited"
+    assert any(p.text == "Isi BARU." for p in doc.paragraphs)
+
+
+def test_edit_docx_section_appends_when_heading_not_found():
+    doc = _doc_with_sections()
+    action = edit_docx_section(doc, "Rekomendasi", "Isi rekomendasi baru.")
+    assert action == "appended"
+    texts = [p.text for p in doc.paragraphs]
+    assert texts[-2:] == ["Rekomendasi", "Isi rekomendasi baru."]
+    assert doc.paragraphs[-2].style.name == "Heading 1"
+
+
+def test_edit_docx_section_removes_nested_subsections_under_the_target():
+    """A deeper heading (H2 under the target H1) is part of the section
+    being replaced, not a boundary — it must be removed along with
+    everything else under the target heading."""
+    from docx import Document
+
+    doc = Document()
+    render_docx_body(
+        doc,
+        "# Data\nIntro.\n\n## Sub A\nIsi sub A.\n\n## Sub B\nIsi sub B.\n\n# Penutup\nIsi penutup.",
+    )
+    action = edit_docx_section(doc, "Data", "Isi data baru, tanpa subsection.")
+    assert action == "edited"
+    texts = [p.text for p in doc.paragraphs]
+    assert "Sub A" not in texts and "Sub B" not in texts
+    assert "Isi sub A." not in texts and "Isi sub B." not in texts
+    assert "Isi data baru, tanpa subsection." in texts
+    assert "Penutup" in texts and "Isi penutup." in texts  # untouched, still last
+
+
+def test_edit_docx_section_last_section_has_no_boundary_and_still_works():
+    doc = _doc_with_sections()
+    action = edit_docx_section(doc, "Penutup", "Penutup BARU.")
+    assert action == "edited"
+    texts = [p.text for p in doc.paragraphs]
+    assert texts[-1] == "Penutup BARU."
+    assert "Isi penutup." not in texts
+
+
+def test_edit_docx_section_last_section_preserves_document_sectPr(tmp_path):
+    """Adversarial review finding: editing the LAST section (no boundary
+    heading found) used to delete every body child up to the end of the
+    document, including the trailing <w:sectPr> (page size/margins/
+    header-footer refs) — corrupting the document (doc.sections goes from
+    1 to 0), surviving save+reload. Regression test checks the real
+    save/reload round trip, not just in-memory state."""
+    from docx import Document
+
+    doc = _doc_with_sections()
+    assert len(doc.sections) == 1
+    edit_docx_section(doc, "Penutup", "Penutup BARU.")
+    assert len(doc.sections) == 1
+
+    out = tmp_path / "edited.docx"
+    doc.save(str(out))
+    reloaded = Document(str(out))
+    assert len(reloaded.sections) == 1
+
+
+def test_edit_docx_section_matches_first_occurrence_when_heading_text_repeats():
+    from docx import Document
+
+    doc = Document()
+    render_docx_body(doc, "# Data\nSection pertama.\n\n# Lain\nIsi lain.\n\n# Data\nSection kedua.")
+    edit_docx_section(doc, "Data", "Sudah diedit.")
+    texts = [p.text for p in doc.paragraphs]
+    assert "Sudah diedit." in texts
+    assert "Section pertama." not in texts
+    assert "Section kedua." in texts  # second "Data" section untouched
+
+
+def test_edit_docx_section_ignores_non_heading_paragraph_with_matching_text():
+    """A bold body paragraph that happens to say "Data" must not be
+    mistaken for the "Data" heading — only a paragraph actually styled
+    Heading 1-4 counts as a match."""
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("Data")  # plain "Normal" style, not a heading
+    render_docx_body(doc, "# Data\nIsi section.")
+    action = edit_docx_section(doc, "Data", "Isi BARU.")
+    assert action == "edited"
+    texts = [(p.style.name, p.text) for p in doc.paragraphs]
+    assert ("Normal", "Data") in texts  # the non-heading paragraph survives untouched
+    assert ("Normal", "Isi BARU.") in texts
+    assert ("Normal", "Isi section.") not in texts
+
+
+def test_edit_docx_section_table_is_positioned_inside_the_replaced_section():
+    from docx.text.paragraph import Paragraph
+
+    doc = _doc_with_sections()
+    edit_docx_section(doc, "Data", "Isi baru.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |")
+
+    body_children = list(doc.element.body)
+    tags = [el.tag.rsplit("}", 1)[-1] for el in body_children]
+    data_idx = next(
+        i for i, el in enumerate(body_children)
+        if tags[i] == "p" and Paragraph(el, doc).text == "Data"
+    )
+    penutup_idx = next(
+        i for i, el in enumerate(body_children)
+        if tags[i] == "p" and Paragraph(el, doc).text == "Penutup"
+    )
+    tbl_idx = tags.index("tbl")
+    assert data_idx < tbl_idx < penutup_idx
+
+
+def test_edit_docx_section_disambiguates_by_heading_level():
+    from docx import Document
+
+    doc = Document()
+    render_docx_body(doc, "# Data\nIsi H1.\n\n## Data\nIsi H2.")
+    edit_docx_section(doc, "Data", "Isi H2 BARU.", heading_level=2)
+    texts = [(p.style.name, p.text) for p in doc.paragraphs]
+    assert ("Normal", "Isi H1.") in texts  # H1 section untouched
+    assert ("Normal", "Isi H2 BARU.") in texts
