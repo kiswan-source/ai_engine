@@ -329,6 +329,15 @@ async def test_image_tool_result_injects_followup_vision_message(monkeypatch):
         ("Analisa file laporan.pdf dan buat laporan ringkas", "laporan.pdf"),
         ("Ringkas file laporan.pdf dan buat kesimpulan singkat", "laporan.pdf"),
         ("create a summary from report.docx", "report.docx"),
+        # Gate 3 (AEGIS audit) regression fix — a compound sentence with an
+        # EARLIER "dari" clause (describing the summary's subject, not a
+        # read target) followed by a CLOSER "simpan ke"/"taruh di" governing
+        # the actual filename used to be misread as a read reference,
+        # because "simpan ke"/"taruh di" weren't recognized as creation
+        # verbs at all, so only the far "Buatkan"/"Ringkas" was seen.
+        ("Buatkan ringkasan project mengenai company dari catatan lama, simpan ke laporan.pdf", None),
+        ("Ringkas semua dari transkrip rapat, taruh di minutes.docx", None),
+        ("Analisa data ini dan buat kesimpulan, simpan ke summary.pdf", None),
     ],
 )
 def test_extract_file_reference(text, expected):

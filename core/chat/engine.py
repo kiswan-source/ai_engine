@@ -273,7 +273,8 @@ _FILE_REF_RE = re.compile(rf'[^\s"\'<>]+\.(?:{_FILE_EXTENSIONS})\b', re.IGNORECA
 # model's own tool calls (write_docx/workspace_write_file) handle it, same
 # reliability as before this fix existed — never worse, just not bootstrapped.
 _CREATE_INTENT_RE = re.compile(
-    r"\b(buat(kan)?|bikin(kan)?|create|generate|tulis(kan)?|susun(kan)?|simpan\s+sebagai|save\s+as)\b",
+    r"\b(buat(kan)?|bikin(kan)?|create|generate|tulis(kan)?|susun(kan)?|"
+    r"simpan\s+(?:sebagai|ke|di)|save\s+as|taruh\s+(?:ke|di))\b",
     re.IGNORECASE,
 )
 # Gate 2 fix: the check above used to be a whole-message search, so a mixed-
@@ -285,6 +286,16 @@ _CREATE_INTENT_RE = re.compile(
 # laporan.docx", "simpan sebagai out.pdf") — not when a source preposition
 # ("dari"/"from"/"of") sits between the verb and the filename, which marks
 # the file as a read source for a separately-created (unnamed) output.
+# Gate 3 (AEGIS audit) fix: "simpan ke"/"taruh di" ("save to"/"put in") added
+# to the verb list above — without them, a compound sentence like "Buatkan
+# ringkasan ... dari catatan lama, simpan ke laporan.pdf" found only the
+# FAR creation verb ("Buatkan"), saw "dari" between it and the filename, and
+# wrongly concluded laporan.pdf was a read source — when "simpan ke" right
+# before the filename is the actual (closer, more specific) signal that
+# governs it. The existing "nearest preceding creation verb" logic below
+# already handles this correctly once "simpan ke"/"taruh di" are recognized
+# as creation verbs in their own right, since finditer picks up the closer
+# one automatically — this was a vocabulary gap, not a logic gap.
 _SOURCE_PREP_RE = re.compile(r"\b(dari|from|of)\b", re.IGNORECASE)
 
 

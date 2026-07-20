@@ -18,6 +18,9 @@ built-at-import problem, one level further removed. Both bindings must be
 patched to the *same* isolated `Retriever` instance for a test that indexes
 via one route and searches via the other.
 """
+import asyncio
+import time
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -241,6 +244,54 @@ async def test_scan_reports_correct_counts(client, tmp_path):
     assert body["image_count"] == 1
     assert body["gis_count"] == 1
     assert body["last_scan_at"] is not None
+
+
+async def test_scan_does_not_block_the_event_loop(client, tmp_path, monkeypatch):
+    """Gate 3 (AEGIS audit) fix: scan_workspace used to call scan_folders
+    synchronously — a real recursive os.walk here would freeze every other
+    API caller for the duration. quick_connect was already fixed with
+    asyncio.to_thread; this proves scan_workspace now has the same
+    protection by making scan_folders itself block for a while and
+    asserting a concurrent, unrelated request still completes well before
+    the scan does (if scan_folders ran on the event loop, it would starve
+    the concurrent request instead)."""
+    import api.routes.workspace as workspace_route
+    from workspace.scanner import WorkspaceScanSummary
+
+    def _slow_scan_folders(*args, **kwargs):
+        time.sleep(0.3)
+        return WorkspaceScanSummary()
+
+    monkeypatch.setattr(workspace_route, "scan_folders", _slow_scan_folders)
+
+    project_id = await _make_project(client)
+    workspace_id = await _make_workspace(client, project_id)
+    await client.post(
+        f"/api/v1/workspace/{workspace_id}/mount",
+        json={"path": str(tmp_path), "source_type": "Local"},
+        headers=_as("ownerkey"),
+    )
+
+    concurrent_done_at = None
+
+    async def _concurrent_request():
+        nonlocal concurrent_done_at
+        await asyncio.sleep(0.05)  # let the scan start first
+        await client.get("/health/")
+        concurrent_done_at = time.monotonic()
+
+    scan_started_at = time.monotonic()
+    _, scan_res = await asyncio.gather(
+        _concurrent_request(),
+        client.post(f"/api/v1/workspace/{workspace_id}/scan", headers=_as("ownerkey")),
+    )
+
+    assert scan_res.status_code == 200
+    assert concurrent_done_at is not None
+    # The concurrent /health call must finish well before the 0.3s blocking
+    # scan does — if scan_folders ran on the event loop instead of a
+    # thread, /health would be stuck behind it for the full 0.3s too.
+    assert concurrent_done_at - scan_started_at < 0.25
 
 
 # ─── index + files + tree + status ─────────────────────────────────────
