@@ -4,7 +4,14 @@ hand-parse markdown line by line and left literal "###"/"**"/"|" characters
 in generated documents — these tests lock in the real, structured output a
 single markdown-it-py pass now produces for both formats.
 """
-from core.document.markdown_render import Run, parse_markdown, render_docx_body, render_pdf_story
+from core.document.markdown_render import (
+    Run,
+    parse_markdown,
+    render_docx_body,
+    render_pdf_story,
+    render_pptx_slides,
+    render_xlsx_workbook,
+)
 
 
 def _pdf_styles():
@@ -190,3 +197,107 @@ def test_render_pdf_story_nested_list_item_is_kept_and_indented():
     nested = next(p for p in paragraphs if "Nested A" in p.text)
     top = next(p for p in paragraphs if "Item 1" in p.text)
     assert nested.style.leftIndent > top.style.leftIndent
+
+
+# ─── render_xlsx_workbook / render_pptx_slides (Workspace Slice 3, Fase 12) ─
+
+def test_render_xlsx_workbook_h1_starts_new_sheet():
+    md = "# Ringkasan\nIsi ringkasan.\n\n# Data\nIsi data."
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert wb.sheetnames == ["Ringkasan", "Data"]
+
+
+def test_render_xlsx_workbook_content_before_first_heading_uses_default_title():
+    md = "Paragraf pembuka tanpa heading.\n\n# Detail\nIsi."
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert wb.sheetnames == ["Laporan", "Detail"]
+    assert wb["Laporan"]["A1"].value == "Paragraf pembuka tanpa heading."
+
+
+def test_render_xlsx_workbook_no_heading_at_all_uses_one_default_sheet():
+    wb = render_xlsx_workbook("Cuma satu paragraf.", default_title="Laporan")
+    assert wb.sheetnames == ["Laporan"]
+
+
+def test_render_xlsx_workbook_table_becomes_real_rows():
+    md = "# Data\n| Nama | Luas |\n| --- | --- |\n| Blok A | 11.35 |\n| Blok B | 5.20 |"
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    ws = wb["Data"]
+    rows = [[c.value for c in row] for row in ws.iter_rows()]
+    assert rows == [["Nama", "Luas"], ["Blok A", "11.35"], ["Blok B", "5.20"]]
+    header_cell = ws["A1"]
+    assert header_cell.font.bold is True
+
+
+def test_render_xlsx_workbook_duplicate_heading_names_get_unique_sheet_names():
+    md = "# Data\nSatu.\n\n# Data\nDua."
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert wb.sheetnames == ["Data", "Data-2"]
+
+
+def test_render_xlsx_workbook_heavy_duplication_stays_within_31_char_limit():
+    """Adversarial review finding: a fixed base[:28] truncation only stays
+    within Excel's 31-char sheet-name limit while the dedup counter is 1-2
+    digits — 100+ duplicate headings used to silently produce an invalid,
+    spec-violating (32+ char) sheet name."""
+    md = "\n\n".join(f"# {'X' * 31}" for _ in range(105))
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert all(len(name) <= 31 for name in wb.sheetnames)
+    assert len(wb.sheetnames) == len(set(wb.sheetnames))  # still unique
+
+
+def test_render_xlsx_workbook_consecutive_headings_with_no_body_are_not_dropped():
+    """Adversarial review finding: an H1 immediately followed by another H1
+    (no body in between — a realistic shape of model output, e.g. an
+    outline heading not yet filled in) used to vanish with zero trace,
+    since the old logic only kept non-empty groups."""
+    md = "# Ringkasan\nIsi ringkasan lengkap.\n\n# Rekomendasi\n\n# Penutup\nTerima kasih."
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert wb.sheetnames == ["Ringkasan", "Rekomendasi", "Penutup"]
+
+
+def test_render_pptx_slides_consecutive_headings_with_no_body_are_not_dropped():
+    md = "# Ringkasan\nIsi ringkasan lengkap.\n\n# Rekomendasi\n\n# Penutup\nTerima kasih."
+    prs = render_pptx_slides(md, default_title="Laporan")
+    titles = [s.shapes.title.text for s in prs.slides]
+    assert titles == ["Ringkasan", "Rekomendasi", "Penutup"]
+
+
+def test_render_xlsx_workbook_sanitizes_invalid_sheet_name_characters():
+    md = "# A/B:C*D\nIsi."
+    wb = render_xlsx_workbook(md, default_title="Laporan")
+    assert wb.sheetnames == ["A-B-C-D"]
+
+
+def test_render_pptx_slides_h1_starts_new_slide():
+    md = "# Ringkasan\nIsi ringkasan.\n\n# Data\nIsi data."
+    prs = render_pptx_slides(md, default_title="Laporan")
+    titles = [s.shapes.title.text for s in prs.slides]
+    assert titles == ["Ringkasan", "Data"]
+
+
+def test_render_pptx_slides_body_gets_bullet_lines():
+    md = "# Ringkasan\n- Poin satu\n- Poin dua"
+    prs = render_pptx_slides(md, default_title="Laporan")
+    slide = next(iter(prs.slides))
+    body_text = slide.placeholders[1].text_frame.text
+    assert "Poin satu" in body_text
+
+
+def test_render_pptx_slides_table_gets_its_own_slide_with_real_table_shape():
+    md = "# Data\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+    prs = render_pptx_slides(md, default_title="Laporan")
+    slides = list(prs.slides)
+    assert len(slides) == 2
+    assert slides[1].shapes.title.text == "Data — Tabel"
+    table_shapes = [s for s in slides[1].shapes if s.has_table]
+    assert len(table_shapes) == 1
+    table = table_shapes[0].table
+    assert [c.text for c in table.rows[0].cells] == ["A", "B"]
+    assert [c.text for c in table.rows[1].cells] == ["1", "2"]
+
+
+def test_render_pptx_slides_no_heading_at_all_uses_one_default_slide():
+    prs = render_pptx_slides("Cuma satu paragraf.", default_title="Laporan")
+    assert len(list(prs.slides)) == 1
+    assert next(iter(prs.slides)).shapes.title.text == "Laporan"

@@ -22,6 +22,7 @@ works for both.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -344,3 +345,171 @@ def render_pdf_story(content: str, styles: dict) -> list:
             story.append(HRFlowable(width="100%", thickness=0.75, color=colors.HexColor("#dee2e6")))
         story.append(Spacer(1, 0.15 * cm))
     return story
+
+
+def _runs_to_plain_text(runs: list[Run]) -> str:
+    """Flatten runs to plain text — xlsx cells and pptx text frames don't
+    need the bold/italic/code distinction render_docx_body/render_pdf_story
+    preserve, just the actual characters."""
+    return "".join("\n" if r.text == "\n" else r.text for r in runs)
+
+
+def _group_by_top_heading(blocks: list[Block], default_title: str) -> list[tuple[str, list[Block]]]:
+    """Split a parsed block list into (name, blocks) groups at every H1 —
+    shared by render_xlsx_workbook (H1 -> new sheet) and render_pptx_slides
+    (H1 -> new slide), both Workspace Slice 3 (Fase 12). Content before the
+    first H1 (or the whole document, if there's no H1 at all) is grouped
+    under ``default_title``; only that one leading group is dropped when
+    empty (document starts right at an H1, so there's nothing to put under
+    ``default_title``). Every H1 AFTER the first one always gets its own
+    group even if empty — an outline heading with no body yet (a realistic
+    shape of model output) still needs its own sheet/slide, not to vanish
+    silently (found by adversarial review: the original version only kept
+    non-empty groups, so any H1 immediately followed by another H1 dropped
+    with zero trace, not just a genuinely leading empty one)."""
+    groups: list[tuple[str, list[Block]]] = []
+    current_name = default_title
+    current_blocks: list[Block] = []
+    seen_heading = False
+    for block in blocks:
+        if block.kind == "heading" and block.level <= 1:
+            if current_blocks or seen_heading:
+                groups.append((current_name, current_blocks))
+            current_name = _runs_to_plain_text(block.runs) or "Sheet"
+            current_blocks = []
+            seen_heading = True
+        else:
+            current_blocks.append(block)
+    groups.append((current_name, current_blocks))
+    return groups
+
+
+def render_xlsx_workbook(content: str, default_title: str = "Sheet1"):
+    """Parsed ``content`` -> an `openpyxl.Workbook` (Workspace Slice 3,
+    Fase 12) — each top-level (H1) heading starts a new sheet; content
+    before the first one (or the whole document, if there's no H1) lands on
+    a sheet named ``default_title``. GFM tables become real multi-column
+    rows (the main reason this exists — a table is what actually belongs in
+    a spreadsheet); paragraphs/lists/headings become single-cell rows,
+    reasonable for the common "generate a data table with commentary" case
+    but not a general-purpose docx-to-xlsx converter."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    def safe_sheet_name(name: str) -> str:
+        cleaned = re.sub(r'[\\/*?:\[\]]', "-", name).strip() or "Sheet"
+        return cleaned[:31]
+
+    bold = Font(bold=True)
+    wb = Workbook()
+    wb.remove(wb.active)
+    seen_names: set[str] = set()
+
+    for name, group_blocks in _group_by_top_heading(parse_markdown(content), default_title):
+        sheet_name = safe_sheet_name(name)
+        base, n = sheet_name, 2
+        while sheet_name in seen_names:
+            # Compute the truncation from the actual suffix length rather
+            # than a fixed budget — found by adversarial review: a fixed
+            # `base[:28]` stays within Excel's 31-char limit only while `n`
+            # is 1-2 digits; heavy duplication (n >= 100) would silently
+            # produce an invalid, spec-violating sheet name otherwise.
+            suffix = f"-{n}"
+            sheet_name = f"{base[:31 - len(suffix)]}{suffix}"
+            n += 1
+        seen_names.add(sheet_name)
+        ws = wb.create_sheet(sheet_name)
+
+        for block in group_blocks:
+            if block.kind == "heading":
+                ws.append([_runs_to_plain_text(block.runs)])
+                for c in ws[ws.max_row]:
+                    c.font = bold
+            elif block.kind == "paragraph":
+                ws.append([_runs_to_plain_text(block.runs)])
+            elif block.kind in ("bullet_list", "ordered_list"):
+                for depth, item_runs in block.items:
+                    ws.append(["  " * (depth - 1) + "- " + _runs_to_plain_text(item_runs)])
+            elif block.kind == "table":
+                if block.header:
+                    ws.append([_runs_to_plain_text(c) for c in block.header])
+                    for c in ws[ws.max_row]:
+                        c.font = bold
+                for row in block.rows:
+                    ws.append([_runs_to_plain_text(c) for c in row])
+            elif block.kind == "blockquote":
+                ws.append([_runs_to_plain_text(block.runs)])
+            elif block.kind == "code_block":
+                ws.append([block.text])
+            elif block.kind == "hr":
+                ws.append([])
+
+    if not wb.sheetnames:
+        wb.create_sheet(safe_sheet_name(default_title))
+    return wb
+
+
+def render_pptx_slides(content: str, default_title: str = "Ringkasan"):
+    """Parsed ``content`` -> a `pptx.Presentation` (Workspace Slice 3, Fase
+    12) — each top-level (H1) heading starts a new slide (title + a bullet
+    body from any headings/paragraphs/lists in that section); a GFM table
+    gets its own separate "Title Only" slide with a real pptx table shape
+    (mixing a table into a bulleted body placeholder isn't a sensible
+    layout, so it's deliberately split out rather than forced in)."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    body_layout = prs.slide_layouts[1]  # "Title and Content"
+    table_layout = prs.slide_layouts[5]  # "Title Only"
+
+    for name, group_blocks in _group_by_top_heading(parse_markdown(content), default_title):
+        slide = prs.slides.add_slide(body_layout)
+        slide.shapes.title.text = name
+        text_frame = slide.placeholders[1].text_frame
+        text_frame.clear()
+        first_line = True
+        table_blocks = []
+
+        for block in group_blocks:
+            if block.kind == "table":
+                table_blocks.append(block)
+                continue
+            if block.kind in ("bullet_list", "ordered_list"):
+                lines = ["  " * (depth - 1) + _runs_to_plain_text(item_runs) for depth, item_runs in block.items]
+            elif block.kind in ("heading", "paragraph", "blockquote"):
+                lines = [_runs_to_plain_text(block.runs)]
+            elif block.kind == "code_block":
+                lines = [block.text]
+            else:  # hr — no textual content to add to the body
+                lines = []
+            for line in lines:
+                if first_line:
+                    text_frame.text = line
+                    first_line = False
+                else:
+                    text_frame.add_paragraph().text = line
+
+        for tbl_block in table_blocks:
+            n_cols = len(tbl_block.header) if tbl_block.header else (len(tbl_block.rows[0]) if tbl_block.rows else 0)
+            if n_cols == 0:
+                continue
+            n_rows = (1 if tbl_block.header else 0) + len(tbl_block.rows)
+            table_slide = prs.slides.add_slide(table_layout)
+            table_slide.shapes.title.text = f"{name} — Tabel"
+            shape = table_slide.shapes.add_table(
+                n_rows, n_cols, Inches(0.5), Inches(1.5), Inches(9), Inches(min(0.6 * n_rows, 5.5))
+            )
+            table = shape.table
+            r = 0
+            if tbl_block.header:
+                for c, cell_runs in enumerate(tbl_block.header):
+                    table.cell(0, c).text = _runs_to_plain_text(cell_runs)
+                r = 1
+            for row in tbl_block.rows:
+                for c, cell_runs in enumerate(row):
+                    if c < n_cols:
+                        table.cell(r, c).text = _runs_to_plain_text(cell_runs)
+                r += 1
+
+    return prs

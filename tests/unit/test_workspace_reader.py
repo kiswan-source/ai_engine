@@ -265,6 +265,50 @@ async def test_write_file_creates_real_docx_in_workspace_folder(sqlite_session_f
     assert docx_path.read_bytes().startswith(b"PK")  # docx is a real zip container
 
 
+async def test_write_file_creates_real_xlsx_in_workspace_folder(sqlite_session_factory, tmp_path):
+    """Workspace Slice 3 (Fase 12)."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.xlsx", "# Data\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+        title="Laporan Data", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["type"] == "xlsx"
+    xlsx_path = tmp_path / "laporan.xlsx"
+    assert xlsx_path.exists()
+    assert xlsx_path.read_bytes().startswith(b"PK")  # xlsx is a real zip container
+
+
+async def test_write_file_creates_real_pptx_in_workspace_folder(sqlite_session_factory, tmp_path):
+    """Workspace Slice 3 (Fase 12)."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.pptx", "# Ringkasan\nIsi ringkasan.",
+        session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert result["type"] == "pptx"
+    pptx_path = tmp_path / "laporan.pptx"
+    assert pptx_path.exists()
+    assert pptx_path.read_bytes().startswith(b"PK")  # pptx is a real zip container
+
+
+async def test_write_file_xlsx_rejects_append_mode(sqlite_session_factory, tmp_path):
+    """Workspace Slice 3 — same full-replace-only rule pdf/docx already have."""
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _write_file(
+        workspace_id, folder_id, "laporan.xlsx", "isi", mode="append",
+        session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+
+
 async def test_write_file_pdf_rejects_append_mode(sqlite_session_factory, tmp_path):
     workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
 

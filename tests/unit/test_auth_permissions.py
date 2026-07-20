@@ -137,6 +137,24 @@ def test_check_tool_permission_allows_admin_for_write_pdf():
     check_tool_permission("admin", "write_pdf")  # must not raise
 
 
+# ─── write_xlsx/write_pptx (Workspace Slice 3, Fase 12) ───────────────────
+
+@pytest.mark.parametrize("tool_name", ["write_xlsx", "write_pptx"])
+def test_check_tool_permission_denies_user_for_xlsx_pptx_writers(tool_name):
+    with pytest.raises(PermissionError):
+        check_tool_permission("user", tool_name)
+
+
+@pytest.mark.parametrize("tool_name", ["write_xlsx", "write_pptx"])
+def test_check_tool_permission_allows_operator_for_xlsx_pptx_writers(tool_name):
+    check_tool_permission("operator", tool_name)  # must not raise
+
+
+@pytest.mark.parametrize("tool_name", ["write_xlsx", "write_pptx"])
+def test_check_tool_permission_allows_admin_for_xlsx_pptx_writers(tool_name):
+    check_tool_permission("admin", tool_name)  # must not raise
+
+
 # ─── plugin:weather (Bab 59) ───────────────────────────────────────────────
 
 def test_check_tool_permission_denies_user_for_plugin_weather():

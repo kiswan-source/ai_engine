@@ -1,4 +1,4 @@
-"""File writers: DOCX, PDF, HTML, TXT, JSON."""
+"""File writers: DOCX, PDF, HTML, TXT, JSON, XLSX, PPTX."""
 import os, json
 from typing import Any, Dict
 
@@ -59,6 +59,30 @@ def write_docx(filename: str, title: str, content: str) -> Dict[str, Any]:
         render_docx_body(doc, content)
         doc.save(path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "docx"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def write_xlsx(filename: str, title: str, content: str) -> Dict[str, Any]:
+    """Workspace Slice 3 (Fase 12) — same {filename, title, content} shape
+    as write_docx/write_pdf, reusing the same markdown_render.py parse."""
+    path = _path(filename)
+    try:
+        from core.document.markdown_render import render_xlsx_workbook
+        wb = render_xlsx_workbook(content, default_title=title)
+        wb.save(path)
+        return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "xlsx"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def write_pptx(filename: str, title: str, content: str) -> Dict[str, Any]:
+    """Workspace Slice 3 (Fase 12) — same {filename, title, content} shape
+    as write_docx/write_pdf, reusing the same markdown_render.py parse."""
+    path = _path(filename)
+    try:
+        from core.document.markdown_render import render_pptx_slides
+        prs = render_pptx_slides(content, default_title=title)
+        prs.save(path)
+        return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pptx"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

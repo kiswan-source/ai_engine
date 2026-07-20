@@ -67,6 +67,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "operator": frozenset({
         "tool:write_pdf", "tool:write_docx", "tool:write_html", "tool:write_txt",
         "tool:write_json", "tool:write_geojson", "tool:write_shp", "tool:convert_geo",
+        "tool:write_xlsx", "tool:write_pptx",
         "tool:generate_code", "view_dashboard", "plugin:weather", "mcp:call",
     }),
     "approver": frozenset({"approve_workflow", "view_dashboard"}),
@@ -84,6 +85,10 @@ TOOL_RISK_ACTIONS: dict[str, str] = {
     "write_json": "tool:write_json",
     "write_geojson": "tool:write_geojson",
     "write_shp": "tool:write_shp",
+    # Workspace Slice 3 (Fase 12) — same risk tier as every other write_*
+    # tool, per CLAUDE.md §3's "add one line per risky tool" convention.
+    "write_xlsx": "tool:write_xlsx",
+    "write_pptx": "tool:write_pptx",
     "convert_geo": "tool:convert_geo",
     "generate_code": "tool:generate_code",
     "plugin_weather": "plugin:weather",

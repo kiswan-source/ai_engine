@@ -113,18 +113,23 @@ from workspace.versioning import save_version
 # Slice 1) note on scope: this Slice adds the safe, reversible parts of the
 # mandate — search/move/rename/copy/create-folder. Delete is deliberately
 # NOT here (Owner decision, Gate 1: gated behind a two-step confirmation
-# token, a separate Slice) and xlsx/pptx/format-preserving DOCX+PDF edit are
-# separate Slices too (new dependencies + higher design risk). Drive access
-# (D:\, E:\, F:\) is unaffected by this file — every function below already
-# works with whatever root path a WorkspaceFolder is registered with; making
-# a Windows drive reachable from wherever this process runs is a deployment/
-# mount decision the Owner deferred, not something fixed in code.
+# token — built as Slice 2, workspace/delete_gate.py) and xlsx/pptx (Slice
+# 3, built Fase 12) + format-preserving DOCX+PDF in-place edit (Slice 4,
+# still not built) were separate Slices too, for the same reason: new
+# dependencies + higher design risk than Slice 1's file-move-shaped
+# operations. Drive access (D:\, E:\, F:\) is unaffected by this file —
+# every function below already works with whatever root path a
+# WorkspaceFolder is registered with; making a Windows drive reachable from
+# wherever this process runs is a deployment/mount decision the Owner
+# deferred, not something fixed in code.
 
 # Plain-text formats write raw content directly.
 WRITABLE_EXTENSIONS = {"txt", "md", "log", "csv", "json", "html"}
-# pdf/docx (Tahap 33) reuse agent/tools/writers.py's real generators
-# (ReportLab/python-docx) instead of a raw text write — see _write_file.
-WRITABLE_DOCUMENT_EXTENSIONS = {"pdf", "docx"}
+# pdf/docx (Tahap 33) and xlsx/pptx (Slice 3, Fase 12) reuse
+# agent/tools/writers.py's real generators instead of a raw text write —
+# see _write_file. Full-replace only for all four, same as pdf/docx already
+# were — in-place edit is Slice 4, not built yet.
+WRITABLE_DOCUMENT_EXTENSIONS = {"pdf", "docx", "xlsx", "pptx"}
 
 
 def _default_title(relative_path: str) -> str:
@@ -443,10 +448,10 @@ async def _write_file(
                 action = "overwritten" if versioned else "created"
 
                 if ext in WRITABLE_DOCUMENT_EXTENSIONS:
-                    from agent.tools.writers import write_docx, write_pdf
+                    from agent.tools.writers import write_docx, write_pdf, write_pptx, write_xlsx
 
                     abs_path = str(adapter.absolute_path(relative_path))
-                    generator = write_pdf if ext == "pdf" else write_docx
+                    generator = {"pdf": write_pdf, "docx": write_docx, "xlsx": write_xlsx, "pptx": write_pptx}[ext]
                     result = generator(abs_path, title or _default_title(relative_path), content)
                     if not result.get("success"):
                         return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}

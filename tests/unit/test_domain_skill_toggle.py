@@ -13,8 +13,10 @@ from agent.tools.registry import build_core_registry, build_registry, register_m
 _MINING_GIS_TOOL_NAMES = {"read_kml", "read_geojson", "read_shp", "calculate_area", "write_geojson", "write_shp", "convert_geo"}
 _CORE_TOOL_NAMES = {
     "read_pdf", "read_txt", "read_docx", "read_csv", "read_json", "read_image",
+    "read_xlsx", "read_pptx",  # Workspace Slice 3, Fase 12
     "image_convert", "image_resize", "image_crop", "image_rotate", "image_compress", "images_to_pdf",
     "analyze_text", "write_docx", "write_pdf", "write_html", "write_txt", "write_json", "generate_code",
+    "write_xlsx", "write_pptx",  # Workspace Slice 3, Fase 12
     "plugin_weather", "mcp_list_tools", "mcp_call_tool",
     "workspace_list_files", "workspace_read_file", "workspace_write_file",
     "remember_fact", "recall_facts",

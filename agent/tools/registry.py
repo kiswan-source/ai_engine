@@ -52,8 +52,8 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     never removed by a later call with ENABLE_MINING_GIS_SKILL=False,
     caught live by tests/unit/test_domain_skill_toggle.py."""
     registry = ToolRegistry()
-    from agent.tools.readers import read_pdf, read_txt, read_docx, read_csv, read_json, read_image
-    from agent.tools.writers import write_docx, write_txt, write_json, write_html, write_pdf
+    from agent.tools.readers import read_pdf, read_txt, read_docx, read_csv, read_json, read_image, read_xlsx, read_pptx
+    from agent.tools.writers import write_docx, write_txt, write_json, write_html, write_pdf, write_xlsx, write_pptx
     from agent.tools.analyzers import make_analyzer
     from agent.tools.images import (
         image_convert, image_resize, image_crop, image_rotate, image_compress, images_to_pdf,
@@ -68,6 +68,9 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("read_csv",   read_csv,   "Baca file CSV. Input: file_path", ["csv"])
     registry.register("read_json",  read_json,  "Baca file JSON. Input: file_path", ["json"])
     registry.register("read_image", read_image, "OCR + metadata gambar. Input: file_path", ["jpg","jpeg","png","webp","tif","tiff","bmp","gif"])
+    # Workspace Slice 3 (Fase 12)
+    registry.register("read_xlsx", read_xlsx, "Baca isi spreadsheet Excel (per-sheet). Input: file_path", ["xlsx"])
+    registry.register("read_pptx", read_pptx, "Baca isi presentasi PowerPoint (per-slide). Input: file_path", ["pptx"])
 
     # Image transforms (Pillow) — bukan generasi gambar
     registry.register("image_convert", image_convert, "Konversi format gambar. Input: {file_path, to_format: jpg|png|tiff|webp|bmp|gif, filename?}")
@@ -86,6 +89,12 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     registry.register("write_html", write_html, "Buat file HTML. Input: {filename, content}")
     registry.register("write_txt",  write_txt,  "Simpan teks. Input: {filename, content}")
     registry.register("write_json", write_json, "Simpan JSON. Input: {filename, data}")
+    # Workspace Slice 3 (Fase 12) — same {filename, title, content} markdown
+    # input as write_docx/write_pdf; H1 headings become new sheets/slides.
+    registry.register("write_xlsx", write_xlsx,
+        "Buat spreadsheet Excel dari teks markdown (heading H1 jadi sheet baru, tabel jadi baris). Input: {filename, title, content}")
+    registry.register("write_pptx", write_pptx,
+        "Buat presentasi PowerPoint dari teks markdown (heading H1 jadi slide baru, tabel jadi slide tabel terpisah). Input: {filename, title, content}")
 
     # Code generator
     def generate_code(language, requirement, context=""):

@@ -45,6 +45,10 @@ lxml==5.3.0
 # frontend's remark/remark-gfm chat fix, just the Python-ecosystem equivalent.
 markdown-it-py==4.2.0
 mdit-py-plugins==0.6.1
+# Workspace Slice 3 (Fase 12) — xlsx read/write already had openpyxl (used
+# by api/routes/dokumen.py's mining import path); pptx read/write needs a
+# new dependency since nothing existing covers it.
+python-pptx==1.0.2
 
 # ─── Image processing (read/transform, NOT generation) ───────────────────────
 Pillow==12.2.0

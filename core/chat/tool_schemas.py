@@ -45,6 +45,10 @@ TOOL_SCHEMAS = [
         {"file_path": _STR}, ["file_path"]),
     _fn("read_shp", "Baca Shapefile (.shp atau .zip) → ringkas.",
         {"file_path": _STR}, ["file_path"]),
+    _fn("read_xlsx", "Baca isi spreadsheet Excel (.xlsx), per-sheet.",
+        {"file_path": _STR}, ["file_path"]),
+    _fn("read_pptx", "Baca isi presentasi PowerPoint (.pptx), per-slide.",
+        {"file_path": _STR}, ["file_path"]),
 
     # ── Writers (dokumen) ──
     _fn("write_pdf", "Buat laporan PDF dari teks markdown.",
@@ -55,6 +59,10 @@ TOOL_SCHEMAS = [
         {"filename": _STR, "content": _STR}, ["filename", "content"]),
     _fn("write_txt", "Simpan teks ke file .txt.",
         {"filename": _STR, "content": _STR}, ["filename", "content"]),
+    _fn("write_xlsx", "Buat spreadsheet Excel dari teks markdown (heading H1 jadi sheet baru, tabel jadi baris data).",
+        {"filename": _STR, "title": _STR, "content": _STR}, ["filename", "content"]),
+    _fn("write_pptx", "Buat presentasi PowerPoint dari teks markdown (heading H1 jadi slide baru, tabel jadi slide tabel).",
+        {"filename": _STR, "title": _STR, "content": _STR}, ["filename", "content"]),
 
     # ── GIS ──
     _fn("convert_geo", "Konversi file GIS antar format (KML/GeoJSON/SHP).",
