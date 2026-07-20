@@ -486,6 +486,90 @@ async def test_concurrent_moves_to_same_destination_do_not_silently_clobber(sqli
     assert (tmp_path / losing_src).exists()
 
 
+async def test_write_file_overwrite_is_serialized_per_destination(sqlite_session_factory, tmp_path, monkeypatch):
+    """Gate 2 fix: _write_file had the identical exists-check -> snapshot ->
+    write sequence as _move_or_copy (already locked) but was never locked
+    itself — two concurrent overwrites of the same file could both read the
+    same pre-race content and lose whichever write landed first with zero
+    record it ever existed. Verified directly (not via a real DB race, which
+    the shared single-connection SQLite test fixture can't model safely for
+    two truly-concurrent transactions) by forcing a yield point inside the
+    critical section and asserting it's never entered twice at once."""
+    import agent.tools.workspace_reader as wr
+
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+    await _write_file(workspace_id, folder_id, "shared.txt", "v0", mode="overwrite",
+                       actor="a", session_factory=sqlite_session_factory)
+
+    active = 0
+    max_active = 0
+    original = wr._snapshot_if_exists
+
+    async def _tracked(*args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        result = await original(*args, **kwargs)
+        active -= 1
+        return result
+
+    monkeypatch.setattr(wr, "_snapshot_if_exists", _tracked)
+
+    await asyncio.gather(
+        _write_file(workspace_id, folder_id, "shared.txt", "v1", mode="overwrite",
+                     actor="a", session_factory=sqlite_session_factory),
+        _write_file(workspace_id, folder_id, "shared.txt", "v2", mode="overwrite",
+                     actor="b", session_factory=sqlite_session_factory),
+    )
+
+    assert max_active == 1
+
+
+async def test_copy_generated_file_into_workspace_is_serialized_per_destination(
+    sqlite_session_factory, tmp_path, monkeypatch,
+):
+    """Gate 2 fix: _copy_generated_file_into_workspace (Fase 11 auto-save)
+    had the same unlocked TOCTOU gap as _write_file above."""
+    import agent.tools.workspace_reader as wr
+
+    reports_a, reports_b = tmp_path / "reports_a", tmp_path / "reports_b"
+    reports_a.mkdir()
+    reports_b.mkdir()
+    (reports_a / "laporan.docx").write_bytes(b"v1")
+    (reports_b / "laporan.docx").write_bytes(b"v2")
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    (workspace_dir / "laporan.docx").write_bytes(b"v0")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, workspace_dir)
+
+    active = 0
+    max_active = 0
+    original = wr._snapshot_if_exists
+
+    async def _tracked(*args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        result = await original(*args, **kwargs)
+        active -= 1
+        return result
+
+    monkeypatch.setattr(wr, "_snapshot_if_exists", _tracked)
+
+    await asyncio.gather(
+        _copy_generated_file_into_workspace(
+            workspace_id, str(reports_a / "laporan.docx"), actor="a", session_factory=sqlite_session_factory,
+        ),
+        _copy_generated_file_into_workspace(
+            workspace_id, str(reports_b / "laporan.docx"), actor="b", session_factory=sqlite_session_factory,
+        ),
+    )
+
+    assert max_active == 1
+
+
 async def test_move_rejects_path_traversal_on_destination(sqlite_session_factory, tmp_path):
     (tmp_path / "src.txt").write_text("isi")
     workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)

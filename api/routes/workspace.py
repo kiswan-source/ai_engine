@@ -506,7 +506,12 @@ async def scan_workspace(
 
     try:
         adapters = {f.id: FilesystemAdapter(f.path) for f in folders}
-        summary = scan_folders(adapters)
+        # Gate 2 fix: same event-loop-blocking issue quick_connect already
+        # fixed above — a full-root scan (browse-fs deliberately offers "/"
+        # as a starting point) freezes every other caller for the duration
+        # of the os.walk, and no elevated role is needed to self-serve one
+        # via quick-connect + admin-on-your-own-workspace.
+        summary = await asyncio.to_thread(scan_folders, adapters)
     except (NotADirectoryError, OSError) as e:
         workspace.status = "Error"
         await session.commit()

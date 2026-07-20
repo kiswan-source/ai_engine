@@ -276,21 +276,36 @@ _CREATE_INTENT_RE = re.compile(
     r"\b(buat(kan)?|bikin(kan)?|create|generate|tulis(kan)?|susun(kan)?|simpan\s+sebagai|save\s+as)\b",
     re.IGNORECASE,
 )
+# Gate 2 fix: the check above used to be a whole-message search, so a mixed-
+# intent turn like "Buatkan ringkasan dari file X.pdf" (READ X.pdf, produce a
+# NEW summary — no output filename given) also matched "Buatkan" and disabled
+# auto-resolve entirely, regressing the exact "summarize this file" scenario
+# the mechanism exists for. A creation verb only means THIS filename is the
+# thing being created when it governs the filename directly (e.g. "buat
+# laporan.docx", "simpan sebagai out.pdf") — not when a source preposition
+# ("dari"/"from"/"of") sits between the verb and the filename, which marks
+# the file as a read source for a separately-created (unnamed) output.
+_SOURCE_PREP_RE = re.compile(r"\b(dari|from|of)\b", re.IGNORECASE)
 
 
 def _extract_file_reference(text: str) -> Optional[str]:
     """First plausible filename mentioned in ``text`` (Windows or Unix path,
     or a bare filename), reduced to just its basename — ``D:\\Archive\\a.pdf``
-    and ``a.pdf`` both yield ``"a.pdf"``. ``None`` if nothing matches (or the
-    message reads as a creation request — see _CREATE_INTENT_RE above).
-    Single-match only (first file mentioned) — good enough to bootstrap the
-    common "summarize this one file" turn; multi-file requests still go
-    through the model's own tool calls."""
-    if _CREATE_INTENT_RE.search(text):
-        return None
+    and ``a.pdf`` both yield ``"a.pdf"``. ``None`` if nothing matches, or if
+    the nearest creation-intent verb before the filename governs it directly
+    (see _CREATE_INTENT_RE/_SOURCE_PREP_RE above). Single-match only (first
+    file mentioned) — good enough to bootstrap the common "summarize this one
+    file" turn; multi-file requests still go through the model's own tool
+    calls."""
     match = _FILE_REF_RE.search(text)
     if not match:
         return None
+    prefix = text[: match.start()]
+    create_matches = list(_CREATE_INTENT_RE.finditer(prefix))
+    if create_matches:
+        between = prefix[create_matches[-1].end():]
+        if not _SOURCE_PREP_RE.search(between):
+            return None
     token = match.group(0).rstrip(".,;:!?)\"'")
     return os.path.basename(token.replace("\\", "/"))
 
@@ -607,14 +622,31 @@ class ChatEngine:
                 name in REPORT_WRITER_TOOL_NAMES and workspace_id
                 and isinstance(result, dict) and result.get("success") and result.get("file")
             ):
-                copy_result = await self._copy_generated_file_into_workspace(
-                    workspace_id, result["file"], owner or role or "anonymous"
-                )
-                if copy_result.get("success"):
-                    result["workspace_saved_path"] = copy_result["relative_path"]
-                    result["workspace_folder_id"] = copy_result["folder_id"]
-                else:
-                    result["workspace_save_error"] = copy_result.get("error")
+                # Gate 2 fix: this auto-save writes into the connected Workspace
+                # exactly like the WORKSPACE_MUTATING_TOOL_NAMES tools above, so it
+                # must pass the same write_output check — a viewer-role member could
+                # otherwise get a report-writer tool to plant a file in the Workspace
+                # with no permission check at all. Isolated in its own try/except so
+                # a permission denial or copy failure degrades to workspace_save_error
+                # instead of discarding an already-successful write result (the
+                # outer except Exception below would otherwise turn a successful
+                # generation into a reported tool failure).
+                try:
+                    from security.permissions import require_workspace_permission
+                    require_workspace_permission(workspace_role, "write_output")
+                    copy_result = await self._copy_generated_file_into_workspace(
+                        workspace_id, result["file"], owner or role or "anonymous"
+                    )
+                    if copy_result.get("success"):
+                        result["workspace_saved_path"] = copy_result["relative_path"]
+                        result["workspace_folder_id"] = copy_result["folder_id"]
+                    else:
+                        result["workspace_save_error"] = copy_result.get("error")
+                except PermissionError as e:
+                    result["workspace_save_error"] = f"Akses ditolak: {e}"
+                except Exception as e:
+                    logger.warning("workspace auto-save failed", tool=name, error=str(e))
+                    result["workspace_save_error"] = str(e)
             return result
         except PermissionError as e:
             # Same result shape as any other tool failure (_summarize_result/

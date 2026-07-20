@@ -368,14 +368,18 @@ async def _copy_generated_file_into_workspace(
         folder = result.scalars().first()
         if folder is None:
             return {"success": False, "error": "Tidak ada folder Local di Workspace ini."}
-        try:
-            adapter = FilesystemAdapter(folder.path)
-            with open(source_abs_path, "rb") as fh:
-                data = fh.read()
-            versioned = await _snapshot_if_exists(session, workspace_id, folder.id, filename, adapter, actor)
-            adapter.write_bytes(filename, data)
-        except (PathEscapesRootError, OSError) as e:
-            return {"success": False, "error": str(e)}
+        # Gate 2 fix: same TOCTOU class as _write_file/_move_or_copy — lock
+        # around the same check-then-act sequence before it can silently
+        # clobber a concurrent write to the same destination.
+        async with _lock_for(workspace_id, folder.id, filename):
+            try:
+                adapter = FilesystemAdapter(folder.path)
+                with open(source_abs_path, "rb") as fh:
+                    data = fh.read()
+                versioned = await _snapshot_if_exists(session, workspace_id, folder.id, filename, adapter, actor)
+                adapter.write_bytes(filename, data)
+            except (PathEscapesRootError, OSError) as e:
+                return {"success": False, "error": str(e)}
         folder_id = folder.id
     await audit_log.record(
         "workspace.file_written", actor=actor,
@@ -422,43 +426,49 @@ async def _write_file(
         if ext in WRITABLE_DOCUMENT_EXTENSIONS and mode == "append":
             return {"success": False, "error": f"Mode 'append' tidak didukung untuk .{ext} (cuma 'overwrite')."}
 
-        try:
-            adapter = FilesystemAdapter(folder_path)
-            # Fase 4: overwriting an append is a no-op for versioning purposes
-            # too (append never destroys prior content) — only a genuine
-            # overwrite of an existing file needs a pre-write snapshot.
-            versioned = False
-            if mode == "overwrite":
-                versioned = await _snapshot_if_exists(session, workspace_id, folder_id, relative_path, adapter, actor)
-            action = "overwritten" if versioned else "created"
+        # Gate 2 fix: same TOCTOU class _move_or_copy was already locked
+        # against — two concurrent overwrite-mode writes to the same new
+        # relative_path could both observe "doesn't exist yet" and both skip
+        # the version snapshot. Scope the lock to the same check-then-act
+        # sequence (snapshot-if-exists through the actual write).
+        async with _lock_for(workspace_id, folder_id, relative_path):
+            try:
+                adapter = FilesystemAdapter(folder_path)
+                # Fase 4: overwriting an append is a no-op for versioning purposes
+                # too (append never destroys prior content) — only a genuine
+                # overwrite of an existing file needs a pre-write snapshot.
+                versioned = False
+                if mode == "overwrite":
+                    versioned = await _snapshot_if_exists(session, workspace_id, folder_id, relative_path, adapter, actor)
+                action = "overwritten" if versioned else "created"
 
-            if ext in WRITABLE_DOCUMENT_EXTENSIONS:
-                from agent.tools.writers import write_docx, write_pdf
+                if ext in WRITABLE_DOCUMENT_EXTENSIONS:
+                    from agent.tools.writers import write_docx, write_pdf
 
-                abs_path = str(adapter.absolute_path(relative_path))
-                generator = write_pdf if ext == "pdf" else write_docx
-                result = generator(abs_path, title or _default_title(relative_path), content)
-                if not result.get("success"):
-                    return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+                    abs_path = str(adapter.absolute_path(relative_path))
+                    generator = write_pdf if ext == "pdf" else write_docx
+                    result = generator(abs_path, title or _default_title(relative_path), content)
+                    if not result.get("success"):
+                        return {"success": False, "error": result.get("error", "Gagal membuat dokumen.")}
+                    await audit_log.record(
+                        "workspace.file_written", actor=actor,
+                        detail={"workspace_id": workspace_id, "folder_id": folder_id,
+                                "path": relative_path, "action": action},
+                    )
+                    return {"success": True, "path": relative_path, "action": action,
+                             "type": ext, "size": result["size"]}
+                path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
                 await audit_log.record(
                     "workspace.file_written", actor=actor,
                     detail={"workspace_id": workspace_id, "folder_id": folder_id,
-                            "path": relative_path, "action": action},
+                            "path": relative_path, "action": "appended" if mode == "append" else action},
                 )
-                return {"success": True, "path": relative_path, "action": action,
-                         "type": ext, "size": result["size"]}
-            path = adapter.write_text(relative_path, content, mode="a" if mode == "append" else "w")
-            await audit_log.record(
-                "workspace.file_written", actor=actor,
-                detail={"workspace_id": workspace_id, "folder_id": folder_id,
-                        "path": relative_path, "action": "appended" if mode == "append" else action},
-            )
-            return {"success": True, "path": relative_path,
-                     "action": "appended" if mode == "append" else action, "size": path.stat().st_size}
-        except PathEscapesRootError as e:
-            return {"success": False, "error": str(e)}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+                return {"success": True, "path": relative_path,
+                         "action": "appended" if mode == "append" else action, "size": path.stat().st_size}
+            except PathEscapesRootError as e:
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
 
 
 def _build_fresh_engine():

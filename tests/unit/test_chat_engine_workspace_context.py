@@ -318,6 +318,17 @@ async def test_image_tool_result_injects_followup_vision_message(monkeypatch):
         ("Bikin laporan.pdf dari data ini", None),
         ("create a new report.docx summarizing this", None),
         ("tolong tulis ringkasan.md untuk saya", None),
+        # Gate 2 regression fix — these are READ requests with a create verb
+        # elsewhere in the sentence (summarize/analyze FROM an existing
+        # file, no output filename given). The old whole-message
+        # _CREATE_INTENT_RE.search() disabled auto-resolve for all of these,
+        # regressing the exact "summarize this file" scenario Fase 8's
+        # follow-up fix was built (and live-verified) against.
+        (r"Buatkan ringkasan dari file D:\04_Archive\Document\Kesimpulan_Tiga_Framework.pdf",
+         "Kesimpulan_Tiga_Framework.pdf"),
+        ("Analisa file laporan.pdf dan buat laporan ringkas", "laporan.pdf"),
+        ("Ringkas file laporan.pdf dan buat kesimpulan singkat", "laporan.pdf"),
+        ("create a summary from report.docx", "report.docx"),
     ],
 )
 def test_extract_file_reference(text, expected):
@@ -436,10 +447,59 @@ async def test_run_tool_copies_generated_report_into_connected_workspace(engine,
     monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
 
     registry = _report_writer_registry("write_docx")
-    result = await engine._run_tool(registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id="ws-1")
+    result = await engine._run_tool(
+        registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id="ws-1", workspace_role="owner",
+    )
 
     assert result["workspace_saved_path"] == "laporan.docx"
     assert result["workspace_folder_id"] == "f1"
+
+
+# ─── Gate 2 fix: report-writer auto-save must honor write_output too ──────
+# Previously this path had NO permission check at all — a viewer-role member
+# could get chat to generate a report and have it silently planted in the
+# real Workspace folder, bypassing the exact guarantee the four dedicated
+# workspace-mutation tools already enforced above.
+
+async def test_run_tool_denies_report_writer_auto_save_for_viewer_role(engine, monkeypatch):
+    called = False
+
+    async def _fake_copy(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {"success": True, "relative_path": "laporan.docx", "folder_id": "f1"}
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
+
+    registry = _report_writer_registry("write_docx")
+    result = await engine._run_tool(
+        registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id="ws-1", workspace_role="viewer",
+    )
+
+    assert called is False
+    assert result["success"] is True  # the report itself still generated fine
+    assert "workspace_saved_path" not in result
+    assert "akses ditolak" in result["workspace_save_error"].lower()
+
+
+async def test_run_tool_report_generation_survives_unexpected_copy_exception(engine, monkeypatch):
+    """Gate 2 fix: an unhandled exception (not just a returned failure) during
+    the workspace copy used to propagate into _run_tool's outer except
+    Exception, discarding an already-successful write result entirely."""
+
+    async def _raising_copy(*args, **kwargs):
+        raise RuntimeError("unexpected db error")
+
+    monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _raising_copy)
+
+    registry = _report_writer_registry("write_docx")
+    result = await engine._run_tool(
+        registry, "write_docx", {"filename": "laporan.docx"}, role=None, workspace_id="ws-1", workspace_role="owner",
+    )
+
+    assert result["success"] is True
+    assert result["workspace_save_error"] == "unexpected db error"
+    assert "workspace_saved_path" not in result
 
 
 async def test_run_tool_skips_copy_without_connected_workspace(engine, monkeypatch):
@@ -484,7 +544,9 @@ async def test_run_tool_report_generation_still_succeeds_when_workspace_copy_fai
     monkeypatch.setattr("agent.tools.workspace_reader._copy_generated_file_into_workspace", _fake_copy)
 
     registry = _report_writer_registry("write_pdf")
-    result = await engine._run_tool(registry, "write_pdf", {"filename": "laporan.pdf"}, role=None, workspace_id="ws-1")
+    result = await engine._run_tool(
+        registry, "write_pdf", {"filename": "laporan.pdf"}, role=None, workspace_id="ws-1", workspace_role="owner",
+    )
 
     assert result["success"] is True  # the report itself was generated fine
     assert result["workspace_save_error"] == "disk penuh"

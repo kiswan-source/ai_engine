@@ -48,10 +48,14 @@ class Block:
     kind: BlockKind
     level: int = 0
     runs: list[Run] = field(default_factory=list)
-    items: list[list[Run]] = field(default_factory=list)
+    # (depth, runs) per item — depth is 1 for a top-level item, 2+ for
+    # nested items (Gate 2 fix: nested items used to be dropped outright
+    # rather than just flattened, see parse_markdown below).
+    items: list[tuple[int, list[Run]]] = field(default_factory=list)
     header: list[list[Run]] = field(default_factory=list)
     rows: list[list[list[Run]]] = field(default_factory=list)
     text: str = ""
+    start: int = 1
 
 
 def _inline_runs(inline_token) -> list[Run]:
@@ -78,6 +82,15 @@ def _inline_runs(inline_token) -> list[Run]:
             italic = True
         elif c.type == "em_close":
             italic = False
+        elif c.type == "image":
+            # Gate 2 fix: used to silently produce zero runs (fell through
+            # every branch above) — no image-embedding support exists (would
+            # need to fetch/decode arbitrary URLs into both python-docx and
+            # ReportLab), but dropping the content with no trace is worse
+            # than a visible placeholder. Same "plain text, not the real
+            # thing" treatment already applied to links/strikethrough below.
+            alt = c.content or (c.attrs.get("alt", "") if c.attrs else "")
+            runs.append(Run(f"[Gambar: {alt}]" if alt else "[Gambar]", bold, italic))
         # link_open/close, s_open/close (strikethrough): rendered as plain
         # text runs — a generated report doesn't need clickable links, and
         # strikethrough has no natural equivalent worth the complexity here.
@@ -99,7 +112,14 @@ def parse_markdown(content: str) -> list[Block]:
             i += 3
         elif t.type in ("bullet_list_open", "ordered_list_open"):
             kind: BlockKind = "bullet_list" if t.type == "bullet_list_open" else "ordered_list"
-            items: list[list[Run]] = []
+            start = 1
+            if t.type == "ordered_list_open" and t.attrs and t.attrs.get("start") is not None:
+                start = int(t.attrs["start"])
+            # Gate 2 fix: nested items (depth > 1) used to be skipped
+            # outright rather than just flattened — a genuine content-loss
+            # bug, not a cosmetic one. Now every item is kept, tagged with
+            # its depth so both renderers can indent it instead of losing it.
+            items: list[tuple[int, list[Run]]] = []
             depth = 1
             i += 1
             while i < n and depth > 0:
@@ -111,10 +131,10 @@ def parse_markdown(content: str) -> list[Block]:
                     if depth == 0:
                         i += 1
                         break
-                elif tok.type == "inline" and depth == 1:
-                    items.append(_inline_runs(tok))
+                elif tok.type == "inline":
+                    items.append((depth, _inline_runs(tok)))
                 i += 1
-            blocks.append(Block(kind=kind, items=items))
+            blocks.append(Block(kind=kind, items=items, start=start))
         elif t.type == "table_open":
             header: list[list[Run]] = []
             rows: list[list[list[Run]]] = []
@@ -185,11 +205,15 @@ def render_docx_body(doc, content: str) -> None:
         elif block.kind == "paragraph":
             add_runs(doc.add_paragraph(), block.runs)
         elif block.kind == "bullet_list":
-            for item_runs in block.items:
-                add_runs(doc.add_paragraph(style="List Bullet"), item_runs)
+            base_style = "List Bullet"
+            for depth, item_runs in block.items:
+                style = f"{base_style} {min(depth, 3)}" if depth > 1 else base_style
+                add_runs(doc.add_paragraph(style=style), item_runs)
         elif block.kind == "ordered_list":
-            for item_runs in block.items:
-                add_runs(doc.add_paragraph(style="List Number"), item_runs)
+            base_style = "List Number"
+            for depth, item_runs in block.items:
+                style = f"{base_style} {min(depth, 3)}" if depth > 1 else base_style
+                add_runs(doc.add_paragraph(style=style), item_runs)
         elif block.kind == "table":
             n_cols = len(block.header) if block.header else (len(block.rows[0]) if block.rows else 0)
             if n_cols == 0:
@@ -226,11 +250,36 @@ def render_pdf_story(content: str, styles: dict) -> list:
     ``table_header``/``table_cell`` `ParagraphStyle`s — built by
     `write_pdf` so the accent color/fonts stay consistent with its title."""
     from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import cm
     from reportlab.platypus import HRFlowable, Paragraph, Spacer, Table, TableStyle
 
     def esc(text: str) -> str:
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def heading_style(level: int):
+        if level <= 1:
+            return styles["h1"]
+        if level == 2:
+            return styles["h2"]
+        # Gate 2 fix: `styles` only carries h1/h2 (write_pdf's fixed set) —
+        # used to collapse every level >= 2 into h2, so H2/H3/H4 all looked
+        # identical despite docx keeping them visually distinct. Derive a
+        # progressively smaller variant instead of adding new required style
+        # keys to every write_pdf caller.
+        base = styles["h2"]
+        shrink = 2 * (level - 2)
+        return ParagraphStyle(
+            f"h{level}_derived", parent=base,
+            fontSize=max(base.fontSize - shrink, 9), leading=max(base.leading - shrink, 11),
+        )
+
+    def indented_style(depth: int):
+        if depth <= 1:
+            return styles["bullet"]
+        return styles["bullet"].clone(
+            f"bullet_d{depth}", leftIndent=(styles["bullet"].leftIndent or 0) + (depth - 1) * 0.6 * cm
+        )
 
     def runs_to_markup(runs: list[Run]) -> str:
         parts = []
@@ -251,14 +300,25 @@ def render_pdf_story(content: str, styles: dict) -> list:
     story: list = []
     for block in parse_markdown(content):
         if block.kind == "heading":
-            style = styles["h1"] if block.level <= 1 else styles["h2"]
-            story.append(Paragraph(runs_to_markup(block.runs), style))
+            story.append(Paragraph(runs_to_markup(block.runs), heading_style(block.level)))
         elif block.kind == "paragraph":
             story.append(Paragraph(runs_to_markup(block.runs), styles["body"]))
         elif block.kind in ("bullet_list", "ordered_list"):
-            for idx, item_runs in enumerate(block.items):
-                prefix = "•" if block.kind == "bullet_list" else f"{idx + 1}."
-                story.append(Paragraph(f"{prefix} {runs_to_markup(item_runs)}", styles["bullet"]))
+            # Gate 2 fix: honor the list's actual start number (markdown
+            # `3. foo`) and indent nested items instead of dropping them —
+            # counters are per-depth so a nested numbered sub-list restarts
+            # at 1 rather than continuing its parent's count.
+            counters: dict[int, int] = {}
+            for depth, item_runs in block.items:
+                for d in [d for d in counters if d > depth]:
+                    del counters[d]
+                if block.kind == "ordered_list":
+                    base = block.start if depth == 1 else 1
+                    counters[depth] = counters.get(depth, base - 1) + 1
+                    prefix = f"{counters[depth]}."
+                else:
+                    prefix = "•"
+                story.append(Paragraph(f"{prefix} {runs_to_markup(item_runs)}", indented_style(depth)))
         elif block.kind == "table":
             data = []
             if block.header:
