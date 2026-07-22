@@ -96,6 +96,7 @@ import asyncio
 import base64
 import mimetypes
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 from sqlalchemy import select
@@ -284,21 +285,30 @@ async def _create_folder(
 # adversarial review, not the original design — see git history). In-process
 # only, matching this codebase's existing single-process assumption
 # (`ChatEngine.sessions` is an in-memory dict, same posture) — does not
-# protect across multiple uvicorn workers/processes. Entries are never
-# evicted (unbounded growth over process lifetime), but each is one tiny
-# asyncio.Lock keyed by strings; revisit only if this ever matters in practice.
+# protect across multiple uvicorn workers/processes. Entries are refcounted
+# and evicted once no caller still needs them (Gate 3, 2026-07-23 — this used
+# to grow unbounded for the process lifetime; low severity since each entry
+# is one tiny asyncio.Lock, but free to fix).
 _move_copy_locks: dict[tuple[str, str, str], "asyncio.Lock"] = {}
+_move_copy_lock_refcounts: dict[tuple[str, str, str], int] = {}
+_move_copy_locks_guard = asyncio.Lock()
 
 
-def _lock_for(workspace_id: str, folder_id: str, dst_relative_path: str):
-    import asyncio as _asyncio
-
+@asynccontextmanager
+async def _lock_for(workspace_id: str, folder_id: str, dst_relative_path: str):
     key = (workspace_id, folder_id, dst_relative_path)
-    lock = _move_copy_locks.get(key)
-    if lock is None:
-        lock = _asyncio.Lock()
-        _move_copy_locks[key] = lock
-    return lock
+    async with _move_copy_locks_guard:
+        lock = _move_copy_locks.setdefault(key, asyncio.Lock())
+        _move_copy_lock_refcounts[key] = _move_copy_lock_refcounts.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        async with _move_copy_locks_guard:
+            _move_copy_lock_refcounts[key] -= 1
+            if _move_copy_lock_refcounts[key] <= 0:
+                _move_copy_lock_refcounts.pop(key, None)
+                _move_copy_locks.pop(key, None)
 
 
 async def _move_or_copy(

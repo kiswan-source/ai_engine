@@ -2,6 +2,24 @@
 import os
 from typing import Callable, Dict, Any, Optional
 
+# Gate 3 (AEGIS audit, 2026-07-23): these tools all resolve a bare `filename`
+# against agent/tools/writers.py's OUTPUT_DIR (reports/), but honor a
+# directory component or absolute path in `filename` as-is — needed so
+# Workspace-integrated writes (already validated through Root Restriction —
+# see agent/tools/workspace_reader.py) can target a path outside reports/,
+# and relied on by tests that call these functions directly as general
+# utilities. A model-supplied `filename` reaching this registry has no such
+# validation behind it, so it must never carry a directory component at all
+# — stripping to basename here, at the one chokepoint every agent path
+# (chat/legacy agent/MCP server) dispatches tool calls through, makes a
+# path-traversal/absolute-path escape out of reports/ structurally
+# impossible from a model tool call, without touching the writers'
+# deliberately more permissive direct-call contract.
+_OUTPUT_CONFINED_TOOLS = {
+    "write_docx", "write_pdf", "write_xlsx", "write_pptx",
+    "write_txt", "write_json", "write_html",
+}
+
 class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, Callable] = {}
@@ -34,6 +52,12 @@ class ToolRegistry:
             # outside TOOL_RISK_ACTIONS (everything but write_pdf, for now).
             from security.permissions import check_tool_permission
             check_tool_permission(role, name)
+        if (
+            name in _OUTPUT_CONFINED_TOOLS
+            and isinstance(input_data, dict)
+            and isinstance(input_data.get("filename"), str)
+        ):
+            input_data = {**input_data, "filename": os.path.basename(input_data["filename"])}
         fn = self._tools[name]
         if input_data is None: return fn()
         elif isinstance(input_data, dict): return fn(**input_data)

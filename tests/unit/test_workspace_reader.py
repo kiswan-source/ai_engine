@@ -16,6 +16,8 @@ from agent.tools.workspace_reader import (
     _create_folder,
     _find_file,
     _list_files,
+    _lock_for,
+    _move_copy_locks,
     _move_or_copy,
     _read_file,
     _write_file,
@@ -711,6 +713,33 @@ async def test_concurrent_moves_to_same_destination_do_not_silently_clobber(sqli
     # refused, not silently discarded.
     losing_src = "src1.txt" if failures[0] is results[0] else "src2.txt"
     assert (tmp_path / losing_src).exists()
+
+
+async def test_lock_for_evicts_entry_once_no_caller_still_needs_it():
+    """Gate 3 (AEGIS audit, 2026-07-23): _move_copy_locks used to grow
+    unbounded for the process lifetime — a new key was created but never
+    removed. Confirms the dict is empty again after a single use, and stays
+    correctly mutually exclusive when two callers contend for the same key
+    (refcounting must not evict while a second waiter still needs the lock)."""
+    async with _lock_for("w", "f", "solo.txt"):
+        assert ("w", "f", "solo.txt") in _move_copy_locks
+    assert ("w", "f", "solo.txt") not in _move_copy_locks
+    assert len(_move_copy_locks) == 0
+
+    order = []
+
+    async def worker(n):
+        async with _lock_for("w", "f", "contended.txt"):
+            order.append(("enter", n))
+            await asyncio.sleep(0.02)
+            order.append(("exit", n))
+
+    await asyncio.gather(worker(1), worker(2))
+    # Fully serialized — no interleaving of enter/exit across the two workers.
+    entries = [e for e in order if e[0] == "enter"]
+    exits = [e for e in order if e[0] == "exit"]
+    assert entries[0][1] == exits[0][1]
+    assert len(_move_copy_locks) == 0
 
 
 async def test_write_file_overwrite_is_serialized_per_destination(sqlite_session_factory, tmp_path, monkeypatch):

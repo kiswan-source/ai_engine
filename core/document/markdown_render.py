@@ -533,6 +533,18 @@ def render_xlsx_workbook(content: str, default_title: str = "Sheet1"):
         cleaned = re.sub(r'[\\/*?:\[\]]', "-", name).strip() or "Sheet"
         return cleaned[:31]
 
+    # Gate 3 (AEGIS audit, 2026-07-23) — CWE-1236 CSV/Excel formula
+    # injection: model-authored content lands in cells verbatim, and a value
+    # beginning with =/+/-/@ (or tab/CR) is executed as a formula by
+    # Excel/Sheets when the file is later opened. A leading apostrophe is the
+    # standard mitigation (openpyxl/Excel treat it as "force text", and it is
+    # never displayed) — applied uniformly to every cell, not just ones that
+    # look suspicious, since it's a no-op for ordinary text.
+    _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+    def safe_row(cells: list) -> list:
+        return [f"'{c}" if isinstance(c, str) and c.startswith(_FORMULA_TRIGGERS) else c for c in cells]
+
     bold = Font(bold=True)
     wb = Workbook()
     wb.remove(wb.active)
@@ -555,25 +567,25 @@ def render_xlsx_workbook(content: str, default_title: str = "Sheet1"):
 
         for block in group_blocks:
             if block.kind == "heading":
-                ws.append([_runs_to_plain_text(block.runs)])
+                ws.append(safe_row([_runs_to_plain_text(block.runs)]))
                 for c in ws[ws.max_row]:
                     c.font = bold
             elif block.kind == "paragraph":
-                ws.append([_runs_to_plain_text(block.runs)])
+                ws.append(safe_row([_runs_to_plain_text(block.runs)]))
             elif block.kind in ("bullet_list", "ordered_list"):
                 for depth, item_runs in block.items:
-                    ws.append(["  " * (depth - 1) + "- " + _runs_to_plain_text(item_runs)])
+                    ws.append(safe_row(["  " * (depth - 1) + "- " + _runs_to_plain_text(item_runs)]))
             elif block.kind == "table":
                 if block.header:
-                    ws.append([_runs_to_plain_text(c) for c in block.header])
+                    ws.append(safe_row([_runs_to_plain_text(c) for c in block.header]))
                     for c in ws[ws.max_row]:
                         c.font = bold
                 for row in block.rows:
-                    ws.append([_runs_to_plain_text(c) for c in row])
+                    ws.append(safe_row([_runs_to_plain_text(c) for c in row]))
             elif block.kind == "blockquote":
-                ws.append([_runs_to_plain_text(block.runs)])
+                ws.append(safe_row([_runs_to_plain_text(block.runs)]))
             elif block.kind == "code_block":
-                ws.append([block.text])
+                ws.append(safe_row([block.text]))
             elif block.kind == "hr":
                 ws.append([])
 

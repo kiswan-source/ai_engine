@@ -272,6 +272,32 @@ def test_render_xlsx_workbook_sanitizes_invalid_sheet_name_characters():
     assert wb.sheetnames == ["A-B-C-D"]
 
 
+def test_render_xlsx_workbook_neutralizes_formula_injection_in_table_cells():
+    # Gate 3 (AEGIS audit, 2026-07-23) — CWE-1236: a cell value starting with
+    # =/+/-/@ must never reach the xlsx as a live formula. openpyxl itself
+    # auto-detects a bare "=..." string as a formula cell (data_type "f");
+    # the leading apostrophe forces text and is the standard mitigation.
+    md = (
+        "# Sheet1\n\n"
+        "| Item | Val |\n| --- | --- |\n"
+        "| A | =2+2 |\n| B | +CMD |\n| C | -1 |\n| D | @SUM(A1) |\n| E | normal |\n"
+    )
+    wb = render_xlsx_workbook(md, default_title="Sheet1")
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    values_by_item = {r[0]: r[1] for r in rows[1:]}
+    assert values_by_item["A"] == "'=2+2"
+    assert values_by_item["B"] == "'+CMD"
+    assert values_by_item["C"] == "'-1"
+    assert values_by_item["D"] == "'@SUM(A1)"
+    assert values_by_item["E"] == "normal"
+    # The critical property: openpyxl must never classify this as a formula
+    # cell (data_type 'f') — confirmed by construction since the stored
+    # value no longer starts with "=".
+    for cell in ws["B"]:
+        assert cell.data_type != "f"
+
+
 def test_render_pptx_slides_h1_starts_new_slide():
     md = "# Ringkasan\nIsi ringkasan.\n\n# Data\nIsi data."
     prs = render_pptx_slides(md, default_title="Laporan")
