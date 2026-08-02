@@ -33,7 +33,11 @@ directly (same-loop callers, e.g. a future async call site, or tests that
 inject their own factory already on the right loop).
 
 Document files (pdf/txt/md/log/docx/doc/csv/json — the same categories
-`workspace/indexer.py` already indexes) go through `extract_text()`.
+`workspace/indexer.py` already indexes) are dispatched directly to their
+`agent/tools/readers.py` parser (Fase 15 — not through that module's
+`extract_text()`, which collapses the result to a plain string for its own
+RAG-indexing use and would throw away the pagination metadata a Workspace
+read needs).
 
 Image and GIS files (Bab 69.5's "Vision" row, Tahap 29) are handled here
 too, reusing existing machinery rather than inventing new parsing:
@@ -103,11 +107,18 @@ from sqlalchemy import select
 
 import db.connection as db_connection
 from agent.tools.gis_io import _load_any_fc, _summarize_fc
+from agent.tools.readers import (
+    DEFAULT_PAGE_CHARS,
+    MAX_BATCH_FILES,
+    MAX_LENGTH_PER_FILE,
+    _EXTENSION_READERS,
+    _PAGINATED_READERS,
+    _paginate,
+)
 from db.models import Workspace, WorkspaceFolder
 from security import audit_log
 from tools.adapters.filesystem import FilesystemAdapter, classify
 from tools.tool_validator import PathEscapesRootError
-from workspace.indexer import extract_text
 from workspace.versioning import save_version
 
 # Fase 8 (DCF v5 mandate "Workspace Native File Access & Chat UX Repair",
@@ -169,7 +180,8 @@ async def _list_files(workspace_id: str, session_factory=None) -> Dict[str, Any]
 
 
 async def _read_file(
-    workspace_id: str, folder_id: str, relative_path: str, session_factory=None
+    workspace_id: str, folder_id: str, relative_path: str, session_factory=None,
+    offset: int = 0, length: int = DEFAULT_PAGE_CHARS,
 ) -> Dict[str, Any]:
     session_factory = session_factory or db_connection.AsyncSessionFactory
     async with session_factory() as session:
@@ -186,11 +198,32 @@ async def _read_file(
         abs_path = adapter.absolute_path(relative_path)
 
         if category == "document":
-            text = extract_text(adapter, relative_path)
-            if text is None:
+            # Fase 15: same offset/length pagination as the standalone
+            # readers (agent/tools/readers.py) — this had the identical
+            # hard-truncate-at-10000-chars bug, found by Gate 1 adversarial
+            # review of that Fase's own blueprint, not a separate design.
+            # Dispatches directly to the reader (not via workspace/indexer.py
+            # ::extract_text, which collapses the result down to a plain
+            # `str | None` for its own RAG-indexing use and would silently
+            # throw away the has_more/offset/returned_chars metadata this
+            # needs — caught by this Fase's own test failing, not designed
+            # in from the start).
+            ext = os.path.splitext(relative_path)[1].lstrip(".").lower()
+            reader = _EXTENSION_READERS.get(ext)
+            if reader is None:
                 return {"success": False, "error": "File dokumen ini gagal dibaca sebagai teks."}
-            return {"success": True, "path": relative_path, "type": "document",
-                    "text": text[:10000], "truncated": len(text) > 10000}
+            if reader in _PAGINATED_READERS:
+                item = reader(str(abs_path), offset=offset, length=length)
+            else:
+                item = reader(str(abs_path))
+            if "error" in item:
+                return {"success": False, "error": "File dokumen ini gagal dibaca sebagai teks."}
+            # Drop the reader's own "source" key (the real absolute host
+            # path) — Workspace deliberately never surfaces that to the
+            # model/user (same principle as Fase 9's WSL-path-hiding
+            # _friendly_path()); "path": relative_path already covers it.
+            item.pop("source", None)
+            return {"success": True, "path": relative_path, "type": "document", **item}
 
         if category == "image":
             with open(abs_path, "rb") as fh:
@@ -340,6 +373,28 @@ async def _move_or_copy(
                     if adapter.absolute_path(dst_relative_path).is_dir():
                         return {"success": False, "error": f"{dst_relative_path!r} adalah folder yang sudah ada."}
                     await _snapshot_if_exists(session, workspace_id, folder_id, dst_relative_path, adapter, actor)
+                # Gate 3 finding (2026-08-01): unlike shutil.move (which
+                # already refuses "move a directory into itself"),
+                # shutil.copytree has no such guard — copying a folder into
+                # its own subdirectory (e.g. dst doesn't need to exist yet,
+                # just needs to be nested under src) makes copytree recurse
+                # into the destination it's still creating, burning CPU/disk
+                # until Python's recursion limit or an OS path-length error,
+                # and leaving an orphaned partial tree on disk with no
+                # cleanup. Predates this Fase (shared by the chat tool since
+                # Fase 8) but newly trivial to trigger via the REST route's
+                # plain HTTP call and the chat-tool/context-menu's
+                # free-text destination prompt — closing it here closes it
+                # for every caller of this shared function.
+                if op == "copy":
+                    src_abs = adapter.absolute_path(src_relative_path)
+                    if src_abs.is_dir():
+                        dst_abs = adapter.absolute_path(dst_relative_path)
+                        if dst_abs == src_abs or src_abs in dst_abs.parents:
+                            return {
+                                "success": False,
+                                "error": f"Tidak bisa menyalin folder ke dalam dirinya sendiri atau subfoldernya ({dst_relative_path!r}).",
+                            }
                 fn = adapter.move if op == "move" else adapter.copy
                 fn(src_relative_path, dst_relative_path)
             except (PathEscapesRootError, FileNotFoundError) as e:
@@ -558,14 +613,66 @@ def workspace_list_files(workspace_id: str) -> Dict[str, Any]:
     return asyncio.run(_run())
 
 
-def workspace_read_file(workspace_id: str, folder_id: str, relative_path: str) -> Dict[str, Any]:
+def workspace_read_file(
+    workspace_id: str, folder_id: str, relative_path: str,
+    offset: int = 0, length: int = DEFAULT_PAGE_CHARS,
+) -> Dict[str, Any]:
     """Baca isi satu file dari Project Workspace. ``workspace_id`` selalu
-    disuntik oleh `ChatEngine._run_tool` — lihat modul docstring."""
+    disuntik oleh `ChatEngine._run_tool` — lihat modul docstring.
+
+    ``offset``/``length`` (Fase 15): pagination for large documents — call
+    again with a bigger ``offset`` (see the response's ``has_more``) to
+    continue reading past the first window. Defaults reproduce the old
+    hard-truncate-at-10000-chars behavior exactly."""
 
     async def _run():
         engine, factory = _build_fresh_engine()
         try:
-            return await _read_file(workspace_id, folder_id, relative_path, session_factory=factory)
+            return await _read_file(
+                workspace_id, folder_id, relative_path, session_factory=factory,
+                offset=offset, length=length,
+            )
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def workspace_read_many_files(
+    workspace_id: str, folder_id: str, relative_paths, length_per_file: int = 2000,
+) -> Dict[str, Any]:
+    """Read several files from the same Workspace folder in one call (Fase
+    15) — same batching motivation as ``agent.tools.readers.read_many_files``,
+    Workspace-scoped. ``workspace_id`` always injected by
+    ``ChatEngine._run_tool``, same rule as every other Workspace tool."""
+    if isinstance(relative_paths, str):
+        relative_paths = [relative_paths]
+    if not relative_paths:
+        return {"success": False, "error": "relative_paths kosong."}
+    length_per_file = max(1, min(length_per_file, MAX_LENGTH_PER_FILE))
+    if len(relative_paths) > MAX_BATCH_FILES:
+        return {
+            "success": False,
+            "error": f"Terlalu banyak file sekaligus ({len(relative_paths)}), maksimum "
+                     f"{MAX_BATCH_FILES} per panggilan. Bagi jadi beberapa panggilan.",
+        }
+
+    async def _run():
+        engine, factory = _build_fresh_engine()
+        try:
+            results = []
+            for relative_path in relative_paths:
+                item = await _read_file(
+                    workspace_id, folder_id, relative_path, session_factory=factory,
+                    offset=0, length=length_per_file,
+                )
+                results.append({"relative_path": relative_path, **item})
+            ok_count = sum(1 for r in results if r.get("success"))
+            return {
+                "success": True, "count": len(results), "ok_count": ok_count,
+                "text": f"{ok_count}/{len(results)} file berhasil dibaca.",
+                "results": results,
+            }
         finally:
             await engine.dispose()
 

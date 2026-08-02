@@ -208,7 +208,13 @@ async def test_decide_approval_denies_insufficient_role(client, stub_orchestrato
     monkeypatch.setattr("api.config.settings.API_KEYS", "userkey:user")
     stub_orchestrator(UnconfidentAgent("writer", output="jawaban lemah"))
     run_res = await client.post(
-        "/api/v1/orchestrator/run", json={"prompt": "tulis", "roles": ["writer"], "mode": "reflection"}
+        "/api/v1/orchestrator/run",
+        json={"prompt": "tulis", "roles": ["writer"], "mode": "reflection"},
+        # Fase 14: /run now requires an authenticated principal (previously
+        # unauthenticated) so an EXECUTOR-capability step's tool calls can be
+        # RBAC-gated against a real caller — this test configured API_KEYS
+        # above, so it must supply one too.
+        headers={"X-API-Key": "userkey"},
     )
     trace_id = run_res.json()["trace_id"]
 

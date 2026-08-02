@@ -89,3 +89,75 @@ def test_run_orchestrated_workflow_rejects_empty_roles(monkeypatch):
 
     with pytest.raises(ValueError):
         run_orchestrated_workflow(goal="tugas", roles=[], mode="sequential")
+
+
+# ── Fase 14 (DCF v5 mandate — orchestrator agent tool access) ──────────────
+
+
+class _CapturingAgent(StubAgent):
+    """Records the Task it was dispatched, so a test can inspect
+    task.metadata (e.g. caller_role) without needing a real EXECUTOR
+    tool-calling round-trip."""
+
+    def __init__(self, role: str, tool_calls: tuple = ()) -> None:
+        super().__init__(role)
+        self.last_task = None
+        self._tool_calls = tool_calls
+
+    async def execute(self, task: Task) -> AgentResult:
+        self.last_task = task
+        result = await super().execute(task)
+        return AgentResult(
+            output=result.output, confidence=result.confidence, trace_id=result.trace_id,
+            provider_used=result.provider_used, model_used=result.model_used,
+            role=result.role, agent_id=result.agent_id, tool_calls=self._tool_calls,
+        )
+
+
+def test_run_orchestrated_workflow_forwards_caller_role_to_the_task(monkeypatch):
+    agent = _CapturingAgent("writer")
+    _install_test_orchestrator(monkeypatch, agent)
+
+    run_orchestrated_workflow(goal="buat laporan", roles=["writer"], mode="sequential", caller_role="admin")
+
+    assert agent.last_task.metadata.get("caller_role") == "admin"
+
+
+def test_run_orchestrated_workflow_omits_caller_role_when_not_given(monkeypatch):
+    agent = _CapturingAgent("writer")
+    _install_test_orchestrator(monkeypatch, agent)
+
+    run_orchestrated_workflow(goal="buat laporan", roles=["writer"], mode="sequential")
+
+    assert "caller_role" not in agent.last_task.metadata
+
+
+def test_run_orchestrated_workflow_surfaces_files_produced_by_tool_calls(monkeypatch):
+    """A writer step that actually called write_docx (via the Fase 14
+    EXECUTOR tool loop) must surface the produced file path in the tool
+    result's "files" list, so the chat card (core/chat/engine.py) can offer
+    a real download instead of text-only output."""
+    agent = _CapturingAgent(
+        "writer",
+        tool_calls=(
+            {"name": "write_docx", "args": {"filename": "laporan.docx"}, "success": True, "file": "/reports/laporan.docx"},
+            {"name": "read_pdf", "args": {"file_path": "a.pdf"}, "success": True, "file": None},
+        ),
+    )
+    _install_test_orchestrator(monkeypatch, agent)
+
+    result = run_orchestrated_workflow(goal="buat laporan", roles=["writer"], mode="sequential")
+
+    assert result["files"] == ["/reports/laporan.docx"]
+
+
+def test_run_orchestrated_workflow_ignores_failed_tool_calls_for_files(monkeypatch):
+    agent = _CapturingAgent(
+        "writer",
+        tool_calls=({"name": "write_docx", "args": {}, "success": False, "file": None},),
+    )
+    _install_test_orchestrator(monkeypatch, agent)
+
+    result = run_orchestrated_workflow(goal="buat laporan", roles=["writer"], mode="sequential")
+
+    assert result["files"] == []

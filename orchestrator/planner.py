@@ -44,6 +44,7 @@ class Planner:
         temperature: float = 0.7,
         max_tokens: int = 2048,
         images: list[dict] | None = None,
+        caller_role: str | None = None,
     ) -> Plan:
         """Create a :class:`Plan` for ``roles`` over ``prompt``.
 
@@ -59,6 +60,15 @@ class Planner:
                 not just a "vision" step, since roles are provider-agnostic
                 by design (Bab 17) and any role's resolved provider might
                 support vision.
+            caller_role: RBAC role (``security/permissions.py``) of whoever
+                requested this run — Fase 14 (orchestrator agent tool
+                access). Stamped onto every step's ``Task.metadata`` so an
+                EXECUTOR-capability agent's tool calls (``agents/
+                generic_agent.py``) are gated by the SAME RBAC chokepoint
+                every other agent path already uses. ``None`` (the default,
+                same as before this parameter existed) means tool calls made
+                during this run are unchecked — matches
+                ``ToolRegistry.execute``'s existing "no role, no check" rule.
 
         Raises:
             ValueError: If ``roles`` is empty or ``mode`` is unknown.
@@ -73,6 +83,9 @@ class Planner:
         prev_id: str | None = None
         for index, role in enumerate(roles):
             step_id = f"s{index}-{role}"
+            metadata: dict = {"step_index": index}
+            if caller_role is not None:
+                metadata["caller_role"] = caller_role
             task = Task(
                 role=role,
                 prompt=prompt,
@@ -81,7 +94,7 @@ class Planner:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 payload={"images": images} if images else {},
-                metadata={"step_index": index},
+                metadata=metadata,
             )
             depends = (prev_id,) if (mode in _CHAINED_MODES and prev_id) else ()
             graph.add_step(Step(step_id=step_id, task=task, depends_on=depends))

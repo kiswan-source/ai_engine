@@ -76,6 +76,11 @@ class AgentResult:
     # left it unfilled pending this module).
     guardrail_blocked: bool = False
     guardrail_score: float | None = None
+    # Fase 14 (DCF v5 mandate — orchestrator agent tool access): populated
+    # only for EXECUTOR-capability roles (writer/tool) whose provider call
+    # actually invoked tools — see ``ProviderResponse.tool_calls_made`` for
+    # the entry shape. Empty for every other role, unchanged behavior.
+    tool_calls: tuple[dict[str, Any], ...] = ()
 
     @property
     def ok(self) -> bool:

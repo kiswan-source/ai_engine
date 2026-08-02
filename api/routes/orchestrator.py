@@ -82,7 +82,9 @@ async def list_modes():
 
 
 @router.post("/run")
-async def run_workflow(req: WorkflowRunRequest):
+async def run_workflow(
+    req: WorkflowRunRequest, principal: Principal = Depends(get_current_principal)
+):
     if not req.roles:
         raise HTTPException(status_code=400, detail="roles must not be empty")
     images = [_parse_data_uri(uri) for uri in req.images]
@@ -96,6 +98,15 @@ async def run_workflow(req: WorkflowRunRequest):
             max_tokens=req.max_tokens,
             images=images or None,
             simulate=req.simulate,
+            # Fase 14 (orchestrator agent tool access) — this route had NO
+            # auth dependency at all before this change (grep-confirmed);
+            # added specifically so any EXECUTOR-capability step's tool calls
+            # are RBAC-gated against a real caller instead of running
+            # unchecked. A blank API_KEYS (this deployment's dev default)
+            # still resolves every caller to "admin", so this is a no-op
+            # until API_KEYS is actually configured — same posture as every
+            # other checked route (CLAUDE.md §1/§8).
+            caller_role=principal.role,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

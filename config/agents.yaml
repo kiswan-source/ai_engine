@@ -17,6 +17,11 @@ CONSENSUS_DEBATE_ROUNDS: 1
 ENABLE_CONSENSUS_VOTING: true
 ENABLE_HUMAN_APPROVAL: true
 
+# Orchestrator agent tool access (Fase 14, DCF v5 mandate, Gate 1 Owner
+# decision 2026-08-02): EXECUTOR-capability roles (writer/tool) can call
+# ToolRegistry tools (read/write documents, etc.) during a workflow run.
+ENABLE_ORCHESTRATOR_AGENT_TOOLS: true
+
 # Human In The Loop (Bab 61.3): SLA before a pending approval counts as
 # overdue.
 APPROVAL_SLA_SECONDS: 3600

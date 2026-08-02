@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # Feature flags (Bab 57).
     ENABLE_CONSENSUS_VOTING: bool = True
     ENABLE_HUMAN_APPROVAL: bool = True
+    # Fase 14 (DCF v5 mandate — orchestrator agent tool access, Gate 1 Owner
+    # decision 2026-08-02): EXECUTOR-capability agent roles (writer/tool) get
+    # real ToolRegistry access during a workflow run (agents/generic_agent.py).
+    # Default True per Owner's build mandate; flip off to fall back to the
+    # pre-Fase-14 behavior (every role, plain text only) without a code change.
+    ENABLE_ORCHESTRATOR_AGENT_TOOLS: bool = True
     # Human In The Loop (Bab 61.3): SLA before a pending approval counts as overdue.
     APPROVAL_SLA_SECONDS: int = 3600
     # Pending-approval state (Bab 38 rule 1 — services must be stateless):

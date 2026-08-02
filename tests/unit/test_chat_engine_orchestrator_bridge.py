@@ -9,7 +9,7 @@ from core.chat.engine import ChatEngine
 from orchestrator.orchestrator import Orchestrator
 from tests.unit.test_chat_engine_rbac import _FakeAsyncClient, _final_round, _tool_call_round
 from tests.unit.test_orchestrator import StubAgent, registry_with
-from tests.unit.test_orchestrator_tools import _LowConfidenceAgent
+from tests.unit.test_orchestrator_tools import _CapturingAgent, _LowConfidenceAgent
 
 
 def test_summarize_result_success_shows_final_output():
@@ -45,7 +45,7 @@ def engine(monkeypatch):
     return ChatEngine()
 
 
-async def _run(monkeypatch, engine, rounds, session_id="sess-orch"):
+async def _run(monkeypatch, engine, rounds, session_id="sess-orch", role=None):
     class Client(_FakeAsyncClient):
         pass
 
@@ -53,7 +53,7 @@ async def _run(monkeypatch, engine, rounds, session_id="sess-orch"):
     monkeypatch.setattr("core.chat.engine.httpx.AsyncClient", Client)
 
     events = []
-    async for ev in engine.stream_run(session_id, "analisa dokumen ini dan buat laporan lengkap"):
+    async for ev in engine.stream_run(session_id, "analisa dokumen ini dan buat laporan lengkap", role=role):
         events.append(ev)
     return events
 
@@ -96,3 +96,47 @@ async def test_chat_turn_surfaces_orchestrated_workflow_escalation(monkeypatch, 
     assert tool_results[0]["ok"] is True  # the tool call itself succeeded — escalation isn't a tool failure
     assert "persetujuan manusia" in tool_results[0]["summary"]
     assert events[-1]["type"] == "done"
+
+
+# ── Fase 14 (DCF v5 mandate — orchestrator agent tool access) ──────────────
+
+
+async def test_chat_turn_injects_the_session_role_as_caller_role(monkeypatch, engine):
+    """caller_role must come from the chat session's own already-resolved
+    RBAC role (never a model-supplied argument) — same never-trust-the-model
+    rule as workspace_id/owner injection."""
+    import orchestrator.orchestrator as orchestrator_module
+
+    agent = _CapturingAgent("writer", tool_calls=())
+    orchestrator_module._shared_orchestrator = Orchestrator(agent_registry=registry_with(agent))
+
+    rounds = [
+        [_tool_call_round("run_orchestrated_workflow", {"goal": "buat laporan", "roles": ["writer"], "mode": "sequential"})],
+        [_final_round("Selesai.")],
+    ]
+    await _run(monkeypatch, engine, rounds, role="operator")
+
+    assert agent.last_task.metadata.get("caller_role") == "operator"
+
+
+async def test_chat_turn_surfaces_produced_files_as_downloadable_cards(monkeypatch, engine):
+    """The "text only" half of the original gap: a file an EXECUTOR step
+    actually wrote during the workflow must reach the chat UI as a real
+    "file" event, not just be mentioned in the summary text."""
+    import orchestrator.orchestrator as orchestrator_module
+
+    agent = _CapturingAgent(
+        "writer",
+        tool_calls=({"name": "write_docx", "args": {}, "success": True, "file": "/fake/reports/laporan.docx"},),
+    )
+    orchestrator_module._shared_orchestrator = Orchestrator(agent_registry=registry_with(agent))
+
+    rounds = [
+        [_tool_call_round("run_orchestrated_workflow", {"goal": "buat laporan", "roles": ["writer"], "mode": "sequential"})],
+        [_final_round("Selesai, filenya sudah dibuat.")],
+    ]
+    events = await _run(monkeypatch, engine, rounds)
+
+    file_events = [e for e in events if e["type"] == "file"]
+    assert len(file_events) == 1
+    assert file_events[0]["filename"] == "laporan.docx"

@@ -35,8 +35,43 @@ action here that never reached the audit trail at all, which would have
 left a Security Dashboard permanently blank for this category. Only
 logged when matches exist, so the trail doesn't fill with "redacted
 nothing" noise on every external-provider call.
+
+Fase 14 (DCF v5 mandate — orchestrator agent tool access, Gate 1 Owner
+decision 2026-08-02): EXECUTOR-capability roles ("writer", "tool" — see
+``agents/capabilities.py``) now get real ``ToolRegistry`` access during
+``execute()``, so an orchestrator workflow can actually read a document
+(read_pdf/read_docx/workspace reads) and produce a real file artifact
+(write_docx/write_pdf/etc.), not just text — closing the gap CLAUDE.md §2/§9
+used to only partially disclose. VALIDATOR-capability roles (reviewer/critic/
+consensus/guardrail/reflection/confidence) are structurally excluded by the
+same capability check, so builder/validator independence (Fase 2, R-08) holds
+for free. Mechanically: build a fresh ``ToolRegistry`` (same pattern
+``agent/tools/registry.py::build_registry`` already documents — "a FRESH
+registry per call", not a shared mutable singleton), pass the curated
+``agent/tools/tool_schemas.py::TOOL_SCHEMAS`` (minus ``run_orchestrated_
+workflow`` itself — a deliberate recursion guard, not part of the Gate 1
+tool-scope decision, added to prevent an EXECUTOR step from spawning
+unbounded nested orchestrator runs) as ``GenerationParams.tools``, and let
+the resolved provider's own tool-calling loop (today: only
+``OllamaProvider._generate_with_tools``; other providers silently ignore
+``tools`` and generate plain text — the Gate 1-approved graceful degrade)
+execute calls via ``ToolRegistry.execute(name, args, role=caller_role)`` —
+the SAME RBAC chokepoint ``agent/core.py`` and ``core/chat/engine.py``
+already gate through. ``caller_role`` is threaded from whoever calls
+``Orchestrator.run(..., caller_role=...)`` down through ``Task.metadata`` —
+never invented here, never trusted from the model. Gated behind
+``settings.ENABLE_ORCHESTRATOR_AGENT_TOOLS`` (default ``True``). Owner
+explicitly chose the full ``ToolRegistry`` (not a curated document-only
+subset) and chose to allow this in every workflow mode including
+voting/consensus/reflection (accepting the documented race/duplicate-write
+risk from those modes' concurrent/repeated same-role dispatch, rather than
+restricting to sequential/parallel only) — see the Fase 14 Gate 1 record for
+the full option set presented and the rationale for each recommendation.
 """
 from __future__ import annotations
+
+import asyncio
+from typing import Awaitable, Callable
 
 from core.utils.logger import get_logger
 from providers import GenerationParams, ImageInput, create_for_role
@@ -44,8 +79,15 @@ from providers.base_provider import BaseProvider
 from security.endpoint_policy import is_internal_endpoint
 
 from .base_agent import AgentResult, BaseAgent, Task
+from .capabilities import AgentCapability, capability_for
 
 logger = get_logger(__name__)
+
+# Fase 14 Gate 2 finding: tools an EXECUTOR-capability step must never be
+# able to invoke even if a model hallucinates a call to a name it wasn't
+# offered — enforced in the executor itself, not just by omission from the
+# advertised schema list (see _build_tool_access).
+_RECURSION_GUARDED_TOOLS = frozenset({"run_orchestrated_workflow"})
 
 
 def _estimate_confidence(text: str, finish_reason: str | None) -> float:
@@ -132,11 +174,19 @@ class GenericLLMAgent(BaseAgent):
         # structured input" extension point (base_agent.py), so this role
         # stays as provider-agnostic as every other one.
         images = tuple(ImageInput(**img) for img in task.payload.get("images", ()))
+
+        tools: tuple[dict, ...] = ()
+        tool_executor = None
+        if settings.ENABLE_ORCHESTRATOR_AGENT_TOOLS and capability_for(self.role) == AgentCapability.EXECUTOR:
+            tools, tool_executor = self._build_tool_access(task)
+
         params = GenerationParams(
             system=task.system,
             temperature=task.temperature,
             max_tokens=task.max_tokens,
             images=images,
+            tools=tools,
+            tool_executor=tool_executor,
         )
         resp = await self._provider.generate(prompt, params)
         confidence = _estimate_confidence(resp.text, resp.finish_reason)
@@ -175,7 +225,50 @@ class GenericLLMAgent(BaseAgent):
             prompt_tokens=resp.prompt_tokens,
             completion_tokens=resp.completion_tokens,
             guardrail_score=guardrail_score,
+            tool_calls=resp.tool_calls_made,
         )
 
     async def health_check(self) -> bool:
         return await self._provider.health_check()
+
+    def _build_tool_access(
+        self, task: Task
+    ) -> tuple[tuple[dict, ...], Callable[[str, dict], Awaitable[object]]]:
+        """Tool schemas + executor for an EXECUTOR-capability step (Fase 14).
+
+        ``caller_role`` comes only from ``task.metadata`` — set by
+        ``orchestrator/planner.py`` from whatever ``Orchestrator.run(...,
+        caller_role=...)`` was given by its caller (``api/routes/
+        orchestrator.py``'s authenticated principal, or the chat session's
+        RBAC role via ``agent/tools/orchestrator_tools.py``). Never taken
+        from the task prompt/payload — same never-trust-the-model rule
+        ``core/chat/engine.py`` already applies to ``workspace_id``/``owner``.
+        """
+        from agent.tools.registry import build_registry
+        from agent.tools.tool_schemas import TOOL_SCHEMAS
+        from api.config import settings
+
+        caller_role = task.metadata.get("caller_role")
+        registry = build_registry(settings.OLLAMA_BASE_URL, settings.GEMMA_MODEL)
+        # Recursion guard (Gate 1 finding, applied within the Owner-approved
+        # "full ToolRegistry" scope, not a narrowing of it): an EXECUTOR step
+        # must never be able to spawn a brand new, unbounded
+        # Orchestrator.run() from inside itself. Filtering the SCHEMA list
+        # below only stops a well-behaved model from being offered the
+        # choice — it does NOT stop a hallucinated tool_call naming a tool
+        # that was never advertised (Ollama's native tool-calling does not
+        # guarantee the model only ever calls something it was shown; this
+        # was a real Gate 2 finding, not a hypothetical). The actual
+        # enforcement has to be in the executor itself.
+        schemas = tuple(s for s in TOOL_SCHEMAS if s["function"]["name"] not in _RECURSION_GUARDED_TOOLS)
+
+        async def _tool_executor(name: str, args: dict):
+            if name in _RECURSION_GUARDED_TOOLS:
+                return {
+                    "success": False,
+                    "error": f"Tool '{name}' tidak tersedia di dalam langkah orchestrator "
+                             "(mencegah rekursi tak terbatas).",
+                }
+            return await asyncio.to_thread(registry.execute, name, args, caller_role)
+
+        return schemas, _tool_executor

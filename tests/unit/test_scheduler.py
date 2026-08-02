@@ -35,6 +35,19 @@ class StubAgent(BaseAgent):
         return True
 
 
+class _CapturingAgent(StubAgent):
+    """Records the Task it was dispatched with, for asserting on
+    task.metadata (Fase 14 — caller_role threading)."""
+
+    def __init__(self, role, output="ok"):
+        super().__init__(role, output=output)
+        self.last_task: Task | None = None
+
+    async def execute(self, task: Task) -> AgentResult:
+        self.last_task = task
+        return await super().execute(task)
+
+
 def registry_with(*agents) -> AgentRegistry:
     reg = AgentRegistry()
     for a in agents:
@@ -174,4 +187,40 @@ async def test_start_stop_lifecycle_is_idempotent(sqlite_session_factory):
 
     await scheduler.stop()
     assert scheduler._task is None
+
+
+# ── Fase 14 Gate 2 finding — caller_role must flow into scheduled runs too,
+# not just the two HTTP-facing call sites (api/routes/orchestrator.py's /run
+# and the chat bridge). Otherwise a scheduled job's EXECUTOR-capability steps
+# would call tools completely unchecked by RBAC. ─────────────────────────
+
+
+async def test_scheduled_job_resolves_caller_role_from_its_owner_key(sqlite_session_factory, monkeypatch):
+    monkeypatch.setattr("api.config.settings.API_KEYS", "ownerkey:operator")
+    clock = FakeClock(datetime(2026, 7, 5, 12, 0, 0))
+    agent = _CapturingAgent("writer")
+    orch = Orchestrator(agent_registry=registry_with(agent))
+    scheduler = Scheduler(orch, clock=clock)
+    await _insert(sqlite_session_factory, make_job(owner_key="ownerkey"))
+
+    await scheduler.tick()
+
+    assert agent.last_task.metadata.get("caller_role") == "operator"
+
+
+async def test_scheduled_job_with_unresolvable_owner_key_runs_unchecked_not_crashed(sqlite_session_factory, monkeypatch):
+    """A key that's no longer in API_KEYS (revoked/rotated) must degrade to
+    the existing "no role, no check" default — same posture as any other
+    caller that doesn't pass a role — never crash the job."""
+    monkeypatch.setattr("api.config.settings.API_KEYS", "someotherkey:admin")
+    clock = FakeClock(datetime(2026, 7, 5, 12, 0, 0))
+    agent = _CapturingAgent("writer")
+    orch = Orchestrator(agent_registry=registry_with(agent))
+    scheduler = Scheduler(orch, clock=clock)
+    await _insert(sqlite_session_factory, make_job(owner_key="revoked-key"))
+
+    ran = await scheduler.tick()
+
+    assert ran == 1
+    assert agent.last_task.metadata.get("caller_role") is None
     await scheduler.stop()  # no-op, must not raise

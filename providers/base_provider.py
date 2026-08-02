@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any, Awaitable, Callable, AsyncIterator
 
 from .exceptions import ProviderCapabilityError
 
@@ -50,6 +50,21 @@ class GenerationParams:
     use_cache: bool = True
     images: tuple[ImageInput, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
+    # Tool-calling (Fase 14, DCF v5 mandate — orchestrator agent tool access):
+    # ``tools`` is a tuple of OpenAI/Ollama-style ``{"type": "function",
+    # "function": {...}}`` schemas; ``tool_executor`` is an async callable
+    # ``(name, args) -> Any`` a provider invokes for each tool call it
+    # receives, so the round-trip (call model -> get tool_calls -> execute ->
+    # feed result back -> call model again) stays entirely inside the
+    # provider that natively supports it. Both default to "off" so every
+    # existing caller (every role except EXECUTOR-capability ones, see
+    # ``agents/capabilities.py``) is completely unaffected. A provider that
+    # doesn't implement tool-calling simply ignores these two fields and
+    # generates a plain completion — deliberate graceful degrade (Gate 1
+    # decision), not an error, since only ``OllamaProvider`` implements this
+    # today.
+    tools: tuple[dict[str, Any], ...] = ()
+    tool_executor: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +82,14 @@ class ProviderResponse:
     completion_tokens: int = 0
     finish_reason: str | None = None
     raw: dict[str, Any] | None = None
+    # Populated only by a provider that actually executed
+    # ``GenerationParams.tools`` calls via ``tool_executor`` (Fase 14) — one
+    # entry per call made across every round: ``{"name", "args", "success",
+    # "file"}``. ``file`` is the produced artifact's path when the tool
+    # result carried one (mirrors ``core/chat/engine.py``'s ``result["file"]``
+    # convention), so callers can surface a real downloadable file without
+    # re-parsing free-text output.
+    tool_calls_made: tuple[dict[str, Any], ...] = ()
 
     @property
     def total_tokens(self) -> int:

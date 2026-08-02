@@ -76,7 +76,9 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     never removed by a later call with ENABLE_MINING_GIS_SKILL=False,
     caught live by tests/unit/test_domain_skill_toggle.py."""
     registry = ToolRegistry()
-    from agent.tools.readers import read_pdf, read_txt, read_docx, read_csv, read_json, read_image, read_xlsx, read_pptx
+    from agent.tools.readers import (
+        read_pdf, read_txt, read_docx, read_csv, read_json, read_image, read_xlsx, read_pptx, read_many_files,
+    )
     from agent.tools.writers import write_docx, write_txt, write_json, write_html, write_pdf, write_xlsx, write_pptx
     from agent.tools.analyzers import make_analyzer
     from agent.tools.images import (
@@ -95,6 +97,9 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
     # Workspace Slice 3 (Fase 12)
     registry.register("read_xlsx", read_xlsx, "Baca isi spreadsheet Excel (per-sheet). Input: file_path", ["xlsx"])
     registry.register("read_pptx", read_pptx, "Baca isi presentasi PowerPoint (per-slide). Input: file_path", ["pptx"])
+    # Fase 15 (bulk-file capability) — one call for N files instead of N calls.
+    registry.register("read_many_files", read_many_files,
+        "Baca beberapa file sekaligus (maks 50). Input: {file_paths: [..], length_per_file?}")
 
     # Image transforms (Pillow) — bukan generasi gambar
     registry.register("image_convert", image_convert, "Konversi format gambar. Input: {file_path, to_format: jpg|png|tiff|webp|bmp|gif, filename?}")
@@ -181,12 +186,16 @@ def build_core_registry(ollama_url: str, model: str) -> ToolRegistry:
         workspace_list_files,
         workspace_move_file,
         workspace_read_file,
+        workspace_read_many_files,
         workspace_write_file,
     )
     registry.register("workspace_list_files", workspace_list_files,
         "Daftar semua file di Project Workspace yang terhubung ke sesi ini. Input: {}")
     registry.register("workspace_read_file", workspace_read_file,
-        "Baca isi satu file dari Project Workspace. Input: {folder_id, relative_path}")
+        "Baca isi satu file dari Project Workspace. Input: {folder_id, relative_path, offset?, length?}")
+    # Fase 15 (bulk-file capability) — one call for N files in the same folder.
+    registry.register("workspace_read_many_files", workspace_read_many_files,
+        "Baca beberapa file sekaligus (maks 50) dari Project Workspace. Input: {folder_id, relative_paths: [..], length_per_file?}")
     # Workspace Write Access (Bab 69.7 write_output, Tahap 30) — same
     # workspace_id injection rule as the two tools above; ChatEngine._run_tool
     # also checks the write_output permission before this ever runs.

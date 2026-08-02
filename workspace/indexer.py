@@ -44,8 +44,15 @@ _READERS = {
 def extract_text(adapter: FilesystemAdapter, relative_path: str) -> str | None:
     """Dispatch to the right `agent/tools/readers.py` parser by extension;
     ``None`` for an unsupported extension or a file that failed to parse.
-    Public (Tahap 23) — also used by `agent/tools/workspace_reader.py`'s
-    `workspace_read_file` tool, not just `index_folder` below."""
+    Public (Tahap 23), used by `index_folder` below for RAG indexing (always
+    the first-page window — indexing very large documents in full is a
+    separate, disclosed limitation, not something Fase 15 changes).
+
+    NOT used by `agent/tools/workspace_reader.py::_read_file` for its own
+    reads any more (Fase 15) — that needs the reader's full pagination
+    metadata (``has_more``/``offset``/``returned_chars``), which collapsing
+    to a plain ``str | None`` here would throw away; see ``_read_document``
+    in that module instead."""
     ext = os.path.splitext(relative_path)[1].lower().lstrip(".")
     reader = _READERS.get(ext)
     if reader is None:

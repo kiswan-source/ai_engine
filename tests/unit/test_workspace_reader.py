@@ -27,6 +27,7 @@ from agent.tools.workspace_reader import (
     workspace_list_files,
     workspace_move_file,
     workspace_read_file,
+    workspace_read_many_files,
     workspace_write_file,
 )
 from db.models import Workspace, WorkspaceFileVersion, WorkspaceFolder
@@ -84,6 +85,25 @@ async def test_read_file_returns_real_content(sqlite_session_factory, tmp_path):
 
     assert result["success"] is True
     assert result["text"] == "kadar emas anomali distrik alpha"
+
+
+async def test_read_file_paginates_large_document(sqlite_session_factory, tmp_path):
+    """Fase 15 — this had the identical hard-truncate-at-10000-chars bug the
+    standalone readers (agent/tools/readers.py) had, found by that Fase's
+    own Gate 1 adversarial review, closed the same way here."""
+    (tmp_path / "big.txt").write_text("y" * 15000)
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    first = await _read_file(workspace_id, folder_id, "big.txt", session_factory=sqlite_session_factory)
+    assert first["has_more"] is True
+    assert len(first["text"]) == 10000
+
+    second = await _read_file(
+        workspace_id, folder_id, "big.txt", session_factory=sqlite_session_factory,
+        offset=first["offset"] + first["returned_chars"], length=10000,
+    )
+    assert second["has_more"] is False
+    assert len(second["text"]) == 5000
 
 
 async def test_read_file_image_returns_base64_and_mime_type(sqlite_session_factory, tmp_path):
@@ -688,6 +708,45 @@ async def test_copy_leaves_source_file_intact(sqlite_session_factory, tmp_path):
     assert (tmp_path / "copy.txt").read_text() == "isi"
 
 
+async def test_copy_folder_into_own_subdirectory_is_refused(sqlite_session_factory, tmp_path):
+    """Gate 3 finding (2026-08-01): unlike shutil.move (which already
+    refuses "move a directory into itself"), shutil.copytree has no such
+    guard. Copying a folder into one of its own (already-existing)
+    subdirectories used to recurse into the destination it was still
+    creating — the destination path itself doesn't even need to exist yet,
+    only be nested under the source."""
+    (tmp_path / "projectA" / "archive").mkdir(parents=True)
+    (tmp_path / "projectA" / "file.txt").write_text("isi")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "projectA", "projectA/archive/backup", op="copy", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is False
+    assert "sendiri" in result["error"] or "subfolder" in result["error"]
+    # Nothing partially created — no runaway recursion, no orphaned tree.
+    assert not (tmp_path / "projectA" / "archive" / "backup").exists()
+
+
+async def test_copy_folder_to_unrelated_destination_still_works(sqlite_session_factory, tmp_path):
+    """The new self-containment guard must not false-positive on an
+    ordinary folder copy to a destination that isn't nested under it."""
+    (tmp_path / "projectA").mkdir()
+    (tmp_path / "projectA" / "file.txt").write_text("isi")
+    workspace_id, folder_id = await _seed(sqlite_session_factory, tmp_path)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, "projectA", "projectB", op="copy", overwrite=False,
+        actor="alice", session_factory=sqlite_session_factory,
+    )
+
+    assert result["success"] is True
+    assert (tmp_path / "projectA" / "file.txt").exists()
+    assert (tmp_path / "projectB" / "file.txt").read_text() == "isi"
+
+
 async def test_concurrent_moves_to_same_destination_do_not_silently_clobber(sqlite_session_factory, tmp_path):
     """Adversarial-review finding: two concurrent calls targeting the same
     not-yet-existing destination must not both observe exists()==False and
@@ -1015,6 +1074,37 @@ def test_sync_wrapper_read_file_via_asyncio_run(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert result["text"] == "isi laporan sungguhan"
+
+
+def test_workspace_read_many_files_reads_several_at_once(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    (content_dir / "a.txt").write_text("isi a")
+    (content_dir / "b.txt").write_text("isi b")
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    result = workspace_read_many_files(workspace_id, folder_id, ["a.txt", "b.txt", "missing.txt"])
+
+    assert result["success"] is True
+    assert result["count"] == 3
+    assert result["ok_count"] == 2
+    assert result["results"][0]["text"] == "isi a"
+    assert result["results"][1]["text"] == "isi b"
+    assert result["results"][2]["success"] is False
+
+
+def test_workspace_read_many_files_caps_batch_size(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    db_path, (workspace_id, folder_id) = _setup_sqlite_file(tmp_path, content_dir)
+    monkeypatch.setattr("api.config.settings.DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+
+    from agent.tools.readers import MAX_BATCH_FILES
+
+    result = workspace_read_many_files(workspace_id, folder_id, [f"{i}.txt" for i in range(MAX_BATCH_FILES + 1)])
+
+    assert result["success"] is False
 
 
 def test_sync_wrapper_write_file_via_asyncio_run(tmp_path, monkeypatch):

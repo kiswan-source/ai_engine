@@ -179,6 +179,7 @@ TEXT_READERS = {"pdf": read_pdf, "docx": read_docx, "csv": read_csv,
 WORKSPACE_TOOL_NAMES = {
     "workspace_list_files", "workspace_read_file", "workspace_write_file",
     "workspace_find_file", "workspace_create_folder", "workspace_move_file", "workspace_copy_file",
+    "workspace_read_many_files",  # Fase 15 — read-only, same injection rule as workspace_read_file
 }
 # Mutating subset of WORKSPACE_TOOL_NAMES — gated on the write_output
 # Workspace Permission (Bab 69.7) and stamped with `actor` for audit/version
@@ -617,6 +618,13 @@ class ChatEngine:
             # call. None (no authenticated caller) maps to a shared
             # "anonymous" namespace inside agent/tools/memory_tools.py.
             args["owner"] = owner
+        if name == "run_orchestrated_workflow":
+            # Fase 14 (orchestrator agent tool access) — same never-trust-the-
+            # model rule as every injection above: the RBAC role gating any
+            # EXECUTOR-capability step's tool calls inside this workflow run
+            # must be the session's own already-resolved role, not something
+            # the model could pass as a goal/roles argument.
+            args["caller_role"] = role
         if name in WORKSPACE_MUTATING_TOOL_NAMES:
             # Bab 69.7 write_output (Tahap 30, extended Fase 8 Slice 1 to
             # create/move/copy) — checked here with the Project role
@@ -840,6 +848,29 @@ class ChatEngine:
                                          "size": result.get("size", 0)}
                             session.history.append(file_item)
                             yield file_item
+
+                        # Fase 14 (orchestrator agent tool access): unlike every
+                        # other file-producing tool, run_orchestrated_workflow can
+                        # produce SEVERAL files across its steps — a plural
+                        # "files" list of path strings (agent/tools/
+                        # orchestrator_tools.py::_produced_files). Scoped to this
+                        # one tool name deliberately: other tools (e.g.
+                        # workspace_list_files) already use a "files" key for an
+                        # unrelated shape (a list of dicts, not path strings) —
+                        # checking the name first avoids colliding with those.
+                        if ok and name == "run_orchestrated_workflow" and isinstance(result, dict) and result.get("files"):
+                            for fpath in result["files"]:
+                                produced_files.append(fpath)
+                                session.produced_files.add(os.path.basename(fpath))
+                                try:
+                                    fsize = os.path.getsize(fpath)
+                                except OSError:
+                                    fsize = 0
+                                file_item = {"type": "file", "filename": os.path.basename(fpath),
+                                             "ftype": os.path.splitext(fpath)[1].lstrip("."),
+                                             "size": fsize}
+                                session.history.append(file_item)
+                                yield file_item
 
                         is_workspace_image = (
                             ok and isinstance(result, dict)

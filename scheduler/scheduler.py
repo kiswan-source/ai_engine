@@ -28,6 +28,7 @@ from core.utils.logger import get_logger
 from db.connection import AsyncSessionFactory
 from db.models import ScheduledJob
 from orchestrator.orchestrator import Orchestrator
+from security.auth import verify_api_key
 
 logger = get_logger(__name__)
 
@@ -104,7 +105,24 @@ class Scheduler:
 
     async def _run_job(self, session: AsyncSession, job: ScheduledJob, now: datetime) -> None:
         try:
-            result = await self._orchestrator.run(prompt=job.prompt, roles=job.roles, mode=job.mode)
+            # Fase 14 Gate 2 finding: Orchestrator.run() can now dispatch
+            # EXECUTOR-capability steps with real ToolRegistry access (Fase
+            # 14) — this call site was the one remaining caller that never
+            # threaded a caller_role through, so a scheduled job's tool
+            # calls ran completely unchecked by RBAC (ToolRegistry.execute's
+            # "no role, no check" default). ``owner_key`` is already
+            # recorded at job-creation time (the API key of whoever created
+            # the schedule, ScheduledJob's own docstring) — resolve it to
+            # the same Principal.role security/auth.py would have produced
+            # for that key, never invent a role here. Same "blank API_KEYS
+            # = admin for everyone" posture as every other route: an unset/
+            # unresolvable key just falls back to None (unchecked), matching
+            # ToolRegistry.execute's existing default, not a new gap.
+            principal = verify_api_key(job.owner_key) if job.owner_key else None
+            caller_role = principal.role if principal else None
+            result = await self._orchestrator.run(
+                prompt=job.prompt, roles=job.roles, mode=job.mode, caller_role=caller_role
+            )
             job.last_status = "failed" if result.failed else "success"
             job.last_result_summary = (result.final_output or "")[:500]
         except Exception as exc:  # a broken job must not stop other due jobs from running

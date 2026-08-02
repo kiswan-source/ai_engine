@@ -118,6 +118,7 @@ class Orchestrator:
         trace_id: str | None = None,
         images: list[dict] | None = None,
         simulate: bool = False,
+        caller_role: str | None = None,
     ) -> WorkflowResult:
         """Plan and execute a multi-agent workflow for ``prompt``.
 
@@ -135,6 +136,14 @@ class Orchestrator:
                 never makes a real provider request. The real registry is
                 never touched, so a simulated and a real call can be
                 interleaved safely on the same ``Orchestrator``.
+            caller_role: RBAC role of whoever is requesting this run (Fase
+                14) — forwarded to ``Planner.plan()`` so any EXECUTOR-
+                capability agent's tool calls during this run are RBAC-gated
+                against the actual caller, never left unchecked or trusted
+                from the model. Callers: ``api/routes/orchestrator.py``
+                passes the authenticated principal's role;
+                ``agent/tools/orchestrator_tools.py`` (the chat bridge)
+                passes the chat session's already-resolved role.
 
         Returns:
             WorkflowResult: Aggregated result across all steps.
@@ -171,6 +180,7 @@ class Orchestrator:
             temperature=temperature,
             max_tokens=max_tokens,
             images=images,
+            caller_role=caller_role,
         )
 
         # Planning -> Executing

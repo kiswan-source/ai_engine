@@ -2,6 +2,8 @@
 import os, json
 from typing import Any, Dict
 
+from agent.tools.readers import _with_transient_retry  # Fase 15 — shared narrow-retry helper
+
 OUTPUT_DIR = os.path.expanduser("~/ai_engine/reports")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -10,26 +12,29 @@ def _path(filename: str) -> str:
 
 def write_txt(filename: str, content: str) -> Dict[str, Any]:
     path = _path(filename)
-    try:
+    def _do():
         with open(path, "w", encoding="utf-8") as f: f.write(content)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "txt"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def write_json(filename: str, data: Any) -> Dict[str, Any]:
     path = _path(filename)
-    try:
+    def _do():
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "json"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def write_html(filename: str, content: str) -> Dict[str, Any]:
     path = _path(filename)
-    try:
-        if "<html" not in content.lower():
-            content = f"""<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">
+    if "<html" not in content.lower():
+        content = f"""<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">
 <title>AI Engine Report</title>
 <style>body{{font-family:'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:0 24px;background:#f8f9fa;color:#212529;line-height:1.7}}
 h1{{color:#00c896;border-bottom:2px solid #00c896;padding-bottom:8px}}h2{{color:#495057;margin-top:28px}}
@@ -39,14 +44,17 @@ th{{background:#00c896;color:white}}tr:nth-child(even){{background:#f2f2f2}}
 code{{background:#e9ecef;padding:2px 6px;border-radius:4px;font-family:monospace}}
 pre{{background:#1e2020;color:#e8eaea;padding:16px;border-radius:8px;overflow-x:auto}}</style>
 </head><body>{content}</body></html>"""
+    def _do():
         with open(path, "w", encoding="utf-8") as f: f.write(content)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "html"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def write_docx(filename: str, title: str, content: str) -> Dict[str, Any]:
     path = _path(filename)
-    try:
+    def _do():
         from docx import Document
         from docx.shared import RGBColor
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -57,8 +65,19 @@ def write_docx(filename: str, title: str, content: str) -> Dict[str, Any]:
         for run in t.runs: run.font.color.rgb = RGBColor(0x00, 0xc8, 0x96)
         doc.add_paragraph()
         render_docx_body(doc, content)
-        doc.save(path)
+        # Gate 2 finding (Fase 15, 2026-08-02): save straight to `path`, unlike
+        # append_pdf_section/edit_docx_section's already-established tmp-then-
+        # os.replace pattern — a transient failure mid-save (now retried up to
+        # 2 more times by _with_transient_retry) could otherwise leave a
+        # truncated/corrupted file at `path` if every attempt failed. Closes
+        # the same class of gap those two functions already closed for
+        # themselves.
+        tmp_path = f"{path}.tmp"
+        doc.save(tmp_path)
+        os.replace(tmp_path, path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "docx"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -66,11 +85,15 @@ def write_xlsx(filename: str, title: str, content: str) -> Dict[str, Any]:
     """Workspace Slice 3 (Fase 12) — same {filename, title, content} shape
     as write_docx/write_pdf, reusing the same markdown_render.py parse."""
     path = _path(filename)
-    try:
+    def _do():
         from core.document.markdown_render import render_xlsx_workbook
         wb = render_xlsx_workbook(content, default_title=title)
-        wb.save(path)
+        tmp_path = f"{path}.tmp"  # Gate 2 finding (Fase 15) — see write_docx
+        wb.save(tmp_path)
+        os.replace(tmp_path, path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "xlsx"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -78,11 +101,15 @@ def write_pptx(filename: str, title: str, content: str) -> Dict[str, Any]:
     """Workspace Slice 3 (Fase 12) — same {filename, title, content} shape
     as write_docx/write_pdf, reusing the same markdown_render.py parse."""
     path = _path(filename)
-    try:
+    def _do():
         from core.document.markdown_render import render_pptx_slides
         prs = render_pptx_slides(content, default_title=title)
-        prs.save(path)
+        tmp_path = f"{path}.tmp"  # Gate 2 finding (Fase 15) — see write_docx
+        prs.save(tmp_path)
+        os.replace(tmp_path, path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pptx"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -109,7 +136,7 @@ def _pdf_content_styles(styles, accent) -> Dict[str, Any]:
 
 def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
     path = _path(filename)
-    try:
+    def _do():
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
@@ -117,7 +144,8 @@ def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
         from reportlab.lib.enums import TA_CENTER
         from core.document.markdown_render import esc_pdf_markup, render_pdf_story
-        doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
+        tmp_path = f"{path}.tmp"  # Gate 2 finding (Fase 15) — see write_docx
+        doc = SimpleDocTemplate(tmp_path, pagesize=A4, rightMargin=2.2*cm, leftMargin=2.2*cm, topMargin=2.5*cm, bottomMargin=2*cm)
         styles = getSampleStyleSheet()
         accent = HexColor("#00c896")
         content_styles = _pdf_content_styles(styles, accent)
@@ -125,7 +153,10 @@ def write_pdf(filename: str, title: str, content: str) -> Dict[str, Any]:
         story = [Paragraph(esc_pdf_markup(title), s_title), HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8), Spacer(1, 0.3*cm)]
         story.extend(render_pdf_story(content, content_styles))
         doc.build(story)
+        os.replace(tmp_path, path)
         return {"success": True, "file": path, "filename": filename, "size": os.path.getsize(path), "type": "pdf"}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -154,7 +185,8 @@ def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[s
     path = _path(filename)
     if not os.path.exists(path):
         return {"success": False, "error": f"{filename!r} tidak ditemukan — append butuh PDF yang sudah ada."}
-    try:
+
+    def _do():
         existing_reader = PdfReader(path)
         pages_before = len(existing_reader.pages)
 
@@ -181,7 +213,8 @@ def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[s
         # failure mid-write must never leave the original file corrupted or
         # truncated (the pre-write WorkspaceFileVersion snapshot already
         # covers "the caller changed their mind", this covers "the process
-        # crashed mid-write").
+        # crashed mid-write"). Also safe to retry whole (Fase 15): nothing
+        # touches `path` itself until the final os.replace.
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "wb") as f:
             writer.write(f)
@@ -190,5 +223,7 @@ def append_pdf_section(filename: str, content: str, title: str = None) -> Dict[s
         return {"success": True, "file": path, "filename": filename, "type": "pdf",
                 "pages_before": pages_before, "pages_after": pages_before + len(new_reader.pages),
                 "pages_added": len(new_reader.pages), "size": os.path.getsize(path)}
+    try:
+        return _with_transient_retry(_do)
     except Exception as e:
         return {"success": False, "error": str(e)}

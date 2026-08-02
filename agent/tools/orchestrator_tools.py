@@ -47,23 +47,48 @@ def _step_summary(results: List[AgentResult]) -> List[Dict[str, Any]]:
     ]
 
 
+def _produced_files(results: List[AgentResult]) -> List[str]:
+    """File paths any EXECUTOR-capability step actually wrote (Fase 14, DCF
+    v5 mandate — orchestrator agent tool access). Only ``tool_calls`` entries
+    with ``success`` and a non-empty ``file`` count — mirrors
+    ``core/chat/engine.py``'s own ``result.get("file")`` convention so the
+    chat tool_result card can offer a real download the same way any other
+    file-producing tool already does."""
+    files: List[str] = []
+    for r in results:
+        for call in r.tool_calls:
+            if call.get("success") and call.get("file"):
+                files.append(call["file"])
+    return files
+
+
 def run_orchestrated_workflow(
     goal: str, roles: List[str], mode: str = "sequential",
+    caller_role: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a full multi-agent workflow (plan -> agent(s) -> validate ->
     escalate-if-needed) for ``goal`` and return a structured summary — not
-    a live stream, one result once the run settles (or escalates)."""
+    a live stream, one result once the run settles (or escalates).
+
+    ``caller_role`` (Fase 14): injected by ``core/chat/engine.py::_run_tool``
+    from the chat session's already-authenticated RBAC role — never taken
+    from the model, same rule as ``workspace_id``/``owner`` for every other
+    Workspace-context tool. Forwarded to ``Orchestrator.run()`` so any
+    EXECUTOR-capability step this workflow dispatches has its tool calls
+    gated against the real caller's permissions, not left wide open.
+    """
 
     async def _run() -> Dict[str, Any]:
         from orchestrator.orchestrator import get_shared_orchestrator
 
         orchestrator = get_shared_orchestrator()
-        result = await orchestrator.run(prompt=goal, roles=roles, mode=mode)
+        result = await orchestrator.run(prompt=goal, roles=roles, mode=mode, caller_role=caller_role)
         state = orchestrator.tasks.state_of(result.trace_id)
         return {
             "success": not result.failed,
             "final_output": result.final_output,
             "steps": _step_summary(result.results),
+            "files": _produced_files(result.results),
             "mode": result.mode,
             "trace_id": result.trace_id,
             "state": state.value if state else None,
