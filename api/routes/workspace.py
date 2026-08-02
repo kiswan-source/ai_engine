@@ -59,6 +59,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -66,7 +67,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agent.tools.workspace_reader import _lock_for
+from agent.tools.workspace_reader import _lock_for, _move_or_copy
 from api.routes.knowledge import _retriever as _knowledge_retriever
 from api.routes.projects import _role_for
 from db.connection import get_session
@@ -152,6 +153,18 @@ class RestoreVersionRequest(BaseModel):
     version_id: int
 
 
+class MoveFileRequest(BaseModel):
+    src_relative_path: str = Field(..., min_length=1)
+    dst_relative_path: str = Field(..., min_length=1)
+    overwrite: bool = False
+
+
+class CopyFileRequest(BaseModel):
+    src_relative_path: str = Field(..., min_length=1)
+    dst_relative_path: str = Field(..., min_length=1)
+    overwrite: bool = False
+
+
 class DeleteRequestRequest(BaseModel):
     relative_path: str = Field(..., min_length=1)
 
@@ -206,6 +219,20 @@ async def _get_folder_or_404(session: AsyncSession, workspace_id: str, folder_id
     if folder is None or folder.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Folder not found in this workspace")
     return folder
+
+
+@asynccontextmanager
+async def _reuse_session(session: AsyncSession):
+    """Adapts an already-open, request-scoped `session` into the
+    `session_factory` shape `_move_or_copy` expects (`async with
+    session_factory() as session:`), instead of letting it fall back to its
+    own default — the module-level `db.connection.AsyncSessionFactory`,
+    which is a *different* engine than whatever `get_session` is overridden
+    to in tests (and the exact asyncpg-loop-affinity trap
+    `agent/tools/workspace_reader.py`'s own module docstring warns about).
+    No commit/close on exit — the request's own `get_session` dependency
+    still owns this session's lifecycle."""
+    yield session
 
 
 async def _project_role_for_workspace(
@@ -720,6 +747,64 @@ async def restore_file_version(
                 "path": req.relative_path, "restored_version_id": req.version_id},
     )
     return {"success": True, "path": req.relative_path, "restored_from_version_id": req.version_id}
+
+
+# ─── Fase 13 (Workspace Manager UI — sidebar tree, context menu, drag &
+# drop): rename/move/copy over HTTP for the first time. Gate 1 decision
+# (Owner, security-domain SHARED): mirror the existing chat-tool security
+# model exactly rather than inventing a new tier — both routes call the
+# same `_move_or_copy` the chat tools `workspace_move_file`/
+# `workspace_copy_file` already use (same TOCTOU lock, same Root
+# Restriction, same version-snapshot-before-overwrite), gated on
+# `write_output` like every other non-delete Workspace content mutation.
+# No new permission tier, no duplicate implementation.
+
+@router.post("/{workspace_id}/files/{folder_id}/move")
+async def move_workspace_file(
+    workspace_id: str,
+    folder_id: str,
+    req: MoveFileRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Move OR rename one file within a Workspace folder (moving to a
+    different path = 'move'; renaming in the same folder = 'rename' — same
+    filesystem operation, matching `workspace_move_file`'s docstring)."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    await _require_write(session, workspace, principal)
+    await _get_folder_or_404(session, workspace_id, folder_id)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, req.src_relative_path, req.dst_relative_path,
+        op="move", overwrite=req.overwrite, actor=principal.api_key,
+        session_factory=lambda: _reuse_session(session),
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Move failed"))
+    return result
+
+
+@router.post("/{workspace_id}/files/{folder_id}/copy")
+async def copy_workspace_file(
+    workspace_id: str,
+    folder_id: str,
+    req: CopyFileRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Copy one file within a Workspace folder; the source is left in place."""
+    workspace = await _get_workspace_or_404(session, workspace_id)
+    await _require_write(session, workspace, principal)
+    await _get_folder_or_404(session, workspace_id, folder_id)
+
+    result = await _move_or_copy(
+        workspace_id, folder_id, req.src_relative_path, req.dst_relative_path,
+        op="copy", overwrite=req.overwrite, actor=principal.api_key,
+        session_factory=lambda: _reuse_session(session),
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Copy failed"))
+    return result
 
 
 # ─── Workspace Slice 2: delete (two-step confirmation) ────────────────────

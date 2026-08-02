@@ -83,3 +83,23 @@ export interface QuickConnectResult extends Workspace {
 export interface MyWorkspace extends Workspace {
   friendly_root_path: string | null
 }
+
+/** Fase 13 (Workspace Manager UI — sidebar tree, context menu, drag & drop). */
+export interface MoveOrCopyResult {
+  success: true
+  src: string
+  dst: string
+}
+
+export interface DeleteRequestResult {
+  token: string
+  relative_path: string
+  size_bytes: number
+  expires_at: number
+}
+
+export interface DeleteConfirmResult {
+  success: true
+  path: string
+  deleted: true
+}

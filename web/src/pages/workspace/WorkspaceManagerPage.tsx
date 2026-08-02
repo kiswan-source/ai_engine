@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { FolderBrowserDialog } from '@/components/workspace/FolderBrowserDialog'
+import { WorkspaceFileTree } from '@/components/workspace/WorkspaceFileTree'
 import { workspaceService } from '@/services/workspaceService'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { useNotificationStore } from '@/stores/notificationStore'
@@ -189,6 +190,13 @@ export default function WorkspaceManagerPage() {
               untuk menghubungkan ulang.
             </p>
           )}
+        </section>
+      )}
+
+      {current && currentWs?.status !== 'Error' && (
+        <section className="rounded-lg border border-border p-4">
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Files</h2>
+          <WorkspaceFileTree key={current.id} workspaceId={current.id} />
         </section>
       )}
 

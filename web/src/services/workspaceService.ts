@@ -2,6 +2,9 @@
 import { apiClient } from './apiClient'
 import type {
   BrowseFsResult,
+  DeleteConfirmResult,
+  DeleteRequestResult,
+  MoveOrCopyResult,
   MyWorkspace,
   QuickConnectResult,
   Workspace,
@@ -47,4 +50,32 @@ export const workspaceService = {
   quickConnect: (path: string, alias?: string) =>
     apiClient.post<QuickConnectResult>('/api/v1/workspace/quick-connect', { path, alias }),
   mine: () => apiClient.get<{ workspaces: MyWorkspace[] }>('/api/v1/workspace/mine'),
+  // Fase 13 (Workspace Manager UI — sidebar tree, context menu, drag & drop).
+  // Wraps the new `.../move` and `.../copy` REST routes, which reuse the
+  // same `_move_or_copy` (and therefore the same TOCTOU lock / Root
+  // Restriction / version-snapshot-before-overwrite) the chat tools
+  // `workspace_move_file`/`workspace_copy_file` already use.
+  moveFile: (workspaceId: string, folderId: string, srcRelativePath: string, dstRelativePath: string, overwrite = false) =>
+    apiClient.post<MoveOrCopyResult>(
+      `/api/v1/workspace/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(folderId)}/move`,
+      { src_relative_path: srcRelativePath, dst_relative_path: dstRelativePath, overwrite },
+    ),
+  copyFile: (workspaceId: string, folderId: string, srcRelativePath: string, dstRelativePath: string, overwrite = false) =>
+    apiClient.post<MoveOrCopyResult>(
+      `/api/v1/workspace/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(folderId)}/copy`,
+      { src_relative_path: srcRelativePath, dst_relative_path: dstRelativePath, overwrite },
+    ),
+  // Two-step delete (Workspace Slice 2) — request opens a short-lived
+  // token, confirm actually removes the bytes. Never a single call, by
+  // design (HUMAN-ONLY classification of the delete act itself).
+  deleteRequest: (workspaceId: string, folderId: string, relativePath: string) =>
+    apiClient.post<DeleteRequestResult>(
+      `/api/v1/workspace/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(folderId)}/delete-request`,
+      { relative_path: relativePath },
+    ),
+  deleteConfirm: (workspaceId: string, folderId: string, token: string, reason = '') =>
+    apiClient.post<DeleteConfirmResult>(
+      `/api/v1/workspace/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(folderId)}/delete-confirm`,
+      { token, reason },
+    ),
 }
